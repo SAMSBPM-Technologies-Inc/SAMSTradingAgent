@@ -134,6 +134,62 @@ class SignalListResponse(BaseModel):
     signals: list[AnalyzeResponse]
 
 
+class SignalSummary(BaseModel):
+    """Portfolio-level signal summary across all tracked tickers."""
+    total_tickers: int
+    buy_count: int
+    sell_count: int
+    hold_count: int
+    avg_score: float
+    avg_confidence: float
+    high_conviction_tickers: list[str]   # conviction=HIGH or confidence≥0.75
+    signals: list[AnalyzeResponse]
+
+
+class WatchlistItem(BaseModel):
+    ticker: str
+    signal: str
+    score: float
+    confidence: float
+    conviction: Optional[str] = None
+    price_target: Optional[float] = None
+    thesis: Optional[str] = None
+    generated_at: datetime
+
+
+class WatchlistResponse(BaseModel):
+    count: int
+    items: list[WatchlistItem]
+
+
+class TickerAddRequest(BaseModel):
+    ticker: str
+
+
+class TickerAddResponse(BaseModel):
+    ticker: str
+    status: str
+    message: str
+
+
+class SignalPerformanceRecord(BaseModel):
+    signal: str
+    total: int
+    settled: int          # records with realized return
+    correct: int          # BUY that went up / SELL that went down
+    win_rate: Optional[float] = None
+    avg_return_20d: Optional[float] = None
+
+
+class PerformanceResponse(BaseModel):
+    total_signals: int
+    settled_signals: int
+    overall_win_rate: Optional[float] = None
+    overall_avg_return_20d: Optional[float] = None
+    by_signal: list[SignalPerformanceRecord]
+    by_ticker: list[dict]
+
+
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool

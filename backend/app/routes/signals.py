@@ -10,7 +10,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Query
 
 from app.db import COLL_SIGNALS, get_db
-from app.models.stock import AnalyzeResponse, SignalListResponse
+from app.models.stock import AnalyzeResponse, SignalListResponse, SignalSummary
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["signals"])
@@ -41,6 +41,40 @@ async def list_signals(
 
     responses = [_doc_to_response(d) for d in docs]
     return SignalListResponse(count=len(responses), signals=responses)
+
+
+@router.get("/signals/summary", response_model=SignalSummary, summary="Portfolio-level signal summary")
+async def signals_summary() -> SignalSummary:
+    """
+    Return a portfolio-level snapshot: counts by signal type, average score,
+    and a list of high-conviction tickers (conviction=HIGH or confidence≥0.75).
+    """
+    db = await get_db()
+    docs = await db[COLL_SIGNALS].find({}).to_list(length=500)
+
+    responses = [_doc_to_response(d) for d in docs]
+    buy  = sum(1 for r in responses if r.signal == "BUY")
+    sell = sum(1 for r in responses if r.signal == "SELL")
+    hold = sum(1 for r in responses if r.signal == "HOLD")
+
+    avg_score = round(sum(r.score for r in responses) / len(responses), 4) if responses else 0.0
+    avg_conf  = round(sum(r.confidence for r in responses) / len(responses), 4) if responses else 0.0
+
+    high_conviction = [
+        r.ticker for r in responses
+        if r.conviction == "HIGH" or r.confidence >= 0.75
+    ]
+
+    return SignalSummary(
+        total_tickers=len(responses),
+        buy_count=buy,
+        sell_count=sell,
+        hold_count=hold,
+        avg_score=avg_score,
+        avg_confidence=avg_conf,
+        high_conviction_tickers=sorted(high_conviction),
+        signals=sorted(responses, key=lambda r: r.score, reverse=True),
+    )
 
 
 def _doc_to_response(doc: dict) -> AnalyzeResponse:

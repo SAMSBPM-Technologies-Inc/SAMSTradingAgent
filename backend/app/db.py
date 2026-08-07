@@ -44,6 +44,8 @@ async def get_db() -> AsyncIOMotorDatabase:
 
 
 # ── Collection name constants ─────────────────────────────────────────────────
-COLL_RAW = "stocks_raw"
-COLL_FEATURES = "stocks_features"
-COLL_SIGNALS = "stocks_signals"
+COLL_RAW            = "stocks_raw"
+COLL_FEATURES       = "stocks_features"
+COLL_SIGNALS        = "stocks_signals"
+COLL_SIGNAL_HISTORY = "stocks_signal_history"   # append-only historical signals
+COLL_WATCHED        = "watched_tickers"          # user-added tickers via POST /ticker
