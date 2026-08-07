@@ -22,7 +22,7 @@ if [[ -z "$HOST" ]]; then
 fi
 
 APP_DIR="${DEPLOY_APP_DIR:-/opt/trading-agent}"
-COMPOSE="docker compose -f docker-compose.prod.yml"
+COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.production"
 
 echo "▶ Deploying to $HOST → $APP_DIR"
 
