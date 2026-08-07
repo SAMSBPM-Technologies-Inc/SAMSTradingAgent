@@ -43,10 +43,12 @@ class Settings(BaseSettings):
     # ── External API keys (all optional — services degrade gracefully if absent) ─
     finnhub_api_key: str = Field(default="", description="Finnhub.io API key for real news sentiment")
     fred_api_key: str = Field(default="", description="FRED API key for macro data")
+    anthropic_api_key: str = Field(default="", description="Anthropic API key for AI analyst (Claude)")
 
     # ── Feature flags ─────────────────────────────────────────────────────────
     enable_ml_model: bool = Field(default=False)
     enable_backtesting: bool = Field(default=False)
+    enable_ai_analyst: bool = Field(default=False, description="Use Claude AI analyst instead of rule-based signal")
 
     # ── Scoring weights (must sum to 1.0) ─────────────────────────────────────
     weight_technical:    float = Field(default=0.30)

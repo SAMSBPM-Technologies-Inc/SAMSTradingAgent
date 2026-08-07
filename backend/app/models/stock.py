@@ -97,6 +97,36 @@ class AnalyzeResponse(BaseModel):
     exit_suggestion: Optional[str] = None
     explanation: str
     generated_at: datetime
+    # AI analyst fields (present when ENABLE_AI_ANALYST=true)
+    conviction: Optional[str] = None
+    price_target: Optional[float] = None
+    stop_loss: Optional[float] = None
+    time_horizon: Optional[str] = None
+    thesis: Optional[str] = None
+    analyst_note: Optional[str] = None
+
+
+class AnalystReport(BaseModel):
+    """Full analyst report — returned by GET /report/{ticker}."""
+    ticker: str
+    score: float
+    risk: RiskAssessment
+    signal: SignalType
+    confidence: float
+    conviction: Optional[str] = None
+    price_target: Optional[float] = None
+    stop_loss: Optional[float] = None
+    time_horizon: Optional[str] = None
+    thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    key_risks: list[str] = []
+    catalysts: list[str] = []
+    analyst_note: Optional[str] = None
+    entry_suggestion: Optional[str] = None
+    exit_suggestion: Optional[str] = None
+    explanation: str
+    generated_at: datetime
 
 
 class SignalListResponse(BaseModel):

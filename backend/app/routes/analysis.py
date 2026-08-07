@@ -94,6 +94,7 @@ def _doc_to_response(doc: dict) -> AnalyzeResponse:
     if isinstance(generated_at, datetime) and generated_at.tzinfo is None:
         generated_at = generated_at.replace(tzinfo=timezone.utc)
 
+    ao = doc.get("analyst_output") or {}
     return AnalyzeResponse(
         ticker=doc["ticker"],
         score=doc.get("score", 0.0),
@@ -104,4 +105,10 @@ def _doc_to_response(doc: dict) -> AnalyzeResponse:
         exit_suggestion=doc.get("exit_suggestion"),
         explanation=doc.get("explanation", ""),
         generated_at=generated_at,
+        conviction=ao.get("conviction"),
+        price_target=ao.get("price_target"),
+        stop_loss=ao.get("stop_loss"),
+        time_horizon=ao.get("time_horizon"),
+        thesis=ao.get("thesis"),
+        analyst_note=ao.get("analyst_note"),
     )
