@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     app_host: str = Field(default="0.0.0.0")
     app_port: int = Field(default=8000)
     log_level: str = Field(default="INFO")
+    # Comma-separated allowed CORS origins. Use "*" for dev, explicit domains for prod.
+    cors_origins: str = Field(default="*")
 
     # ── Scheduler ────────────────────────────────────────────────────────────
     ingestion_interval_minutes: int = Field(default=5)

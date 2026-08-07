@@ -164,45 +164,42 @@ Replace `0.4 × technical + 0.3 × sentiment + 0.3 × volatility` with:
 
 ---
 
-## Phase 7 — Hosting & Infrastructure
+## Phase 7 — Hosting & Infrastructure (🔄 IN PROGRESS)
 
-### Backend: Cloudflare Tunnel + VPS
+### Backend: Hetzner VPS + Cloudflare Tunnel
 
-Cloudflare Workers **cannot** run this backend directly — Workers Python (Pyodide) has no asyncio, no Motor driver, and no APScheduler support. The right architecture is:
+Cloudflare Workers **cannot** run this backend directly — Workers Python (Pyodide) has no asyncio, no Motor driver, and no APScheduler support. Using existing Hetzner VPS (same server as amritmangoes):
 
 ```
-Docker container (Fly.io / Railway / Render / VPS)
-  └── FastAPI + Motor + APScheduler
-  └── cloudflared daemon (outbound-only tunnel)
+Hetzner VPS (Docker stack)
+  ├── api container (FastAPI + Motor + APScheduler, exposed internally only)
+  ├── mongo container (internal only)
+  └── cloudflared container (outbound-only tunnel to Cloudflare)
         └── Cloudflare Network (DDoS, WAF, TLS, CDN)
-              └── api.yourdomain.com → public internet
+              └── trading-api.yourdomain.com → public internet
 ```
 
-**What's required:**
+**Files created:**
+- `backend/docker-compose.prod.yml` — production compose (no host port binding, internal network)
+- `backend/.env.production.template` — env template with all required vars
+- `infra/setup-server.sh` — one-time server bootstrap (Docker install, deploy user, UFW, git clone)
+- `infra/deploy.sh` — SSH deploy script (git pull → build → restart → health check)
+- `infra/tunnel-setup.md` — step-by-step Cloudflare Tunnel creation guide
 
-1. **VPS / container platform** — Fly.io (free tier), Railway, Render, or any $5/mo VPS
-   - Deploy existing Docker image unchanged
-   - MongoDB stays as a container OR migrate to MongoDB Atlas (free M0 tier)
+**Remaining steps to go live:**
+1. Run `infra/setup-server.sh` on Hetzner server (Docker install, deploy user, git clone)
+2. Create Cloudflare Tunnel (see `infra/tunnel-setup.md`) — get token from dashboard
+3. Fill in `.env.production` with real API keys + `CLOUDFLARE_TUNNEL_TOKEN`
+4. Run `DEPLOY_HOST=deploy@SERVER_IP ./infra/deploy.sh`
+5. Verify: `curl https://trading-api.yourdomain.com/health`
 
-2. **MongoDB Atlas** (replace self-hosted Docker mongo)
-   - Free M0 cluster (512 MB) works for dev; M10+ for prod
-   - Change `MONGODB_URL` in `.env` to Atlas connection string
-   - Atlas handles backups, failover, and monitoring
+**Why Hetzner over managed platforms:**
+- Already have the server (zero extra cost)
+- No cold starts, no container sleep, no egress fees
+- Full control (SSH, Docker, disk, cron)
+- Downside: manual OS/Docker security patching vs managed platforms
 
-3. **Cloudflare Tunnel** (`cloudflared`)
-   - Install `cloudflared` on the VPS alongside the container
-   - Create tunnel: maps `api.yourdomain.com` → `http://localhost:8000`
-   - No public IP needed on the server — outbound-only connection to Cloudflare
-   - Free tier includes DDoS protection, TLS, and WAF
-
-4. **Cloudflare DNS** — point your domain to Cloudflare nameservers (free)
-
-5. **Environment changes needed:**
-   - `MONGODB_URL` → Atlas URI
-   - `APP_HOST` → `0.0.0.0` (already set)
-   - `CORS` origins → restrict to your frontend domain in production
-
-6. **Secret management** — move `.env` values to platform secrets (Fly.io secrets, Railway variables, etc.)
+**MongoDB:** Self-hosted Docker (included in docker-compose.prod.yml). Can migrate to Atlas later if needed.
 
 ### Frontend: Cloudflare Pages
 

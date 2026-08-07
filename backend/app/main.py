@@ -59,12 +59,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── CORS (open for internal/dev use; restrict in prod) ────────────────────
+    # ── CORS — controlled by CORS_ORIGINS env var ─────────────────────────────
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["GET", "POST"],
+        allow_origins=origins,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
+        allow_credentials=True,
     )
 
     # ── Global exception handler ──────────────────────────────────────────────
