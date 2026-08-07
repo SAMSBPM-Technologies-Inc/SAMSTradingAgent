@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS custom properties for semantic theming */
+:root {
+  --color-bg: #f8f5ef;
+  --color-surface: #fdfbf7;
+  --color-border: #ddd8ce;
+  --color-fg: #16120d;
+  --color-fg-muted: #6b6356;
+}
+
+.dark {
+  --color-bg: #0e0c09;
+  --color-surface: #141109;
+  --color-border: #2a2420;
+  --color-fg: #f0ece4;
+  --color-fg-muted: #9a8f82;
+}
+
+/* Base styles */
+@layer base {
+  html {
+    font-family: 'Lora', Georgia, serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-[var(--color-bg)] text-[var(--color-fg)] transition-colors duration-200;
+    min-height: 100dvh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Fraunces', Georgia, serif;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 0.375rem;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-[var(--color-border)] rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-brand-500/40;
+  }
+}
+
+@layer components {
+  /* Card base */
+  .card {
+    @apply bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl shadow-card transition-colors duration-200;
+  }
+
+  /* Input base */
+  .input {
+    @apply w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl px-4 py-3
+           text-[var(--color-fg)] placeholder:text-[var(--color-fg-muted)]
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500
+           transition-colors duration-200;
+    min-height: 2.75rem;
+    font-family: 'Lora', Georgia, serif;
+  }
+
+  /* Primary button */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2
+           bg-gradient-to-r from-brand-500 to-brand-600
+           hover:from-brand-600 hover:to-brand-700
+           text-white font-semibold rounded-xl
+           transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    min-height: 2.75rem;
+    padding: 0.625rem 1.25rem;
+  }
+
+  /* Secondary button */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2
+           bg-transparent border border-[var(--color-border)]
+           text-[var(--color-fg)] hover:bg-black/5 dark:hover:bg-white/5
+           font-semibold rounded-xl
+           transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:ring-offset-2
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    min-height: 2.75rem;
+    padding: 0.625rem 1.25rem;
+  }
+
+  /* Ghost button */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2
+           bg-transparent text-[var(--color-fg-muted)]
+           hover:text-[var(--color-fg)] hover:bg-black/5 dark:hover:bg-white/5
+           rounded-xl transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-brand-500/50;
+    min-height: 2.75rem;
+    padding: 0.5rem 0.75rem;
+  }
+}
+
+/* Safe area insets for mobile bottom bar */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.mb-bottom-bar {
+  margin-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
+}

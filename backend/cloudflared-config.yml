@@ -1,4 +1,6 @@
 ingress:
+  - hostname: api.samsbpm.com
+    service: http://api:8000
   - hostname: sta.samsbpm.com
     service: http://api:8000
   - service: http_status:404

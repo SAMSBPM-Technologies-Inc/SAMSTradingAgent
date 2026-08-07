@@ -1,0 +1,388 @@
+import { useCallback, useEffect, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import {
+  AlertCircle,
+  ArrowLeft,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  Shield,
+  Target,
+  TrendingDown,
+  TrendingUp,
+  Zap,
+} from 'lucide-react'
+import { analyzeApi } from '../lib/api'
+import type { AnalyzeResponse } from '../types'
+import Layout from '../components/Layout'
+import SignalBadge from '../components/SignalBadge'
+import ConvictionBadge from '../components/ConvictionBadge'
+import LoadingSpinner from '../components/LoadingSpinner'
+
+// ── Score gauge ───────────────────────────────────────────────────────────────
+
+function ScoreGauge({ score }: { score: number }) {
+  const pct = Math.round(score * 100)
+  // Clamp rotation: 0 = -90deg, 100 = 90deg
+  const rotation = -90 + (pct / 100) * 180
+
+  const color =
+    pct >= 70 ? '#22c55e' :
+    pct >= 40 ? '#f97316' :
+    '#ef4444'
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative w-32 h-16 overflow-hidden">
+        {/* Background arc */}
+        <svg viewBox="0 0 128 64" className="w-full h-full" aria-hidden="true">
+          <path
+            d="M 8 64 A 56 56 0 0 1 120 64"
+            fill="none"
+            stroke="var(--color-border)"
+            strokeWidth="10"
+            strokeLinecap="round"
+          />
+          {/* Colored arc — approximate using stroke-dasharray */}
+          <path
+            d="M 8 64 A 56 56 0 0 1 120 64"
+            fill="none"
+            stroke={color}
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeDasharray={`${(pct / 100) * 176} 176`}
+            style={{ transition: 'stroke-dasharray 0.6s ease' }}
+          />
+        </svg>
+        {/* Needle */}
+        <div
+          className="absolute bottom-0 left-1/2 origin-bottom"
+          style={{
+            width: '2px',
+            height: '3rem',
+            marginLeft: '-1px',
+            backgroundColor: color,
+            borderRadius: '1px',
+            transform: `rotate(${rotation}deg)`,
+            transition: 'transform 0.6s ease',
+          }}
+        />
+        <div
+          className="absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-3 rounded-full"
+          style={{ backgroundColor: color, marginBottom: '-6px' }}
+        />
+      </div>
+      <div className="flex flex-col items-center">
+        <span
+          className="text-3xl font-light text-[var(--color-fg)]"
+          style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+        >
+          {pct}
+        </span>
+        <span className="text-xs text-[var(--color-fg-muted)]">/ 100 score</span>
+      </div>
+    </div>
+  )
+}
+
+// ── Stat cell ─────────────────────────────────────────────────────────────────
+
+function StatCell({
+  label,
+  value,
+  icon: Icon,
+  color = 'text-[var(--color-fg)]',
+}: {
+  label: string
+  value: string
+  icon?: React.FC<{ className?: string }>
+  color?: string
+}) {
+  return (
+    <div className="flex flex-col gap-1 p-3 rounded-xl bg-[var(--color-bg)] border border-[var(--color-border)]">
+      <div className="flex items-center gap-1.5">
+        {Icon && <Icon className="w-3.5 h-3.5 text-[var(--color-fg-muted)]" />}
+        <span className="text-xs text-[var(--color-fg-muted)]">{label}</span>
+      </div>
+      <span className={`text-base font-semibold ${color}`}>{value}</span>
+    </div>
+  )
+}
+
+// ── Section block ─────────────────────────────────────────────────────────────
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="card p-5">
+      <h3
+        className="text-base font-medium text-[var(--color-fg)] mb-3"
+        style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+      >
+        {title}
+      </h3>
+      {children}
+    </div>
+  )
+}
+
+// ── List block ────────────────────────────────────────────────────────────────
+
+function BulletList({ items, color }: { items: string[]; color?: string }) {
+  return (
+    <ul className="flex flex-col gap-2">
+      {items.map((item, i) => (
+        <li key={i} className="flex items-start gap-2 text-sm text-[var(--color-fg)]">
+          <span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${color ?? 'bg-brand-500'}`} />
+          {item}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+// ── Collapsible ───────────────────────────────────────────────────────────────
+
+function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center justify-between w-full py-1 text-sm font-medium
+                   text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors"
+      >
+        {title}
+        {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+      </button>
+      {open && <div className="mt-3">{children}</div>}
+    </div>
+  )
+}
+
+// ── Ticker Page ───────────────────────────────────────────────────────────────
+
+export default function TickerPage() {
+  const { symbol } = useParams<{ symbol: string }>()
+  const navigate = useNavigate()
+  const [data, setData] = useState<AnalyzeResponse | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchData = useCallback(async (force = false) => {
+    if (!symbol) return
+    if (force) setIsRefreshing(true)
+    else setIsLoading(true)
+    setError(null)
+    try {
+      const res = await analyzeApi.get(symbol.toUpperCase(), force)
+      setData(res.data)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail
+      setError(msg ?? 'Failed to load analysis.')
+    } finally {
+      setIsLoading(false)
+      setIsRefreshing(false)
+    }
+  }, [symbol])
+
+  useEffect(() => {
+    fetchData(false)
+  }, [fetchData])
+
+  return (
+    <Layout>
+      {/* Back button */}
+      <button
+        onClick={() => navigate(-1)}
+        className="btn-ghost mb-4 -ml-2 text-sm text-[var(--color-fg-muted)]"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Back
+      </button>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-20">
+          <LoadingSpinner size="lg" />
+        </div>
+      ) : error ? (
+        <div className="flex flex-col items-center gap-4 py-16 text-center">
+          <AlertCircle className="w-10 h-10 text-red-500" />
+          <p className="text-[var(--color-fg-muted)]">{error}</p>
+          <button onClick={() => fetchData(false)} className="btn-secondary">
+            Try again
+          </button>
+        </div>
+      ) : data ? (
+        <div className="flex flex-col gap-4">
+          {/* Header */}
+          <div className="card p-5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h1
+                  className="text-4xl font-light text-[var(--color-fg)] mb-2"
+                  style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+                >
+                  {data.ticker}
+                </h1>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <SignalBadge signal={data.signal} size="lg" />
+                  {data.conviction && <ConvictionBadge conviction={data.conviction} size="lg" />}
+                </div>
+              </div>
+
+              {/* Score gauge */}
+              <div className="flex-shrink-0">
+                <ScoreGauge score={data.score} />
+              </div>
+            </div>
+
+            {/* Refresh button */}
+            <div className="mt-4 pt-4 border-t border-[var(--color-border)] flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs text-[var(--color-fg-muted)]">
+                <Calendar className="w-3.5 h-3.5" />
+                Generated {new Date(data.generated_at).toLocaleString()}
+              </div>
+              <button
+                onClick={() => fetchData(true)}
+                disabled={isRefreshing}
+                className="btn-secondary text-sm px-3 py-1.5 h-auto min-h-0"
+              >
+                {isRefreshing
+                  ? <LoadingSpinner size="sm" />
+                  : <RefreshCw className="w-3.5 h-3.5" />}
+                {isRefreshing ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+
+          {/* Stats grid */}
+          <div className="flex flex-col gap-2 sm:grid sm:grid-cols-3">
+            {data.price_target && (
+              <StatCell
+                label="Price Target"
+                value={`$${data.price_target.toFixed(2)}`}
+                icon={Target}
+                color="text-brand-500"
+              />
+            )}
+            {data.stop_loss && (
+              <StatCell
+                label="Stop Loss"
+                value={`$${data.stop_loss.toFixed(2)}`}
+                icon={Shield}
+                color="text-red-500"
+              />
+            )}
+            {data.time_horizon && (
+              <StatCell
+                label="Time Horizon"
+                value={data.time_horizon}
+                icon={Calendar}
+              />
+            )}
+            <StatCell
+              label="Confidence"
+              value={`${Math.round(data.confidence * 100)}%`}
+              icon={Zap}
+              color={
+                data.confidence >= 0.7 ? 'text-green-500' :
+                data.confidence >= 0.4 ? 'text-yellow-500' :
+                'text-red-500'
+              }
+            />
+          </div>
+
+          {/* Thesis */}
+          {data.thesis && (
+            <Section title="Investment Thesis">
+              <p className="text-sm text-[var(--color-fg)] leading-relaxed">{data.thesis}</p>
+            </Section>
+          )}
+
+          {/* Analyst note */}
+          {data.analyst_note && (
+            <Section title="Analyst Note">
+              <p className="text-sm text-[var(--color-fg-muted)] leading-relaxed italic">
+                {data.analyst_note}
+              </p>
+            </Section>
+          )}
+
+          {/* Bull / Bear */}
+          {(data.bull_case || data.bear_case) && (
+            <Section title="Bull & Bear Case">
+              <div className="flex flex-col gap-4">
+                {data.bull_case && (
+                  <Collapsible title="Bull Case">
+                    <div className="flex items-start gap-2">
+                      <TrendingUp className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-[var(--color-fg)] leading-relaxed">{data.bull_case}</p>
+                    </div>
+                  </Collapsible>
+                )}
+                {data.bear_case && (
+                  <Collapsible title="Bear Case">
+                    <div className="flex items-start gap-2">
+                      <TrendingDown className="w-4 h-4 text-red-500 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-[var(--color-fg)] leading-relaxed">{data.bear_case}</p>
+                    </div>
+                  </Collapsible>
+                )}
+              </div>
+            </Section>
+          )}
+
+          {/* Entry / Exit */}
+          {(data.entry_suggestion || data.exit_suggestion) && (
+            <Section title="Entry & Exit">
+              <div className="flex flex-col gap-3">
+                {data.entry_suggestion && (
+                  <div>
+                    <span className="text-xs font-medium text-green-500 uppercase tracking-wide">Entry</span>
+                    <p className="text-sm text-[var(--color-fg)] mt-1 leading-relaxed">
+                      {data.entry_suggestion}
+                    </p>
+                  </div>
+                )}
+                {data.exit_suggestion && (
+                  <div>
+                    <span className="text-xs font-medium text-red-500 uppercase tracking-wide">Exit</span>
+                    <p className="text-sm text-[var(--color-fg)] mt-1 leading-relaxed">
+                      {data.exit_suggestion}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </Section>
+          )}
+
+          {/* Catalysts */}
+          {data.catalysts && data.catalysts.length > 0 && (
+            <Section title="Catalysts">
+              <BulletList items={data.catalysts} color="bg-green-500" />
+            </Section>
+          )}
+
+          {/* Key risks */}
+          {data.key_risks && data.key_risks.length > 0 && (
+            <Section title="Key Risks">
+              <BulletList items={data.key_risks} color="bg-red-500" />
+            </Section>
+          )}
+
+          {/* Explanation */}
+          {data.explanation && (
+            <Section title="Explanation">
+              <p className="text-sm text-[var(--color-fg-muted)] leading-relaxed whitespace-pre-wrap">
+                {data.explanation}
+              </p>
+            </Section>
+          )}
+        </div>
+      ) : null}
+    </Layout>
+  )
+}
