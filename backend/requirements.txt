@@ -32,6 +32,11 @@ vaderSentiment==3.3.2   # VADER sentiment analysis on news headlines (no API key
 # Phase 3: AI analyst
 anthropic>=0.30.0       # Claude API for AI analyst layer
 
+# Auth
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+email-validator==2.1.1
+
 # Logging
 structlog==24.1.0
 

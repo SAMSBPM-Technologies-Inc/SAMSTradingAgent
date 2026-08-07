@@ -43,7 +43,11 @@ async def _ensure_indexes() -> None:
         partialFilterExpression={"hour_bucket": {"$type": "date"}},
         background=True,
     )
-    await db[COLL_WATCHED].create_index("ticker", unique=True, background=True)
+    # watched_tickers: unique per (user_id, ticker) — one entry per user per ticker
+    await db[COLL_WATCHED].create_index(
+        [("user_id", 1), ("ticker", 1)], unique=True, background=True
+    )
+    await db[COLL_USERS].create_index("email", unique=True, background=True)
     logger.info("mongodb_indexes_ensured")
 
 
@@ -68,4 +72,5 @@ COLL_RAW            = "stocks_raw"
 COLL_FEATURES       = "stocks_features"
 COLL_SIGNALS        = "stocks_signals"
 COLL_SIGNAL_HISTORY = "stocks_signal_history"   # append-only historical signals
-COLL_WATCHED        = "watched_tickers"          # user-added tickers via POST /ticker
+COLL_WATCHED        = "watched_tickers"          # per-user watched tickers
+COLL_USERS          = "users"                    # registered users

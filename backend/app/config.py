@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     def ticker_list(self) -> List[str]:
         return [t.strip().upper() for t in self.default_tickers.split(",") if t.strip()]
 
+    # ── Auth / JWT ────────────────────────────────────────────────────────────
+    jwt_secret_key: str = Field(
+        default="change-me-in-production",
+        description="Secret key for signing JWTs — set a strong random value in production",
+    )
+    jwt_algorithm: str = Field(default="HS256")
+    jwt_expire_hours: int = Field(default=24)
+
     # ── External API keys (all optional — services degrade gracefully if absent) ─
     finnhub_api_key: str = Field(default="", description="Finnhub.io API key for real news sentiment")
     fred_api_key: str = Field(default="", description="FRED API key for macro data")

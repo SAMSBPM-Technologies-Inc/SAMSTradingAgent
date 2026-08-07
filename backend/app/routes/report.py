@@ -1,17 +1,12 @@
 """
-GET /report/{ticker}
-────────────────────
-Returns the full AI analyst report for a ticker, including thesis,
-bull/bear case, key risks, catalysts, and the full analyst note.
-
-Requires ENABLE_AI_ANALYST=true and a prior pipeline run.
-If AI analyst output is not available, returns 404 with a helpful message.
+GET /report/{ticker} — full AI analyst report (auth required)
 """
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import COLL_SIGNALS, get_db
+from app.dependencies import get_current_user
 from app.models.stock import AnalystReport
 from app.utils.logger import get_logger
 
@@ -19,19 +14,8 @@ router = APIRouter(tags=["report"])
 logger = get_logger(__name__)
 
 
-@router.get(
-    "/report/{ticker}",
-    response_model=AnalystReport,
-    summary="Full AI analyst report for a ticker",
-)
-async def get_report(ticker: str) -> AnalystReport:
-    """
-    Return the full analyst report including thesis, bull/bear case,
-    key risks, catalysts, and the complete analyst note.
-
-    Requires the AI analyst to have run (ENABLE_AI_ANALYST=true).
-    Use GET /analyze?ticker={ticker}&force_refresh=true to trigger a fresh run.
-    """
+@router.get("/report/{ticker}", response_model=AnalystReport, summary="Full AI analyst report for a ticker")
+async def get_report(ticker: str, current_user: dict = Depends(get_current_user)) -> AnalystReport:
     ticker = ticker.upper().strip()
     db = await get_db()
 
@@ -47,9 +31,8 @@ async def get_report(ticker: str) -> AnalystReport:
         raise HTTPException(
             status_code=404,
             detail=(
-                f"No AI analyst output found for {ticker}. "
-                "Enable ENABLE_AI_ANALYST=true and set ANTHROPIC_API_KEY, "
-                f"then run GET /analyze?ticker={ticker}&force_refresh=true."
+                f"No AI analyst output for {ticker}. "
+                "Enable ENABLE_AI_ANALYST=true and run /analyze?force_refresh=true."
             ),
         )
 

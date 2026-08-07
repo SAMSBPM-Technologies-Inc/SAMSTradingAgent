@@ -61,7 +61,7 @@ def _is_market_hours() -> bool:
 
 
 async def _get_all_tickers() -> list[str]:
-    """Merge config DEFAULT_TICKERS with user-added watched tickers."""
+    """Merge config DEFAULT_TICKERS with all users' watched tickers (union across all users)."""
     settings = get_settings()
     tickers = set(settings.ticker_list)
     try:
