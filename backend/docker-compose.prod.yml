@@ -49,11 +49,11 @@ services:
     image: cloudflare/cloudflared:latest
     container_name: trading_cloudflared
     restart: unless-stopped
-    # TUNNEL_TOKEN comes from .env.production (set in Cloudflare dashboard)
-    # Service URL in Cloudflare dashboard should be: http://api:8000
+    volumes:
+      - ./cloudflared-config.yml:/etc/cloudflared/config.yml
     env_file:
       - .env.production
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       api:
         condition: service_healthy
