@@ -1,11 +1,14 @@
 """
 GET /analyze?ticker=PLTR  — run or return cached analysis for a ticker
+GET /ticker/search?q=     — search ticker symbols via Finnhub
 GET /backtest             — backtest stub
 """
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.config import get_settings
 from app.db import COLL_SIGNALS, get_db
 from app.dependencies import get_current_user
 from app.models.stock import AnalyzeResponse
@@ -16,6 +19,33 @@ router = APIRouter(tags=["analysis"])
 logger = get_logger(__name__)
 
 _CACHE_TTL_MINUTES = 5
+
+
+@router.get("/ticker/search", summary="Search ticker symbols")
+async def ticker_search(
+    q: str = Query(..., min_length=1, description="Company name or ticker symbol"),
+    current_user: dict = Depends(get_current_user),
+):
+    settings = get_settings()
+    if not settings.finnhub_api_key:
+        raise HTTPException(status_code=503, detail="Ticker search unavailable: no Finnhub API key configured")
+    url = "https://finnhub.io/api/v1/search"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params={"q": q, "token": settings.finnhub_api_key})
+            resp.raise_for_status()
+            results = resp.json().get("result", [])
+    except Exception as exc:
+        logger.warning("ticker_search_failed", query=q, error=str(exc))
+        raise HTTPException(status_code=502, detail="Ticker search temporarily unavailable")
+
+    # Filter to US common stocks only and return clean shape
+    filtered = [
+        {"symbol": r["symbol"], "name": r["description"]}
+        for r in results
+        if r.get("type") in ("Common Stock", "EQS") and "." not in r.get("symbol", "")
+    ]
+    return filtered[:10]
 
 
 @router.get("/analyze", response_model=AnalyzeResponse, summary="Analyse a stock ticker")

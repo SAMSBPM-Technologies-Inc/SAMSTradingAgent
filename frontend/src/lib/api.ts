@@ -70,6 +70,8 @@ export const watchlistApi = {
 export const analyzeApi = {
   get: (ticker: string, forceRefresh = false) =>
     api.get('/analyze', { params: { ticker, force_refresh: forceRefresh } }),
+  search: (q: string) =>
+    api.get<{ symbol: string; name: string }[]>('/ticker/search', { params: { q } }),
 }
 
 export const performanceApi = {
