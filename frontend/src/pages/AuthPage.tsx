@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, forwardRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -31,17 +31,17 @@ type RegisterFormData = z.infer<typeof registerSchema>
 
 // ── Shared field ─────────────────────────────────────────────────────────────
 
-function PasswordField({
-  label,
-  error,
-  ...props
-}: React.InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }) {
+const PasswordField = forwardRef<
+  HTMLInputElement,
+  React.InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }
+>(function PasswordField({ label, error, ...props }, ref) {
   const [show, setShow] = useState(false)
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-sm font-medium text-[var(--color-fg)]">{label}</label>
       <div className="relative">
         <input
+          ref={ref}
           {...props}
           type={show ? 'text' : 'password'}
           className="input pr-12"
@@ -59,7 +59,7 @@ function PasswordField({
       {error && <p className="text-xs text-red-500">{error}</p>}
     </div>
   )
-}
+})
 
 // ── Login form ────────────────────────────────────────────────────────────────
 
