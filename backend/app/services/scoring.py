@@ -1,15 +1,18 @@
 """
 AI Scoring Engine
 ─────────────────
-Primary mode  : weighted linear scoring (always available).
-Secondary mode: XGBoost model (enabled via ENABLE_ML_MODEL=true + trained model file).
+Primary mode  : XGBoost model (ENABLE_ML_MODEL=true + model/xgb_scorer.json present).
+Fallback mode : weighted linear scoring (always available).
 
-The weighted score is:
-    score = w_tech * technical_score
-          + w_sent * sentiment_score
-          + w_vol  * volatility_score
+XGBoost feature vector (14 features — must match training schema in scripts/train_xgb.py):
+    rsi_14, macd_bullish, bb_pct, stoch_rsi, ma_cross_bullish,
+    volume_anomaly, volatility_20d,
+    technical_score, fundamental_score, sentiment_score,
+    macro_score, volatility_score, catalyst_score,
+    vix (from macro)
 
-All scores are normalised to [0, 1].
+Weighted fallback:
+    score = Σ weight_i * sub_score_i   (6 sub-scores, weights sum to 1.0)
 """
 import os
 from typing import Optional
@@ -61,13 +64,14 @@ async def score_ticker(ticker: str) -> dict:
 
 
 def _weighted_score(feat: dict, settings) -> float:
-    """Weighted linear combination of all 5 sub-scores."""
+    """Weighted linear combination of all 6 sub-scores."""
     return (
         settings.weight_technical   * feat.get("technical_score",   0.5)
         + settings.weight_fundamental * feat.get("fundamental_score", 0.5)
         + settings.weight_sentiment   * feat.get("sentiment_score",   0.5)
         + settings.weight_macro       * feat.get("macro_score",       0.5)
         + settings.weight_volatility  * feat.get("volatility_score",  0.5)
+        + settings.weight_catalyst    * feat.get("catalyst_score",    0.5)
     )
 
 
@@ -95,15 +99,24 @@ def _ml_score(feat: dict) -> float:
 
     import numpy as np
 
+    # 14-feature vector — must match training schema in scripts/train_xgb.py
+    macro = feat.get("macro") or {}
     feature_vector = np.array(
         [[
-            feat.get("rsi_14", 50.0) or 50.0,
+            feat.get("rsi_14",           50.0) or 50.0,
+            1.0 if feat.get("macd_bullish") else 0.0,
+            feat.get("bb_pct",            0.5) or 0.5,
+            feat.get("stoch_rsi",         0.5) or 0.5,
+            1.0 if feat.get("ma_cross_bullish") else 0.0,
+            feat.get("volume_anomaly",    1.0) or 1.0,
+            feat.get("volatility_20d",    0.3) or 0.3,
             feat.get("technical_score",   0.5),
             feat.get("fundamental_score", 0.5),
             feat.get("sentiment_score",   0.5),
             feat.get("macro_score",       0.5),
             feat.get("volatility_score",  0.5),
-            feat.get("volatility_20d",    0.3) or 0.3,
+            feat.get("catalyst_score",    0.5),
+            float(macro.get("vix") or 20.0),
         ]]
     )
     prediction = float(_xgb_model.predict(feature_vector)[0])

@@ -18,6 +18,7 @@ import pandas as pd
 import ta
 
 from app.db import COLL_FEATURES, COLL_RAW, get_db
+from app.services.catalyst import compute_catalyst_score
 from app.utils.helpers import clamp, utcnow
 from app.utils.logger import get_logger
 
@@ -67,6 +68,10 @@ async def compute_features(ticker: str) -> dict:
     macro           = raw_doc.get("macro", {})
     macro_score     = _macro_score(macro)
 
+    # catalyst_score needs both raw_doc and the partially-built feat dict
+    _partial_feat = {"volume_anomaly": tech["volume_anomaly"]}
+    catalyst_score = compute_catalyst_score(raw_doc, _partial_feat)
+
     feature_doc = {
         "ticker": ticker,
         "computed_at": utcnow(),
@@ -93,6 +98,7 @@ async def compute_features(ticker: str) -> dict:
         "sentiment_score":    round(sentiment_score,   4),
         "macro_score":        round(macro_score,       4),
         "volatility_score":   round(volatility_score,  4),
+        "catalyst_score":     round(catalyst_score,    4),
         # composite_score is set by scoring.py
     }
 
@@ -109,6 +115,7 @@ async def compute_features(ticker: str) -> dict:
         sentiment=round(sentiment_score, 4),
         macro=round(macro_score, 4),
         volatility=round(volatility_score, 4),
+        catalyst=round(catalyst_score, 4),
     )
     return feature_doc
 

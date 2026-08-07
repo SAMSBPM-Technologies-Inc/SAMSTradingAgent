@@ -51,11 +51,12 @@ class Settings(BaseSettings):
     enable_ai_analyst: bool = Field(default=False, description="Use Claude AI analyst instead of rule-based signal")
 
     # ── Scoring weights (must sum to 1.0) ─────────────────────────────────────
-    weight_technical:    float = Field(default=0.30)
-    weight_fundamental:  float = Field(default=0.20)
+    weight_technical:    float = Field(default=0.25)
+    weight_fundamental:  float = Field(default=0.15)
     weight_sentiment:    float = Field(default=0.20)
     weight_macro:        float = Field(default=0.15)
-    weight_volatility:   float = Field(default=0.15)
+    weight_volatility:   float = Field(default=0.10)
+    weight_catalyst:     float = Field(default=0.15)
 
 
 @lru_cache(maxsize=1)
