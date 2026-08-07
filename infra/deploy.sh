@@ -37,7 +37,7 @@ echo "── Pulling latest code ───────────────�
 git -C "$APP_DIR" pull origin main
 
 echo "── Building API image ────────────────────────────────────────────"
-$COMPOSE build --no-cache api
+$COMPOSE build --no-cache
 
 echo "── Restarting containers ─────────────────────────────────────────"
 $COMPOSE up -d --remove-orphans
