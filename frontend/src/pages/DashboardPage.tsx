@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { flushSync } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { AlertCircle, Plus, Search, TrendingUp } from 'lucide-react'
 import { watchlistApi, analyzeApi } from '../lib/api'
@@ -163,8 +164,7 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
   const addTicker = async (ticker: string) => {
     const t = ticker.trim().toUpperCase()
     if (!t) return
-    setIsAdding(true)
-    setError(null)
+    flushSync(() => { setIsAdding(true); setError(null) })
     try {
       await watchlistApi.add(t)
       setValue('')
@@ -262,9 +262,12 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
       </div>
 
       {isAdding && (
-        <div className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)]">
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl
+                        bg-brand-500/10 border border-brand-500/30 text-brand-500">
           <LoadingSpinner size="sm" />
-          Fetching and analysing {value.trim().toUpperCase()}…
+          <span className="text-sm font-medium">
+            Fetching &amp; analysing <strong>{value.trim().toUpperCase()}</strong> — this may take 5–10 seconds…
+          </span>
         </div>
       )}
 
