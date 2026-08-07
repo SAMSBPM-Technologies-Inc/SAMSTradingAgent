@@ -167,6 +167,8 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
     flushSync(() => { setIsAdding(true); setError(null) })
     try {
       await watchlistApi.add(t)
+      // Trigger full analysis pipeline (5-10s) — keeps busy state visible
+      await analyzeApi.get(t, true)
       setValue('')
       setSuggestions([])
       setOpen(false)
