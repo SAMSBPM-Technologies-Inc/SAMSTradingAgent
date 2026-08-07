@@ -8,9 +8,6 @@ services:
     # No host port binding — cloudflared reaches the API via internal Docker network
     expose:
       - "8000"
-    depends_on:
-      mongo:
-        condition: service_healthy
     env_file:
       - .env.production
     environment:
@@ -22,26 +19,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    networks:
-      - internal
-
-  mongo:
-    image: mongo:7
-    container_name: trading_mongo
-    restart: unless-stopped
-    # Port NOT exposed to host — internal access only
-    expose:
-      - "27017"
-    volumes:
-      - mongo_data:/data/db
-    environment:
-      MONGO_INITDB_DATABASE: trading_agent
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     networks:
       - internal
 
@@ -64,5 +41,3 @@ networks:
   internal:
     driver: bridge
 
-volumes:
-  mongo_data:
