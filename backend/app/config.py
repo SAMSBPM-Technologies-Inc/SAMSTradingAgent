@@ -5,7 +5,7 @@ All settings have sensible defaults so the app runs locally without a .env.
 from functools import lru_cache
 from typing import List
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     weight_macro:        float = Field(default=0.15)
     weight_volatility:   float = Field(default=0.10)
     weight_catalyst:     float = Field(default=0.15)
+
+    @model_validator(mode="after")
+    def validate_weights_sum(self) -> "Settings":
+        total = (
+            self.weight_technical
+            + self.weight_fundamental
+            + self.weight_sentiment
+            + self.weight_macro
+            + self.weight_volatility
+            + self.weight_catalyst
+        )
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                f"Scoring weights must sum to 1.0, got {total:.6f}. "
+                "Check weight_technical, weight_fundamental, weight_sentiment, "
+                "weight_macro, weight_volatility, weight_catalyst in .env"
+            )
+        return self
 
 
 @lru_cache(maxsize=1)

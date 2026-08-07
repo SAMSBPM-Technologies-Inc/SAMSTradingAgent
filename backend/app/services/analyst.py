@@ -246,8 +246,8 @@ Respond with this exact JSON schema (no markdown, no extra text):
 async def _call_claude(context: str, api_key: str) -> dict:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
+    client = anthropic.AsyncAnthropic(api_key=api_key)
+    message = await client.messages.create(
         model=_MODEL,
         max_tokens=_MAX_TOKENS,
         system=_SYSTEM_PROMPT,

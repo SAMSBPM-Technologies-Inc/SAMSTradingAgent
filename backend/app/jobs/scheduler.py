@@ -38,7 +38,7 @@ _scheduler: AsyncIOScheduler | None = None
 
 # Approximate trading days elapsed (used to decide when to settle history)
 _SETTLE_TRADING_DAYS = 20
-_SETTLE_CALENDAR_DAYS = 30   # ~20 trading days ≈ 30 calendar days
+_SETTLE_CALENDAR_DAYS = 28   # 28 calendar days reliably covers ≥20 trading days
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -66,7 +66,7 @@ async def _get_all_tickers() -> list[str]:
     tickers = set(settings.ticker_list)
     try:
         db = await get_db()
-        watched = await db[COLL_WATCHED].find({}, {"ticker": 1}).to_list(length=500)
+        watched = await db[COLL_WATCHED].find({}, {"ticker": 1}).to_list(length=2000)
         tickers.update(d["ticker"] for d in watched)
     except Exception as exc:
         logger.warning("watched_tickers_fetch_failed", error=str(exc))
@@ -107,7 +107,7 @@ async def _performance_tracker_job() -> None:
             "generated_at": {"$lte": cutoff},
             "return_20d": None,
             "price_at_signal": {"$ne": None},
-        }).to_list(length=500)
+        }).to_list(length=2000)
 
         if not unsettled:
             logger.debug("perf_tracker_nothing_to_settle")
@@ -155,19 +155,20 @@ async def _performance_tracker_job() -> None:
 
 
 async def _fetch_current_price(ticker: str) -> float | None:
-    """Fetch the latest close price from Yahoo Finance."""
-    import requests
+    """Fetch the latest close price from Yahoo Finance (async, non-blocking)."""
+    import httpx
     headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=5d"
     try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=5d"
-        resp = requests.get(url, headers=headers, timeout=10)
-        resp.raise_for_status()
-        result = resp.json().get("chart", {}).get("result", [])
-        if not result:
-            return None
-        adj = result[0].get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
-        closes = [c for c in adj if c is not None]
-        return float(closes[-1]) if closes else None
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            result = resp.json().get("chart", {}).get("result", [])
+            if not result:
+                return None
+            adj = result[0].get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
+            closes = [c for c in adj if c is not None]
+            return float(closes[-1]) if closes else None
     except Exception:
         return None
 
@@ -225,5 +226,5 @@ def start_scheduler() -> None:
 def stop_scheduler() -> None:
     scheduler = get_scheduler()
     if scheduler.running:
-        scheduler.shutdown(wait=False)
+        scheduler.shutdown(wait=True)
         logger.info("scheduler_stopped")

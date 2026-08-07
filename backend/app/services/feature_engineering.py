@@ -68,6 +68,11 @@ async def compute_features(ticker: str) -> dict:
     macro           = raw_doc.get("macro", {})
     macro_score     = _macro_score(macro)
 
+    # Store raw macro values needed by scoring.py XGBoost feature vector
+    macro_vix          = macro.get("vix")
+    macro_yield_spread = macro.get("yield_curve_spread")
+    macro_cpi_yoy      = macro.get("cpi_yoy_pct")
+
     # catalyst_score needs both raw_doc and the partially-built feat dict
     _partial_feat = {"volume_anomaly": tech["volume_anomaly"]}
     catalyst_score = compute_catalyst_score(raw_doc, _partial_feat)
@@ -86,12 +91,15 @@ async def compute_features(ticker: str) -> dict:
         "bb_pct":           tech["bb_pct"],          # 0=at lower band, 1=at upper band
         "stoch_rsi":        tech["stoch_rsi"],        # 0–1
         "atr_14":           tech["atr_14"],
-        "obv":              tech["obv"],
         "volume_anomaly":   tech["volume_anomaly"],   # ratio vs 20-day avg
         "ma_20":            tech["ma_20"],
         "ma_50":            tech["ma_50"],
         "ma_cross_bullish": tech["ma_cross_bullish"],
         "volatility_20d":   tech["volatility_20d"],
+        # ── Raw macro fields (for XGBoost feature vector in scoring.py) ──────
+        "vix":               macro_vix,
+        "yield_curve_spread": macro_yield_spread,
+        "cpi_yoy_pct":       macro_cpi_yoy,
         # ── Sub-scores (all 0–1) ─────────────────────────────────────────────
         "technical_score":    round(technical_score,   4),
         "fundamental_score":  round(fundamental_score, 4),
@@ -169,9 +177,6 @@ def _compute_technical_indicators(
     # ATR-14
     atr_14 = last(ta.volatility.AverageTrueRange(high=highs, low=lows, close=closes, window=14).average_true_range())
 
-    # OBV
-    obv = last(ta.volume.OnBalanceVolumeIndicator(close=closes, volume=volumes).on_balance_volume())
-
     # Volume anomaly: latest volume vs 20-day average
     vol_avg_20 = volumes.rolling(20).mean().iloc[-1]
     volume_anomaly = round(float(volumes.iloc[-1] / vol_avg_20), 4) if vol_avg_20 > 0 else 1.0
@@ -196,7 +201,6 @@ def _compute_technical_indicators(
         "bb_pct": bb_pct,
         "stoch_rsi": stoch_rsi,
         "atr_14": atr_14,
-        "obv": obv,
         "volume_anomaly": volume_anomaly,
         "ma_20": ma_20,
         "ma_50": ma_50,

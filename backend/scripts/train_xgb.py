@@ -225,9 +225,11 @@ def compute_features_for_df(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
         elif volatility_20d >= 0.80: volatility_score = 0.0
         else:                        volatility_score = _clamp(1.0 - (volatility_20d - 0.15) / 0.65)
 
-        # Catalyst sub-score (simplified for historical: volume spike only)
+        # Catalyst sub-score: volume spike only — must match catalyst.py inference logic.
+        # catalyst.py deliberately uses the same formula. If catalyst.py is updated
+        # to multi-component scoring, retrain this model first.
         vol_spike = _clamp((volume_anomaly - 1.0) / 2.0) if volume_anomaly > 1 else 0.0
-        catalyst_score = vol_spike  # earnings/analyst data not available historically
+        catalyst_score = vol_spike
 
         # Macro from FRED (look up nearest historical value)
         vix_val   = _get_macro_val(macro, "vix",  idx, default=20.0)

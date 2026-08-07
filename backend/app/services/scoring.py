@@ -77,10 +77,15 @@ def _weighted_score(feat: dict, settings) -> float:
 
 def _ml_score(feat: dict) -> float:
     """
-    XGBoost inference path (placeholder).
-    Train a model offline and export with model.save_model(_MODEL_PATH).
-    Feature vector must match training schema.
-    Falls back to weighted score if model file is missing.
+    XGBoost inference path.
+    Feature vector must match training schema in scripts/train_xgb.py.
+
+    NOTE: fundamental_score and sentiment_score are frozen at 0.5 to match
+    training data (train_xgb.py hardcodes both; historical values unavailable).
+    Re-train xgb_scorer.json with real fundamental/sentiment data before unfreezing.
+
+    VIX is read directly from feat["vix"] (stored by feature_engineering.py from
+    raw macro data). Previously this defaulted to 20.0 due to a missing propagation.
     """
     global _xgb_model
 
@@ -100,7 +105,6 @@ def _ml_score(feat: dict) -> float:
     import numpy as np
 
     # 14-feature vector — must match training schema in scripts/train_xgb.py
-    macro = feat.get("macro") or {}
     feature_vector = np.array(
         [[
             feat.get("rsi_14",           50.0) or 50.0,
@@ -111,12 +115,12 @@ def _ml_score(feat: dict) -> float:
             feat.get("volume_anomaly",    1.0) or 1.0,
             feat.get("volatility_20d",    0.3) or 0.3,
             feat.get("technical_score",   0.5),
-            feat.get("fundamental_score", 0.5),
-            feat.get("sentiment_score",   0.5),
+            0.5,  # fundamental_score frozen — matches training; retrain to unlock
+            0.5,  # sentiment_score frozen — matches training; retrain to unlock
             feat.get("macro_score",       0.5),
             feat.get("volatility_score",  0.5),
             feat.get("catalyst_score",    0.5),
-            float(macro.get("vix") or 20.0),
+            float(feat.get("vix") or 20.0),  # read from feat directly (Fix 1)
         ]]
     )
     prediction = float(_xgb_model.predict(feature_vector)[0])

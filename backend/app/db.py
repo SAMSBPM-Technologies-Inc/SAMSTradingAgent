@@ -25,6 +25,26 @@ async def connect_db() -> None:
     # Trigger a lightweight command to confirm connectivity
     await _client.admin.command("ping")
     logger.info("mongodb_connected", db=settings.mongodb_db_name)
+    await _ensure_indexes()
+
+
+async def _ensure_indexes() -> None:
+    """Create indexes idempotently on startup. Safe to call on every restart."""
+    db = await get_db()
+    await db[COLL_SIGNALS].create_index("ticker", unique=True, background=True)
+    await db[COLL_SIGNAL_HISTORY].create_index("ticker", background=True)
+    await db[COLL_SIGNAL_HISTORY].create_index("generated_at", background=True)
+    await db[COLL_SIGNAL_HISTORY].create_index(
+        [("generated_at", 1), ("return_20d", 1)], background=True
+    )
+    await db[COLL_SIGNAL_HISTORY].create_index(
+        [("ticker", 1), ("hour_bucket", 1)],
+        unique=True,
+        partialFilterExpression={"hour_bucket": {"$type": "date"}},
+        background=True,
+    )
+    await db[COLL_WATCHED].create_index("ticker", unique=True, background=True)
+    logger.info("mongodb_indexes_ensured")
 
 
 async def close_db() -> None:
