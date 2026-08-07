@@ -7,4 +7,4 @@ __pycache__/
 .mypy_cache/
 .git/
 *.md
-model/
+model/.gitkeep
