@@ -25,6 +25,10 @@ python-dotenv==1.0.1
 # HTTP client
 httpx==0.27.0
 
+# Phase 1: real data sources
+fredapi==0.5.1          # FRED macro data (rates, CPI, unemployment, VIX)
+vaderSentiment==3.3.2   # VADER sentiment analysis on news headlines (no API key needed)
+
 # Logging
 structlog==24.1.0
 

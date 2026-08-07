@@ -1,15 +1,19 @@
 """
 Data Ingestion Service
 ─────────────────────
-Fetches OHLCV data from yfinance, generates mock sentiment,
-and persists raw records to `stocks_raw` in MongoDB.
+Fetches OHLCV data from Yahoo Finance, real sentiment from Finnhub,
+fundamentals from yfinance, and macro data from FRED, then persists
+raw records to `stocks_raw` in MongoDB.
 """
-import random
 from datetime import datetime, timezone
 
-import yfinance as yf
+import pandas as pd
+import requests
 
 from app.db import COLL_RAW, get_db
+from app.services.fundamentals import fetch_fundamentals
+from app.services.macro import fetch_macro_data
+from app.services.news import fetch_news_sentiment, fetch_recent_headlines
 from app.utils.helpers import safe_float, utcnow
 from app.utils.logger import get_logger
 
@@ -21,8 +25,8 @@ HISTORY_DAYS = 90
 
 async def ingest_ticker(ticker: str) -> dict:
     """
-    Fetch price history + mock sentiment for *ticker*.
-    Upserts a document in `stocks_raw` keyed by (ticker, date of latest bar).
+    Fetch price history, real sentiment, fundamentals, and macro data for *ticker*.
+    Upserts a document in `stocks_raw` keyed by ticker.
     Returns the stored document dict.
     """
     ticker = ticker.upper()
@@ -55,30 +59,32 @@ async def ingest_ticker(ticker: str) -> dict:
     prev_close = bars[-2]["close"] if len(bars) > 1 else current_price
     day_change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0.0
 
+    # Fetch real data from all three enrichment sources (all degrade gracefully)
+    sentiment_raw, headlines, fundamentals, macro = await _fetch_enrichment(ticker)
+
     doc = {
         "ticker": ticker,
         "ingested_at": utcnow(),
         "bars": bars,
         "current_price": current_price,
         "day_change_pct": round(day_change_pct, 4),
-        # Mock sentiment: real pipeline would call a news API here
-        "sentiment_raw": _mock_sentiment(ticker),
+        "sentiment_raw": sentiment_raw,
+        "recent_headlines": headlines,
+        "fundamentals": fundamentals,
+        "macro": macro,
     }
 
     db = await get_db()
-    # Replace the most-recent document for this ticker (one live doc per ticker)
-    await db[COLL_RAW].replace_one(
-        {"ticker": ticker},
-        doc,
-        upsert=True,
-    )
+    await db[COLL_RAW].replace_one({"ticker": ticker}, doc, upsert=True)
 
     logger.info(
         "ingestion_complete",
         ticker=ticker,
         bars=len(bars),
         current_price=current_price,
-        day_change_pct=day_change_pct,
+        day_change_pct=round(day_change_pct, 4),
+        sentiment_source=sentiment_raw.get("source"),
+        macro_source=macro.get("source"),
     )
     return doc
 
@@ -100,11 +106,45 @@ async def ingest_all(tickers: list[str]) -> dict[str, str]:
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-def _fetch_price_history(ticker: str):
+async def _fetch_enrichment(ticker: str) -> tuple[dict, list, dict, dict]:
+    """
+    Fetch sentiment, headlines, fundamentals, and macro data concurrently.
+    Any individual failure returns a safe default so the pipeline keeps running.
+    """
+    import asyncio
+
+    sentiment_task = fetch_news_sentiment(ticker)
+    headlines_task = fetch_recent_headlines(ticker)
+    fundamentals_task = fetch_fundamentals(ticker)
+    macro_task = fetch_macro_data()
+
+    sentiment, headlines, fundamentals, macro = await asyncio.gather(
+        sentiment_task,
+        headlines_task,
+        fundamentals_task,
+        macro_task,
+        return_exceptions=True,
+    )
+
+    # Replace any unexpected exception with a safe default
+    if isinstance(sentiment, Exception):
+        logger.warning("sentiment_exception", ticker=ticker, error=str(sentiment))
+        sentiment = {"score": 0.5, "article_count": 0, "source": "exception"}
+    if isinstance(headlines, Exception):
+        headlines = []
+    if isinstance(fundamentals, Exception):
+        logger.warning("fundamentals_exception", ticker=ticker, error=str(fundamentals))
+        fundamentals = {"ticker": ticker, "source": "exception"}
+    if isinstance(macro, Exception):
+        logger.warning("macro_exception", error=str(macro))
+        macro = {"source": "exception"}
+
+    return sentiment, headlines, fundamentals, macro
+
+
+def _fetch_price_history(ticker: str) -> pd.DataFrame:
     """Download OHLCV history via Yahoo Finance v8 chart API. Returns a DataFrame."""
     import time
-    import requests
-    import pandas as pd
 
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -137,27 +177,14 @@ def _fetch_price_history(ticker: str):
     ohlcv = chart.get("indicators", {}).get("quote", [{}])[0]
     adjclose = chart.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
 
-    df = pd.DataFrame({
-        "Open": ohlcv.get("open", []),
-        "High": ohlcv.get("high", []),
-        "Low": ohlcv.get("low", []),
-        "Close": adjclose if adjclose else ohlcv.get("close", []),
-        "Volume": ohlcv.get("volume", []),
-    }, index=pd.to_datetime(timestamps, unit="s", utc=True))
-
+    df = pd.DataFrame(
+        {
+            "Open": ohlcv.get("open", []),
+            "High": ohlcv.get("high", []),
+            "Low": ohlcv.get("low", []),
+            "Close": adjclose if adjclose else ohlcv.get("close", []),
+            "Volume": ohlcv.get("volume", []),
+        },
+        index=pd.to_datetime(timestamps, unit="s", utc=True),
+    )
     return df.dropna(subset=["Close"])
-
-
-def _mock_sentiment(ticker: str) -> dict:
-    """
-    Return a mock sentiment object.
-    Replace with a real news-API call (e.g. NewsAPI, Finnhub) when available.
-    Scores are seeded from the ticker string for reproducibility in dev.
-    """
-    seed = sum(ord(c) for c in ticker)
-    rng = random.Random(seed + int(datetime.now(tz=timezone.utc).timestamp() // 3600))
-    return {
-        "score": round(rng.uniform(0.2, 0.8), 3),   # 0=very negative, 1=very positive
-        "article_count": rng.randint(1, 20),
-        "source": "mock",
-    }

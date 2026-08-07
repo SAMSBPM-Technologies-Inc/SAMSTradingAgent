@@ -61,11 +61,13 @@ async def score_ticker(ticker: str) -> dict:
 
 
 def _weighted_score(feat: dict, settings) -> float:
-    """Simple weighted linear combination of sub-scores."""
+    """Weighted linear combination of all 5 sub-scores."""
     return (
-        settings.weight_technical * feat.get("technical_score", 0.0)
-        + settings.weight_sentiment * feat.get("sentiment_score", 0.5)
-        + settings.weight_volatility * feat.get("volatility_score", 0.5)
+        settings.weight_technical   * feat.get("technical_score",   0.5)
+        + settings.weight_fundamental * feat.get("fundamental_score", 0.5)
+        + settings.weight_sentiment   * feat.get("sentiment_score",   0.5)
+        + settings.weight_macro       * feat.get("macro_score",       0.5)
+        + settings.weight_volatility  * feat.get("volatility_score",  0.5)
     )
 
 
@@ -96,10 +98,12 @@ def _ml_score(feat: dict) -> float:
     feature_vector = np.array(
         [[
             feat.get("rsi_14", 50.0) or 50.0,
-            feat.get("technical_score", 0.5),
-            feat.get("sentiment_score", 0.5),
-            feat.get("volatility_score", 0.5),
-            feat.get("volatility_20d", 0.3) or 0.3,
+            feat.get("technical_score",   0.5),
+            feat.get("fundamental_score", 0.5),
+            feat.get("sentiment_score",   0.5),
+            feat.get("macro_score",       0.5),
+            feat.get("volatility_score",  0.5),
+            feat.get("volatility_20d",    0.3) or 0.3,
         ]]
     )
     prediction = float(_xgb_model.predict(feature_vector)[0])

@@ -134,12 +134,29 @@ def _price_suggestions(signal: str, price: float, feat: dict):
 def _build_explanation(
     ticker: str, signal: str, score: float, risk: dict, feat: dict
 ) -> str:
+    # Technical
     rsi = feat.get("rsi_14")
+    rsi_str = f"RSI={rsi:.1f}" if rsi is not None else "RSI=N/A"
     ma_bull = feat.get("ma_cross_bullish")
     trend = "bullish" if ma_bull else ("bearish" if ma_bull is False else "neutral")
-    rsi_str = f"RSI={rsi:.1f}" if rsi else "RSI=N/A"
+    macd_bull = feat.get("macd_bullish")
+    macd_str = "MACD↑" if macd_bull else ("MACD↓" if macd_bull is False else "")
+    bb_pct = feat.get("bb_pct")
+    bb_str = f"BB={bb_pct:.0%}" if bb_pct is not None else ""
+
+    # Sub-scores
+    tech  = feat.get("technical_score",   0.5)
+    fund  = feat.get("fundamental_score", 0.5)
+    sent  = feat.get("sentiment_score",   0.5)
+    macro = feat.get("macro_score",       0.5)
+
+    indicators = " | ".join(filter(None, [rsi_str, macd_str, bb_str, f"MA={trend}"]))
+    scores_str = (
+        f"tech={tech:.2f} fund={fund:.2f} sent={sent:.2f} macro={macro:.2f}"
+    )
+
     return (
-        f"{ticker} → {signal} | AI score={score:.2f} | "
+        f"{ticker} → {signal} | score={score:.2f} | "
         f"Risk={risk['risk_level']} ({risk['risk_score']:.1f}/10) | "
-        f"MA trend={trend} | {rsi_str}. {risk['explanation']}"
+        f"{indicators} | [{scores_str}]. {risk['explanation']}"
     )

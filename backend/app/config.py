@@ -40,14 +40,20 @@ class Settings(BaseSettings):
     def ticker_list(self) -> List[str]:
         return [t.strip().upper() for t in self.default_tickers.split(",") if t.strip()]
 
+    # ── External API keys (all optional — services degrade gracefully if absent) ─
+    finnhub_api_key: str = Field(default="", description="Finnhub.io API key for real news sentiment")
+    fred_api_key: str = Field(default="", description="FRED API key for macro data")
+
     # ── Feature flags ─────────────────────────────────────────────────────────
     enable_ml_model: bool = Field(default=False)
     enable_backtesting: bool = Field(default=False)
 
     # ── Scoring weights (must sum to 1.0) ─────────────────────────────────────
-    weight_technical: float = Field(default=0.4)
-    weight_sentiment: float = Field(default=0.3)
-    weight_volatility: float = Field(default=0.3)
+    weight_technical:    float = Field(default=0.30)
+    weight_fundamental:  float = Field(default=0.20)
+    weight_sentiment:    float = Field(default=0.20)
+    weight_macro:        float = Field(default=0.15)
+    weight_volatility:   float = Field(default=0.15)
 
 
 @lru_cache(maxsize=1)
