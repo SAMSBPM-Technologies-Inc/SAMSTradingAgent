@@ -4,7 +4,7 @@ Feature Engineering Service
 Reads raw price/fundamental/macro data from MongoDB and computes:
 
   Technical indicators  : RSI-14, MACD, Bollinger Bands, Stochastic RSI,
-                          ATR, OBV, MA-20/50, volume anomaly
+                          ATR, MA-20/50, volume anomaly
   Sub-scores (all 0–1)  : technical, fundamental, sentiment, macro, volatility
   Composite             : delegated to scoring.py (not computed here)
 
