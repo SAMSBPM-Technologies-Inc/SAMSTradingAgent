@@ -369,7 +369,7 @@ function ExportMenu({ data }: { data: AnalyzeResponse }) {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-20 w-40 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface)] shadow-lg overflow-hidden">
+          <div className="absolute right-0 top-full mt-1 z-20 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden" style={{ borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
             <button
               onClick={() => { downloadTxt(data); setOpen(false) }}
               className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-[var(--color-fg)] hover:bg-[var(--color-bg)] transition-colors"

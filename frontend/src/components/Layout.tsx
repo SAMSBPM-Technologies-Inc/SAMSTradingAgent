@@ -128,10 +128,9 @@ const bottomTabs = [
 function MobileBottomBar() {
   return (
     <nav className="md:hidden fixed bottom-0 inset-x-0 z-30
-                    bg-[var(--color-surface)]/95 backdrop-blur-lg
+                    bg-[var(--color-surface)]
                     border-t border-[var(--color-border)]
-                    pb-safe
-                    transition-colors duration-200">
+                    pb-safe">
       <div className="flex items-center justify-around px-2 h-16">
         {bottomTabs.map(({ to, label, icon: Icon, exact }) => (
           <NavLink
@@ -171,15 +170,15 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Mobile top bar */}
       <header className="md:hidden flex items-center justify-between px-4 h-14 flex-shrink-0
-                          bg-[var(--color-surface)]/90 backdrop-blur-md
+                          bg-[var(--color-surface)]
                           border-b border-[var(--color-border)]
-                          transition-colors duration-200 sticky top-0 z-30">
+                          sticky top-0 z-30">
         <LogoMark />
         <ThemeToggle />
       </header>
 
       {/* Main content */}
-      <main className="flex-1 md:pt-16 mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
+      <main className="flex-1 md:pt-[60px] mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
                        max-w-5xl mx-auto w-full">
         {children}
       </main>

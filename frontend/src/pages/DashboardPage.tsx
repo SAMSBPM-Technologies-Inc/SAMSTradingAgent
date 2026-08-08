@@ -79,7 +79,7 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
       <button
         onClick={() => navigate(`/ticker/${item.ticker}`)}
         className="font-semibold text-sm text-[var(--color-fg)] w-14 flex-shrink-0 text-left hover:text-brand-500 transition-colors"
-        style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+        style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
       >
         {item.ticker}
       </button>
@@ -91,10 +91,10 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
 
       {/* Score bar + number */}
       <div className="flex items-center gap-2 w-28 flex-shrink-0">
-        <div className="flex-1 h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+        <div className="flex-1 h-1.5 rounded-sm bg-[var(--color-border)] overflow-hidden">
           <div
-            className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-all duration-500"
-            style={{ width: `${scorePct}%` }}
+            className="h-full transition-all duration-500"
+            style={{ width: `${scorePct}%`, background: '#f2600c', borderRadius: '2px' }}
           />
         </div>
         <span className="text-xs tabular-nums text-[var(--color-fg-muted)] w-6 text-right">{scorePct}</span>
@@ -137,7 +137,7 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
       <div className="flex items-center gap-1 ml-auto flex-shrink-0">
         <button
           onClick={() => navigate(`/ticker/${item.ticker}`)}
-          className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-brand-500 hover:bg-brand-500/10 transition-colors opacity-0 group-hover:opacity-100"
+          className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-brand-500 hover:bg-brand-500/10 transition-colors opacity-0 group-hover:opacity-100"
           title="View analysis"
         >
           View <ArrowRight className="w-3 h-3" />
