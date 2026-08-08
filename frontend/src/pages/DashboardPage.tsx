@@ -85,7 +85,7 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
       </button>
 
       {/* Signal */}
-      <div className="flex-shrink-0">
+      <div className="w-20 flex-shrink-0">
         <SignalBadge signal={item.signal} />
       </div>
 
@@ -426,17 +426,18 @@ export default function DashboardPage() {
         <EmptyState />
       ) : (
         <div className="card overflow-hidden p-0">
-          {/* Filter + column headers */}
-          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-y-2">
+          {/* Filter bar */}
+          <div className="px-4 py-3 border-b border-[var(--color-border)]">
             <FilterBar active={filter} onChange={setFilter} counts={counts} />
-            {/* Column labels */}
-            <div className="hidden sm:flex items-center gap-3 text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none">
-              <span className="w-14">Ticker</span>
-              <span className="w-12">Signal</span>
-              <span className="w-28">Score</span>
-              <span className="w-28">Price</span>
-              <span className="hidden md:block">Conviction</span>
-            </div>
+          </div>
+
+          {/* Column headers — must mirror WatchlistRow layout exactly */}
+          <div className="hidden sm:flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)] text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none">
+            <span className="w-14 flex-shrink-0">Ticker</span>
+            <span className="w-20 flex-shrink-0">Signal</span>
+            <span className="w-28 flex-shrink-0">Score</span>
+            <span className="w-28 flex-shrink-0">Price</span>
+            <span className="hidden md:block flex-shrink-0">Conviction</span>
           </div>
 
           {filtered.length === 0 ? (
