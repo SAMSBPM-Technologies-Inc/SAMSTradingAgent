@@ -23,10 +23,13 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem(TOKEN_KEY)
-      // Redirect to auth page (avoid window dependency in components)
-      if (typeof window !== 'undefined') {
-        window.location.href = '/auth'
+      const url: string = error.config?.url ?? ''
+      // Don't redirect on auth endpoints — let the form handler show the error message
+      if (!url.includes('/auth/')) {
+        localStorage.removeItem(TOKEN_KEY)
+        if (typeof window !== 'undefined') {
+          window.location.href = '/auth'
+        }
       }
     }
     return Promise.reject(error)
