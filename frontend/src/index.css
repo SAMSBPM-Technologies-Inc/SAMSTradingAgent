@@ -2,13 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* CSS custom properties for semantic theming */
+/* Design tokens */
 :root {
-  --color-bg: #f8f5ef;
-  --color-surface: #fdfbf7;
-  --color-border: #ddd8ce;
-  --color-fg: #16120d;
-  --color-fg-muted: #6b6356;
+  --color-bg: #fbfaf8;
+  --color-surface: #ffffff;
+  --color-border: #e7e2d8;
+  --color-fg: #14110c;
+  --color-fg-muted: #83786a;
 }
 
 .dark {
@@ -19,29 +19,28 @@
   --color-fg-muted: #9a8f82;
 }
 
-/* Base styles */
 @layer base {
   html {
-    font-family: 'Lora', Georgia, serif;
+    font-family: 'Work Sans', system-ui, sans-serif;
     -webkit-tap-highlight-color: transparent;
   }
 
   body {
-    @apply bg-[var(--color-bg)] text-[var(--color-fg)] transition-colors duration-200;
+    @apply bg-[var(--color-bg)] text-[var(--color-fg)];
     min-height: 100dvh;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    font-family: 'Fraunces', Georgia, serif;
+    font-family: 'Archivo', system-ui, sans-serif;
   }
 
   * {
     box-sizing: border-box;
   }
 
-  /* Custom scrollbar */
   ::-webkit-scrollbar {
-    width: 0.375rem;
+    width: 6px;
+    height: 6px;
   }
 
   ::-webkit-scrollbar-track {
@@ -49,69 +48,89 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-[var(--color-border)] rounded-full;
-  }
-
-  ::-webkit-scrollbar-thumb:hover {
-    @apply bg-brand-500/40;
+    background: #e7e2d8;
+    border-radius: 3px;
   }
 }
 
 @layer components {
-  /* Card base */
+  /* Card — flat, no shadow */
   .card {
-    @apply bg-[var(--color-surface)] border border-[var(--color-border)] rounded-2xl shadow-card transition-colors duration-200;
+    @apply bg-[var(--color-surface)] border border-[var(--color-border)] p-4;
+    border-radius: 10px;
   }
 
-  /* Input base */
+  /* Input */
   .input {
-    @apply w-full bg-[var(--color-bg)] border border-[var(--color-border)] rounded-xl px-4 py-3
+    @apply w-full bg-[var(--color-bg)] border border-[var(--color-border)]
            text-[var(--color-fg)] placeholder:text-[var(--color-fg-muted)]
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500
-           transition-colors duration-200;
-    min-height: 2.75rem;
-    font-family: 'Lora', Georgia, serif;
+           focus:outline-none focus:ring-1 focus:ring-[#f2600c] focus:border-[#f2600c];
+    border-radius: 6px;
+    padding: 0 12px;
+    min-height: 34px;
+    font-family: 'Work Sans', system-ui, sans-serif;
+    font-size: 13.5px;
   }
 
-  /* Primary button */
+  /* Primary button — solid flat orange */
   .btn-primary {
     @apply inline-flex items-center justify-center gap-2
-           bg-gradient-to-r from-brand-500 to-brand-600
-           hover:from-brand-600 hover:to-brand-700
-           text-white font-semibold rounded-xl
-           transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:ring-offset-2
-           disabled:opacity-50 disabled:cursor-not-allowed;
-    min-height: 2.75rem;
-    padding: 0.625rem 1.25rem;
+           text-white font-semibold
+           focus:outline-none focus:ring-2 focus:ring-[#f2600c]/50
+           disabled:opacity-40 disabled:cursor-not-allowed;
+    background: #f2600c;
+    border-radius: 6px;
+    min-height: 34px;
+    padding: 0 14px;
+    font-family: 'Work Sans', system-ui, sans-serif;
+    font-size: 13.5px;
+    transition: background 150ms;
   }
 
-  /* Secondary button */
+  .btn-primary:hover:not(:disabled) {
+    background: #d9530a;
+  }
+
+  /* Secondary button — flat bordered */
   .btn-secondary {
     @apply inline-flex items-center justify-center gap-2
            bg-transparent border border-[var(--color-border)]
-           text-[var(--color-fg)] hover:bg-black/5 dark:hover:bg-white/5
-           font-semibold rounded-xl
-           transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:ring-offset-2
-           disabled:opacity-50 disabled:cursor-not-allowed;
-    min-height: 2.75rem;
-    padding: 0.625rem 1.25rem;
+           text-[var(--color-fg)]
+           font-medium
+           focus:outline-none focus:ring-1 focus:ring-[#f2600c]/50
+           disabled:opacity-40 disabled:cursor-not-allowed;
+    border-radius: 6px;
+    min-height: 34px;
+    padding: 0 12px;
+    font-family: 'Work Sans', system-ui, sans-serif;
+    font-size: 13.5px;
+    transition: background 150ms;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background: #f1eee6;
   }
 
   /* Ghost button */
   .btn-ghost {
     @apply inline-flex items-center justify-center gap-2
            bg-transparent text-[var(--color-fg-muted)]
-           hover:text-[var(--color-fg)] hover:bg-black/5 dark:hover:bg-white/5
-           rounded-xl transition-all duration-200
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50;
-    min-height: 2.75rem;
-    padding: 0.5rem 0.75rem;
+           focus:outline-none focus:ring-1 focus:ring-[#f2600c]/50;
+    border-radius: 6px;
+    min-height: 34px;
+    padding: 0 10px;
+    font-family: 'Work Sans', system-ui, sans-serif;
+    font-size: 13.5px;
+    transition: background 150ms, color 150ms;
+  }
+
+  .btn-ghost:hover {
+    background: #f1eee6;
+    color: #14110c;
   }
 }
 
-/* Safe area insets for mobile bottom bar */
+/* Safe area insets */
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, BarChart2, CheckCircle2, Clock, TrendingUp, XCircle } from 'lucide-react'
+import { AlertCircle, BarChart2, Clock, TrendingUp } from 'lucide-react'
 import { performanceApi } from '../lib/api'
 import type { PerformanceResponse, Signal, SignalRecord } from '../types'
 import Layout from '../components/Layout'
@@ -62,15 +62,15 @@ function StatCard({
   valueClass?: string
 }) {
   return (
-    <div className="card p-4 flex flex-col gap-1">
-      <span className="text-xs text-[var(--color-fg-muted)]">{label}</span>
+    <div className="border border-[#e7e2d8] p-4 flex flex-col gap-1" style={{ borderRadius: '10px' }}>
+      <span className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a]">{label}</span>
       <span
-        className={`text-2xl font-light ${valueClass ?? 'text-[var(--color-fg)]'}`}
-        style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+        className={`text-[22px] font-bold tabular-nums ${valueClass ?? 'text-[#14110c]'}`}
+        style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
       >
         {value}
       </span>
-      {sub && <span className="text-xs text-[var(--color-fg-muted)]">{sub}</span>}
+      {sub && <span className="text-[11px] text-[#83786a]">{sub}</span>}
     </div>
   )
 }
@@ -79,40 +79,47 @@ function StatCard({
 
 const SIGNAL_ORDER: Signal[] = ['BUY', 'HOLD', 'SELL']
 
+const tintBg: Record<Signal, string> = {
+  BUY: '#eaf6ee', SELL: '#fbebeb', HOLD: '#fbf1e2',
+}
+const barColor: Record<Signal, string> = {
+  BUY: '#15803d', SELL: '#b91c1c', HOLD: '#b45309',
+}
+
 function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][number] }) {
   const pending = row.settled === 0
   const winPct = row.win_rate != null ? row.win_rate * 100 : 0
+  const signal = row.signal as Signal
 
   return (
-    <div className="card p-5 flex flex-col gap-3">
+    <div className="flex flex-col gap-3" style={{ background: tintBg[signal], borderRadius: 10, padding: 20 }}>
       {/* Signal badge */}
-      <SignalBadge signal={row.signal as Signal} />
+      <SignalBadge signal={signal} />
 
       {/* Win rate */}
       {pending ? (
         <div className="flex flex-col gap-1">
           <span
-            className="text-2xl font-light text-[var(--color-fg-muted)]"
-            style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+            className="text-[#83786a] tabular-nums"
+            style={{ fontFamily: 'Archivo, system-ui, sans-serif', fontWeight: 700, fontSize: '28px' }}
           >
             Pending
           </span>
-          <div className="h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
-            <div className="h-full w-0 bg-green-500 rounded-full" />
+          <div className="bg-[var(--color-border)] overflow-hidden" style={{ height: 4, borderRadius: 2 }}>
+            <div style={{ height: '100%', width: 0, background: barColor[signal], borderRadius: 2 }} />
           </div>
         </div>
       ) : (
         <div className="flex flex-col gap-1">
           <span
-            className="text-2xl font-light text-[var(--color-fg)]"
-            style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+            className="text-[#14110c] tabular-nums"
+            style={{ fontFamily: 'Archivo, system-ui, sans-serif', fontWeight: 700, fontSize: '28px' }}
           >
             {fmtPct(row.win_rate)}
           </span>
-          <div className="h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+          <div className="bg-[var(--color-border)] overflow-hidden" style={{ height: 4, borderRadius: 2 }}>
             <div
-              className="h-full bg-green-500 rounded-full transition-all duration-500"
-              style={{ width: `${winPct}%` }}
+              style={{ height: '100%', width: `${winPct}%`, background: barColor[signal], borderRadius: 2, transition: 'width 500ms' }}
             />
           </div>
         </div>
@@ -134,23 +141,9 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
 // ── Recent signal history table (Section 3) ────────────────────────────────────
 
 function OutcomeCell({ rec }: { rec: SignalRecord }) {
-  if (rec.return_20d == null) {
-    return <span className="text-[var(--color-fg-muted)] text-xs">— Pending</span>
-  }
-  if (rec.was_correct) {
-    return (
-      <span className="inline-flex items-center gap-1 text-green-500 text-xs font-medium">
-        <CheckCircle2 className="w-3.5 h-3.5" />
-        Correct
-      </span>
-    )
-  }
-  return (
-    <span className="inline-flex items-center gap-1 text-red-500 text-xs font-medium">
-      <XCircle className="w-3.5 h-3.5" />
-      Wrong
-    </span>
-  )
+  if (rec.return_20d == null) return <span className="text-[#83786a] text-xs">Pending</span>
+  if (rec.was_correct) return <span className="text-[#15803d] text-xs font-medium">✓ Correct</span>
+  return <span className="text-[#b91c1c] text-xs font-medium">✗ Wrong</span>
 }
 
 function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
@@ -169,8 +162,8 @@ function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-[var(--color-border)]">
         <h3
-          className="font-medium text-[var(--color-fg)]"
-          style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+          className="font-semibold text-[var(--color-fg)]"
+          style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
         >
           Recent Signal History
         </h3>
@@ -179,14 +172,14 @@ function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="px-4 py-2.5 text-left text-xs text-[var(--color-fg-muted)] font-medium">Date</th>
-              <th className="px-4 py-2.5 text-left text-xs text-[var(--color-fg-muted)] font-medium">Ticker</th>
-              <th className="px-4 py-2.5 text-left text-xs text-[var(--color-fg-muted)] font-medium">Signal</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">Score</th>
-              <th className="px-4 py-2.5 text-left text-xs text-[var(--color-fg-muted)] font-medium">Conviction</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">Entry Price</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">20d Return</th>
-              <th className="px-4 py-2.5 text-left text-xs text-[var(--color-fg-muted)] font-medium">Outcome</th>
+              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Date</th>
+              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Ticker</th>
+              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Signal</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Score</th>
+              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Conviction</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Entry Price</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">20d Return</th>
+              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Outcome</th>
             </tr>
           </thead>
           <tbody>
@@ -201,7 +194,7 @@ function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
                 <td className="px-4 py-3">
                   <span
                     className="font-semibold text-[var(--color-fg)]"
-                    style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+                    style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
                   >
                     {rec.ticker}
                   </span>
@@ -250,8 +243,8 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
     <div className="card overflow-hidden">
       <div className="px-4 py-3 border-b border-[var(--color-border)]">
         <h3
-          className="font-medium text-[var(--color-fg)]"
-          style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+          className="font-semibold text-[var(--color-fg)]"
+          style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
         >
           By Ticker
         </h3>
@@ -260,11 +253,11 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="px-4 py-2.5 text-left text-xs text-[var(--color-fg-muted)] font-medium">Ticker</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">Signals</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">Settled</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">Win Rate</th>
-              <th className="px-4 py-2.5 text-right text-xs text-[var(--color-fg-muted)] font-medium">Avg 20d</th>
+              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Ticker</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Signals</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Settled</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Win Rate</th>
+              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Avg 20d</th>
             </tr>
           </thead>
           <tbody>
@@ -273,7 +266,7 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
                 <td className="px-4 py-3">
                   <span
                     className="font-semibold text-[var(--color-fg)]"
-                    style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+                    style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
                   >
                     {row.ticker}
                   </span>
@@ -312,8 +305,8 @@ function EmptyState() {
         <BarChart2 className="w-8 h-8 text-brand-500" />
       </div>
       <h3
-        className="text-lg font-medium text-[var(--color-fg)] mb-2"
-        style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+        className="text-lg font-semibold text-[var(--color-fg)] mb-2"
+        style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
       >
         No performance data yet
       </h3>
@@ -369,10 +362,7 @@ export default function PerformancePage() {
     <Layout>
       {/* Header */}
       <div className="mb-6">
-        <h1
-          className="text-2xl font-light text-[var(--color-fg)]"
-          style={{ fontFamily: 'Fraunces, Georgia, serif' }}
-        >
+        <h1 className="text-2xl font-bold text-[#14110c]" style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
           Signal Accuracy Dashboard
         </h1>
         <p className="text-sm text-[var(--color-fg-muted)] mt-0.5">
@@ -438,9 +428,7 @@ export default function PerformancePage() {
 
           {/* ── Section 2: Signal type accuracy ───────────────────────────── */}
           <div>
-            <h2
-              className="text-sm font-medium text-[var(--color-fg-muted)] mb-3 uppercase tracking-wide"
-            >
+            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-3">
               By Signal Type
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -452,9 +440,7 @@ export default function PerformancePage() {
 
           {/* ── Section 3: Recent signal history table ────────────────────── */}
           <div>
-            <h2
-              className="text-sm font-medium text-[var(--color-fg-muted)] mb-3 uppercase tracking-wide"
-            >
+            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-3">
               Signal History
             </h2>
             <SignalHistoryTable records={signalHistory} />
@@ -463,9 +449,7 @@ export default function PerformancePage() {
           {/* ── Section 4: By ticker table ────────────────────────────────── */}
           {data.by_ticker && data.by_ticker.length > 0 && (
             <div>
-              <h2
-                className="text-sm font-medium text-[var(--color-fg-muted)] mb-3 uppercase tracking-wide"
-              >
+              <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-3">
                 By Ticker
               </h2>
               <ByTickerTable rows={data.by_ticker} />

@@ -6,30 +6,21 @@ interface SignalBadgeProps {
 }
 
 const styles: Record<Signal, string> = {
-  BUY:  'bg-green-500/10 text-green-500 border border-green-500/20',
-  SELL: 'bg-red-500/10 text-red-500 border border-red-500/20',
-  HOLD: 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20',
-}
-
-const dot: Record<Signal, string> = {
-  BUY:  'bg-green-500',
-  SELL: 'bg-red-500',
-  HOLD: 'bg-yellow-500',
+  BUY:  'bg-[#eaf6ee] text-[#15803d]',
+  SELL: 'bg-[#fbebeb] text-[#b91c1c]',
+  HOLD: 'bg-[#fbf1e2] text-[#b45309]',
 }
 
 export default function SignalBadge({ signal, size = 'sm' }: SignalBadgeProps) {
-  const isLg = size === 'lg'
-
   return (
     <span
+      style={{ borderRadius: '6px', fontFamily: 'Work Sans, system-ui, sans-serif', letterSpacing: '0.02em' }}
       className={`
-        inline-flex items-center gap-1.5 font-semibold rounded-full
-        transition-colors duration-200
+        inline-flex items-center font-bold
         ${styles[signal]}
-        ${isLg ? 'px-4 py-1.5 text-base' : 'px-2.5 py-0.5 text-xs'}
+        ${size === 'lg' ? 'px-3.5 py-1.5 text-sm' : 'px-2.5 py-1 text-[11px]'}
       `}
     >
-      <span className={`rounded-full flex-shrink-0 ${dot[signal]} ${isLg ? 'w-2.5 h-2.5' : 'w-1.5 h-1.5'}`} />
       {signal}
     </span>
   )

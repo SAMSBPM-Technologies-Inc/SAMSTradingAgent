@@ -17,15 +17,12 @@ function LogoLockup() {
   return (
     <div className="flex items-center gap-2 select-none">
       {/* Icon mark */}
-      <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex-shrink-0">
-        <span className="text-white font-bold text-sm" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>S</span>
+      <div className="flex items-center justify-center w-8 h-8 flex-shrink-0" style={{ background: '#f2600c', borderRadius: '8px' }}>
+        <span style={{ fontFamily: 'Fraunces, Georgia, serif', color: '#fff', fontWeight: 600, fontSize: '15px' }}>S</span>
       </div>
       {/* Text lockup */}
       <div className="leading-tight">
-        <div
-          className="text-brand-500 font-bold text-base tracking-tight"
-          style={{ fontFamily: 'Fraunces, Georgia, serif' }}
-        >
+        <div style={{ fontFamily: 'Fraunces, Georgia, serif', color: '#f2600c', fontWeight: 600, fontSize: '15px', letterSpacing: '-0.01em' }}>
           SAMSBPM
         </div>
         <div className="text-[var(--color-fg-muted)] text-[0.6rem] tracking-widest uppercase">
@@ -39,8 +36,8 @@ function LogoLockup() {
 // Mobile mark only
 function LogoMark() {
   return (
-    <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex-shrink-0">
-      <span className="text-white font-bold text-sm" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>S</span>
+    <div className="flex items-center justify-center w-8 h-8 flex-shrink-0" style={{ background: '#f2600c', borderRadius: '8px' }}>
+      <span style={{ fontFamily: 'Fraunces, Georgia, serif', color: '#fff', fontWeight: 600, fontSize: '15px' }}>S</span>
     </div>
   )
 }
@@ -57,8 +54,8 @@ function DesktopNav() {
   const navigate = useNavigate()
 
   return (
-    <header className="hidden md:flex fixed top-0 inset-x-0 z-30 h-16 items-center px-6 gap-6
-                       bg-[var(--color-surface)]/90 backdrop-blur-md
+    <header className="hidden md:flex fixed top-0 inset-x-0 z-30 h-[60px] items-center px-6 gap-6
+                       bg-[var(--color-surface)]
                        border-b border-[var(--color-border)]
                        transition-colors duration-200">
       {/* Logo */}
@@ -67,17 +64,18 @@ function DesktopNav() {
       </button>
 
       {/* Nav links */}
-      <nav className="flex items-center gap-1 flex-1">
+      <nav className="flex items-center flex-1">
         {navLinks.map(({ to, label, icon: Icon, exact }) => (
           <NavLink
             key={to}
             to={to}
             end={exact}
             className={({ isActive }) =>
-              `flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-colors duration-200
+              `flex items-center gap-2 text-[13.5px] font-medium transition-colors duration-150
+               border-b-2 pb-0.5 px-0 py-1 mr-6
                ${isActive
-                 ? 'bg-brand-500/10 text-brand-500'
-                 : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-border)]/40'
+                 ? 'text-[#14110c] border-[#f2600c]'
+                 : 'text-[#83786a] border-transparent hover:text-[#14110c]'
                }`
             }
           >
@@ -95,12 +93,12 @@ function DesktopNav() {
         <div className="flex items-center gap-2 pl-2 border-l border-[var(--color-border)]">
           <Link
             to="/profile"
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl
-                       bg-[var(--color-border)]/30 hover:bg-brand-500/10
-                       transition-colors duration-200"
+            className="flex items-center gap-2 px-2"
           >
-            <div className="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center flex-shrink-0">
-              <User className="w-3.5 h-3.5 text-brand-500" />
+            <div style={{ width: 28, height: 28, borderRadius: '50%', background: '#f2600c', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+              <span style={{ color: '#fff', fontFamily: 'Archivo, system-ui, sans-serif', fontWeight: 600, fontSize: '12px' }}>
+                {(user?.display_name ?? user?.email ?? 'U')[0].toUpperCase()}
+              </span>
             </div>
             <span className="text-sm text-[var(--color-fg-muted)] max-w-[10rem] truncate">
               {user?.display_name ?? user?.email ?? 'Account'}
@@ -142,19 +140,16 @@ function MobileBottomBar() {
             end={exact}
             className={({ isActive }) =>
               `flex flex-col items-center gap-0.5 px-3 py-2 rounded-xl flex-1 min-h-[2.75rem]
-               transition-colors duration-200
+               transition-colors duration-150
                ${isActive
                  ? 'text-brand-500'
                  : 'text-[var(--color-fg-muted)]'
                }`
             }
           >
-            {({ isActive }) => (
+            {({ isActive: _isActive }) => (
               <>
-                <div className={`p-1.5 rounded-xl transition-colors duration-200
-                                ${isActive ? 'bg-brand-500/10' : ''}`}>
-                  <Icon className="w-5 h-5" />
-                </div>
+                <Icon className="w-5 h-5" />
                 <span className="text-[0.65rem] font-medium leading-none">{label}</span>
               </>
             )}
