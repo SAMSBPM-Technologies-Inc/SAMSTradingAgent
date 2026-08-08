@@ -17,9 +17,10 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          command_timeout: 30m
           script: |
             cd /opt/trading-agent
             git pull origin main
             cd backend
-            docker compose -f docker-compose.prod.yml --env-file .env.production build --no-cache
+            docker compose -f docker-compose.prod.yml --env-file .env.production build
             docker compose -f docker-compose.prod.yml --env-file .env.production up -d
