@@ -12,7 +12,7 @@ XGBoost feature vector (14 features — must match training schema in scripts/tr
     vix (from macro)
 
 Weighted fallback:
-    score = Σ weight_i * sub_score_i   (6 sub-scores, weights sum to 1.0)
+    score = Σ weight_i * sub_score_i   (7 sub-scores, weights sum to 1.0)
 """
 import os
 from typing import Optional
@@ -64,14 +64,15 @@ async def score_ticker(ticker: str) -> dict:
 
 
 def _weighted_score(feat: dict, settings) -> float:
-    """Weighted linear combination of all 6 sub-scores."""
+    """Weighted linear combination of all 7 sub-scores."""
     return (
-        settings.weight_technical   * feat.get("technical_score",   0.5)
-        + settings.weight_fundamental * feat.get("fundamental_score", 0.5)
-        + settings.weight_sentiment   * feat.get("sentiment_score",   0.5)
-        + settings.weight_macro       * feat.get("macro_score",       0.5)
-        + settings.weight_volatility  * feat.get("volatility_score",  0.5)
-        + settings.weight_catalyst    * feat.get("catalyst_score",    0.5)
+        settings.weight_technical          * feat.get("technical_score",        0.5)
+        + settings.weight_fundamental      * feat.get("fundamental_score",      0.5)
+        + settings.weight_sentiment        * feat.get("sentiment_score",        0.5)
+        + settings.weight_macro            * feat.get("macro_score",            0.5)
+        + settings.weight_volatility       * feat.get("volatility_score",       0.5)
+        + settings.weight_catalyst         * feat.get("catalyst_score",         0.5)
+        + settings.weight_alternative_data * feat.get("alternative_data_score", 0.5)
     )
 
 

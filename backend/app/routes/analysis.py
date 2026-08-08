@@ -122,4 +122,9 @@ def _doc_to_response(doc: dict) -> AnalyzeResponse:
         time_horizon=ao.get("time_horizon"),
         thesis=ao.get("thesis"),
         analyst_note=ao.get("analyst_note"),
+        bull_case=ao.get("bull_case"),
+        bear_case=ao.get("bear_case"),
+        key_risks=ao.get("key_risks") or [],
+        catalysts=ao.get("catalysts") or [],
+        alternative_data=doc.get("alternative_data"),
     )

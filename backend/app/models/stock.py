@@ -104,6 +104,12 @@ class AnalyzeResponse(BaseModel):
     time_horizon: Optional[str] = None
     thesis: Optional[str] = None
     analyst_note: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    key_risks: list[str] = []
+    catalysts: list[str] = []
+    # Alternative data
+    alternative_data: Optional[dict] = None
 
 
 class AnalystReport(BaseModel):

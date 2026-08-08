@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
+  Activity,
   AlertCircle,
   ArrowLeft,
   Calendar,
@@ -11,10 +12,11 @@ import {
   Target,
   TrendingDown,
   TrendingUp,
+  Users,
   Zap,
 } from 'lucide-react'
 import { analyzeApi } from '../lib/api'
-import type { AnalyzeResponse } from '../types'
+import type { AnalyzeResponse, AlternativeData } from '../types'
 import Layout from '../components/Layout'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
@@ -157,6 +159,126 @@ function Collapsible({ title, children }: { title: string; children: React.React
       </button>
       {open && <div className="mt-3">{children}</div>}
     </div>
+  )
+}
+
+// ── Alternative Data section ──────────────────────────────────────────────────
+
+function SentimentPill({ label, value }: { label: string; value: string | null | undefined }) {
+  if (!value) return null
+  const bullish = ['BULLISH', 'MILDLY_BULLISH', 'LOW'].includes(value)
+  const bearish  = ['BEARISH', 'MILDLY_BEARISH', 'HIGH'].includes(value)
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium
+      ${bullish ? 'bg-green-500/10 text-green-500' :
+        bearish ? 'bg-red-500/10 text-red-500' :
+        'bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]'}`}>
+      {label}: {value.replace('_', ' ')}
+    </span>
+  )
+}
+
+function AltDataRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="flex items-start justify-between gap-2 py-1.5 border-b border-[var(--color-border)] last:border-0">
+      <span className="text-xs text-[var(--color-fg-muted)] flex-shrink-0">{label}</span>
+      <div className="text-right">
+        <span className="text-xs font-medium text-[var(--color-fg)]">{value}</span>
+        {sub && <div className="text-[0.65rem] text-[var(--color-fg-muted)]">{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+function AlternativeDataSection({ data }: { data: AlternativeData }) {
+  const si  = data.short_interest
+  const opt = data.options_flow
+  const ins = data.insider_trades
+
+  const hasAny = si?.short_percent_of_float != null || opt?.put_call_ratio != null || (ins?.buy_count_90d != null || ins?.sell_count_90d != null)
+  if (!hasAny) return null
+
+  return (
+    <Section title="Alternative Data">
+      <div className="flex flex-col gap-4">
+
+        {/* Options Flow */}
+        {opt?.put_call_ratio != null && (
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Activity className="w-3.5 h-3.5 text-[var(--color-fg-muted)]" />
+              <span className="text-xs font-medium text-[var(--color-fg-muted)] uppercase tracking-wide">Options Flow</span>
+              <SentimentPill label="signal" value={opt.sentiment} />
+            </div>
+            <AltDataRow
+              label="Put/Call Ratio"
+              value={opt.put_call_ratio.toFixed(2)}
+              sub={`${(opt.put_volume ?? 0).toLocaleString()} puts  /  ${(opt.call_volume ?? 0).toLocaleString()} calls  ·  exp ${opt.expiry ?? ''}`}
+            />
+            <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-1">
+              {'<0.7 = calls dominating (bullish)  ·  >1.5 = puts dominating (bearish hedging)'}
+            </p>
+          </div>
+        )}
+
+        {/* Short Interest */}
+        {si?.short_percent_of_float != null && (
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <TrendingDown className="w-3.5 h-3.5 text-[var(--color-fg-muted)]" />
+              <span className="text-xs font-medium text-[var(--color-fg-muted)] uppercase tracking-wide">Short Interest</span>
+              {si.squeeze_risk && (
+                <SentimentPill label="squeeze risk" value={si.squeeze_risk} />
+              )}
+            </div>
+            <AltDataRow
+              label="% of Float Shorted"
+              value={`${((si.short_percent_of_float ?? 0) * 100).toFixed(1)}%`}
+            />
+            {si.short_ratio != null && (
+              <AltDataRow
+                label="Days to Cover"
+                value={`${si.short_ratio.toFixed(1)}d`}
+                sub="avg days for shorts to buy back at current volume"
+              />
+            )}
+            <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-1">
+              High short float + rising price = potential short squeeze
+            </p>
+          </div>
+        )}
+
+        {/* Insider Activity */}
+        {(ins?.buy_count_90d != null || ins?.sell_count_90d != null) && (
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Users className="w-3.5 h-3.5 text-[var(--color-fg-muted)]" />
+              <span className="text-xs font-medium text-[var(--color-fg-muted)] uppercase tracking-wide">Insider Activity (90d)</span>
+              <SentimentPill label="signal" value={ins.net_sentiment} />
+            </div>
+            <AltDataRow
+              label="Transactions"
+              value={`${ins.buy_count_90d ?? 0} buys  /  ${ins.sell_count_90d ?? 0} sells`}
+            />
+            {ins.recent && ins.recent.length > 0 && (
+              <div className="mt-2 flex flex-col gap-1">
+                {ins.recent.slice(0, 3).map((t, i) => (
+                  <div key={i} className="flex items-start justify-between text-[0.65rem] text-[var(--color-fg-muted)]">
+                    <span className="truncate mr-2">{t.insider ?? 'Unknown'}</span>
+                    <span className="flex-shrink-0 tabular-nums">
+                      {t.transaction ?? ''}{t.shares ? ` · ${t.shares.toLocaleString()} sh` : ''} · {t.date ?? ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-1">
+              Insider buying = management confidence. Selling = diversification (less signal).
+            </p>
+          </div>
+        )}
+      </div>
+    </Section>
   )
 }
 
@@ -371,6 +493,11 @@ export default function TickerPage() {
             <Section title="Key Risks">
               <BulletList items={data.key_risks} color="bg-red-500" />
             </Section>
+          )}
+
+          {/* Alternative Data */}
+          {data.alternative_data && (
+            <AlternativeDataSection data={data.alternative_data} />
           )}
 
           {/* Explanation */}

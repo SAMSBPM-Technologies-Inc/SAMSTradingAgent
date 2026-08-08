@@ -196,6 +196,17 @@ def _build_context(ticker: str, feat: dict, raw: dict, risk: dict) -> str:
 
     sent_raw = raw.get("sentiment_raw") or {}
 
+    # Alternative data
+    alt    = raw.get("alternative_data") or {}
+    opt    = alt.get("options_flow") or {}
+    short  = alt.get("short_interest") or {}
+    ins    = alt.get("insider_trades") or {}
+    pcr    = opt.get("put_call_ratio")
+    pcr_str  = f"{pcr:.2f} ({opt.get('sentiment', 'N/A')})" if pcr is not None else "N/A"
+    si_pct   = short.get("short_percent_of_float")
+    si_str   = f"{si_pct:.1%} short float | {short.get('short_ratio', 'N/A')}d to cover | squeeze risk: {short.get('squeeze_risk', 'N/A')}" if si_pct is not None else "N/A"
+    ins_str  = f"{ins.get('buy_count_90d', 0)} buys / {ins.get('sell_count_90d', 0)} sells (90d) — {ins.get('net_sentiment', 'N/A')}" if ins.get("net_sentiment") else "N/A"
+
     return f"""Analyze {ticker} as of {date}. Current price: ${price:.2f} ({chg:+.2f}% today){f' | Sector: {sector}' if sector else ''}
 
 === TECHNICAL ANALYSIS ===
@@ -232,6 +243,11 @@ VIX: {vix_str}
 
 === RECENT NEWS (last 7 days) ===
 {hl_str}
+
+=== ALTERNATIVE DATA ===
+Options Flow (P/C ratio): {pcr_str}
+Short Interest: {si_str}
+Insider Transactions (90d): {ins_str}
 
 === RISK ASSESSMENT ===
 Risk Score: {risk['risk_score']:.1f}/10 ({risk['risk_level']})

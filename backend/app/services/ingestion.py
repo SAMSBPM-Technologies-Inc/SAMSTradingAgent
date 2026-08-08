@@ -61,8 +61,8 @@ async def ingest_ticker(ticker: str) -> dict:
     prev_close = bars[-2]["close"] if len(bars) > 1 else current_price
     day_change_pct = ((current_price - prev_close) / prev_close * 100) if prev_close else 0.0
 
-    # Fetch real data from all three enrichment sources (all degrade gracefully)
-    sentiment_raw, headlines, fundamentals, macro = await _fetch_enrichment(ticker)
+    # Fetch real data from all enrichment sources (all degrade gracefully)
+    sentiment_raw, headlines, fundamentals, macro, alternative_data = await _fetch_enrichment(ticker)
 
     doc = {
         "ticker": ticker,
@@ -74,6 +74,7 @@ async def ingest_ticker(ticker: str) -> dict:
         "recent_headlines": headlines,
         "fundamentals": fundamentals,
         "macro": macro,
+        "alternative_data": alternative_data,
     }
 
     db = await get_db()
@@ -108,23 +109,26 @@ async def ingest_all(tickers: list[str]) -> dict[str, str]:
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
-async def _fetch_enrichment(ticker: str) -> tuple[dict, list, dict, dict]:
+async def _fetch_enrichment(ticker: str) -> tuple[dict, list, dict, dict, dict]:
     """
-    Fetch sentiment, headlines, fundamentals, and macro data concurrently.
+    Fetch sentiment, headlines, fundamentals, macro, and alternative data concurrently.
     Any individual failure returns a safe default so the pipeline keeps running.
     """
     import asyncio
+    from app.services.alternative_data import fetch_alternative_data
 
-    sentiment_task = fetch_news_sentiment(ticker)
-    headlines_task = fetch_recent_headlines(ticker)
+    sentiment_task    = fetch_news_sentiment(ticker)
+    headlines_task    = fetch_recent_headlines(ticker)
     fundamentals_task = fetch_fundamentals(ticker)
-    macro_task = fetch_macro_data()
+    macro_task        = fetch_macro_data()
+    alt_task          = fetch_alternative_data(ticker)
 
-    sentiment, headlines, fundamentals, macro = await asyncio.gather(
+    sentiment, headlines, fundamentals, macro, alternative = await asyncio.gather(
         sentiment_task,
         headlines_task,
         fundamentals_task,
         macro_task,
+        alt_task,
         return_exceptions=True,
     )
 
@@ -140,8 +144,11 @@ async def _fetch_enrichment(ticker: str) -> tuple[dict, list, dict, dict]:
     if isinstance(macro, Exception):
         logger.warning("macro_exception", error=str(macro))
         macro = {"source": "exception"}
+    if isinstance(alternative, Exception):
+        logger.warning("alternative_data_exception", ticker=ticker, error=str(alternative))
+        alternative = {}
 
-    return sentiment, headlines, fundamentals, macro
+    return sentiment, headlines, fundamentals, macro, alternative
 
 
 async def _fetch_price_history(ticker: str) -> pd.DataFrame:

@@ -1,4 +1,35 @@
 export type Signal = 'BUY' | 'SELL' | 'HOLD'
+
+export interface AlternativeData {
+  short_interest?: {
+    short_ratio?: number | null
+    short_percent_of_float?: number | null
+    squeeze_risk?: 'HIGH' | 'MEDIUM' | 'LOW' | null
+    source?: string
+  }
+  options_flow?: {
+    put_call_ratio?: number | null
+    sentiment?: string | null
+    put_volume?: number | null
+    call_volume?: number | null
+    expiry?: string | null
+    source?: string
+  }
+  insider_trades?: {
+    buy_count_90d?: number
+    sell_count_90d?: number
+    net_sentiment?: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+    recent?: Array<{
+      date?: string
+      insider?: string | null
+      transaction?: string | null
+      shares?: number | null
+      value?: number | null
+    }>
+    source?: string
+  }
+  fetched_at?: string
+}
 export type Conviction = 'HIGH' | 'MEDIUM' | 'LOW'
 
 export interface User {
@@ -40,6 +71,7 @@ export interface AnalyzeResponse {
   bear_case?: string
   catalysts?: string[]
   key_risks?: string[]
+  alternative_data?: AlternativeData
 }
 
 export interface PerformanceResponse {

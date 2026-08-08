@@ -45,6 +45,7 @@ async def run_pipeline(ticker: str) -> dict:
 
     current_price = raw_doc.get("current_price")
     day_change_pct = raw_doc.get("day_change_pct")
+    alternative_data = raw_doc.get("alternative_data")
 
     if settings.enable_ai_analyst and settings.anthropic_api_key:
         from app.services.analyst import run_analysis
@@ -55,6 +56,7 @@ async def run_pipeline(ticker: str) -> dict:
                 signal["analyst_used"] = True
                 signal["current_price"] = current_price
                 signal["day_change_pct"] = day_change_pct
+                signal["alternative_data"] = alternative_data
                 await db[COLL_SIGNALS].update_one(
                     {"ticker": ticker},
                     {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
@@ -71,6 +73,7 @@ async def run_pipeline(ticker: str) -> dict:
     signal["analyst_used"] = False
     signal["current_price"] = current_price
     signal["day_change_pct"] = day_change_pct
+    signal["alternative_data"] = alternative_data
     await db[COLL_SIGNALS].update_one(
         {"ticker": ticker},
         {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
