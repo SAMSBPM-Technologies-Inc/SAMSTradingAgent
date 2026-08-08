@@ -60,14 +60,18 @@ class Settings(BaseSettings):
     enable_backtesting: bool = Field(default=False)
     enable_ai_analyst: bool = Field(default=False, description="Use Claude AI analyst instead of rule-based signal")
 
-    # ── Scoring weights (must sum to 1.0) ─────────────────────────────────────
-    weight_technical:         float = Field(default=0.25)
-    weight_fundamental:       float = Field(default=0.15)
-    weight_sentiment:         float = Field(default=0.20)
-    weight_macro:             float = Field(default=0.10)
-    weight_volatility:        float = Field(default=0.10)
-    weight_catalyst:          float = Field(default=0.10)
-    weight_alternative_data:  float = Field(default=0.10)
+    # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────
+    weight_technical:    float = Field(default=0.25)
+    weight_fundamental:  float = Field(default=0.15)
+    weight_sentiment:    float = Field(default=0.20)
+    weight_macro:        float = Field(default=0.15)
+    weight_volatility:   float = Field(default=0.10)
+    weight_catalyst:     float = Field(default=0.15)
+    # Alternative data weight: additive modifier applied on top of the 6-weight
+    # base score, so it does NOT participate in the sum-to-1.0 constraint.
+    # score = base_score + weight_alt * (alt_score - 0.5)
+    # A value of 0.10 means alt data can shift the composite by ±0.05.
+    weight_alternative_data: float = Field(default=0.10)
 
     @model_validator(mode="after")
     def validate_weights_sum(self) -> "Settings":
@@ -78,14 +82,12 @@ class Settings(BaseSettings):
             + self.weight_macro
             + self.weight_volatility
             + self.weight_catalyst
-            + self.weight_alternative_data
         )
         if abs(total - 1.0) > 1e-6:
             raise ValueError(
                 f"Scoring weights must sum to 1.0, got {total:.6f}. "
                 "Check weight_technical, weight_fundamental, weight_sentiment, "
-                "weight_macro, weight_volatility, weight_catalyst, "
-                "weight_alternative_data in .env"
+                "weight_macro, weight_volatility, weight_catalyst in .env"
             )
         return self
 
