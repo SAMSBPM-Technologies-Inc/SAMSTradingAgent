@@ -11,7 +11,7 @@ Every pipeline run upserts a record to stocks_signal_history keyed on
 (ticker, hour_bucket) to prevent duplicates within the same hour.
 """
 from app.config import get_settings
-from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, get_db
+from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
 from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
@@ -29,6 +29,11 @@ async def run_pipeline(ticker: str) -> dict:
     """
     ticker = ticker.upper()
     logger.info("pipeline_start", ticker=ticker)
+
+    # Capture previous signal before overwriting (for change detection)
+    db = await get_db()
+    prev_doc = await db[COLL_SIGNALS].find_one({"ticker": ticker}, {"signal": 1, "analyst_output": 1})
+    prev_signal = prev_doc.get("signal") if prev_doc else None
 
     raw_doc = await ingest_ticker(ticker)
     await compute_features(ticker)
@@ -50,13 +55,13 @@ async def run_pipeline(ticker: str) -> dict:
                 signal["analyst_used"] = True
                 signal["current_price"] = current_price
                 signal["day_change_pct"] = day_change_pct
-                db = await get_db()
                 await db[COLL_SIGNALS].update_one(
                     {"ticker": ticker},
                     {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
                 )
                 await _append_history(signal, raw_doc)
                 logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst", signal=signal.get("signal"))
+                await _fire_alerts(ticker, prev_signal, signal)
                 return signal
         except Exception as exc:
             logger.warning("analyst_failed_falling_back", ticker=ticker, error=str(exc))
@@ -66,13 +71,13 @@ async def run_pipeline(ticker: str) -> dict:
     signal["analyst_used"] = False
     signal["current_price"] = current_price
     signal["day_change_pct"] = day_change_pct
-    db = await get_db()
     await db[COLL_SIGNALS].update_one(
         {"ticker": ticker},
         {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
     )
     await _append_history(signal, raw_doc)
     logger.info("pipeline_complete", ticker=ticker, mode="rule_based", signal=signal.get("signal"))
+    await _fire_alerts(ticker, prev_signal, signal)
     return signal
 
 
@@ -135,3 +140,62 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
         )
     except Exception as exc:
         logger.warning("history_append_failed", ticker=signal.get("ticker"), error=str(exc))
+
+
+async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -> None:
+    """
+    Notify users watching this ticker if the signal flipped or conviction is HIGH.
+    Runs fire-and-forget — never raises.
+    """
+    try:
+        new_sig = new_signal.get("signal", "HOLD")
+        ao = new_signal.get("analyst_output") or {}
+        conviction = ao.get("conviction")
+        signal_flipped = prev_signal is not None and prev_signal != new_sig
+        is_high_conviction = conviction == "HIGH"
+
+        if not signal_flipped and not is_high_conviction:
+            return
+
+        db = await get_db()
+        watchers = await db[COLL_WATCHED].find({"ticker": ticker}, {"user_id": 1}).to_list(length=500)
+        if not watchers:
+            return
+
+        user_ids_str = [w["user_id"] for w in watchers]
+        from bson import ObjectId
+        user_ids = []
+        for uid in user_ids_str:
+            try:
+                user_ids.append(ObjectId(uid))
+            except Exception:
+                pass
+
+        users = await db[COLL_USERS].find(
+            {"_id": {"$in": user_ids}, "alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+            {"alert_settings": 1},
+        ).to_list(length=500)
+
+        from app.services.notifier import send_signal_alert
+        for user in users:
+            prefs = user.get("alert_settings") or {}
+            webhook = prefs.get("slack_webhook_url")
+            if not webhook:
+                continue
+            if signal_flipped and not prefs.get("notify_on_signal_flip", True):
+                continue
+            if is_high_conviction and not signal_flipped and not prefs.get("notify_on_high_conviction", True):
+                continue
+            await send_signal_alert(
+                webhook_url=webhook,
+                ticker=ticker,
+                old_signal=prev_signal if signal_flipped else None,
+                new_signal=new_sig,
+                score=new_signal.get("score", 0.0),
+                conviction=conviction,
+                confidence=new_signal.get("confidence", 0.0),
+                price_target=ao.get("price_target"),
+                stop_loss=ao.get("stop_loss"),
+            )
+    except Exception as exc:
+        logger.warning("fire_alerts_failed", ticker=ticker, error=str(exc))

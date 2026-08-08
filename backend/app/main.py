@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db import close_db, connect_db
 from app.jobs.scheduler import start_scheduler, stop_scheduler
-from app.routes import analysis, auth, health, performance, report, signals, watchlist
+from app.routes import alerts, analysis, auth, health, performance, report, signals, watchlist
 from app.utils.logger import get_logger, setup_logging
 
 setup_logging()
@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
     app.include_router(report.router)
     app.include_router(watchlist.router)
     app.include_router(performance.router)
+    app.include_router(alerts.router)
 
     return app
 

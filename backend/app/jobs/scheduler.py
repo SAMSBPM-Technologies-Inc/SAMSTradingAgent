@@ -27,7 +27,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import get_settings
-from app.db import COLL_SIGNAL_HISTORY, COLL_WATCHED, get_db
+from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
 from app.services.pipeline import run_pipeline_all
 from app.utils.logger import get_logger
 
@@ -92,6 +92,66 @@ async def _premarket_sweep_job() -> None:
     logger.info("premarket_sweep_start", tickers=tickers)
     results = await run_pipeline_all(tickers)
     logger.info("premarket_sweep_done", results=results)
+
+
+async def _daily_digest_job() -> None:
+    """
+    Send a morning watchlist digest to all users who have opted in and configured a Slack webhook.
+    Runs at 09:00 ET on weekdays (just before market open).
+    """
+    try:
+        db = await get_db()
+        users = await db[COLL_USERS].find(
+            {"alert_settings.daily_digest": True, "alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+        ).to_list(length=2000)
+
+        if not users:
+            logger.debug("daily_digest_no_recipients")
+            return
+
+        logger.info("daily_digest_start", recipients=len(users))
+        from bson import ObjectId
+        from app.services.notifier import send_daily_digest
+
+        for user in users:
+            try:
+                webhook = (user.get("alert_settings") or {}).get("slack_webhook_url")
+                if not webhook:
+                    continue
+
+                user_id = str(user["_id"])
+                watched = await db[COLL_WATCHED].find({"user_id": user_id}, {"ticker": 1}).to_list(length=2000)
+                tickers = [d["ticker"] for d in watched]
+                if not tickers:
+                    continue
+
+                signal_docs = await db[COLL_SIGNALS].find(
+                    {"ticker": {"$in": tickers}},
+                    {"ticker": 1, "signal": 1, "score": 1, "analyst_output": 1},
+                ).to_list(length=2000)
+
+                signals = []
+                for doc in signal_docs:
+                    ao = doc.get("analyst_output") or {}
+                    signals.append({
+                        "ticker": doc["ticker"],
+                        "signal": doc.get("signal", "HOLD"),
+                        "score": doc.get("score", 0.0),
+                        "conviction": ao.get("conviction"),
+                    })
+                signals.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+                await send_daily_digest(
+                    webhook_url=webhook,
+                    display_name=user.get("display_name", ""),
+                    signals=signals,
+                )
+            except Exception as exc:
+                logger.warning("daily_digest_user_failed", user_id=str(user.get("_id")), error=str(exc))
+
+        logger.info("daily_digest_done", recipients=len(users))
+    except Exception as exc:
+        logger.error("daily_digest_error", error=str(exc))
 
 
 async def _performance_tracker_job() -> None:
@@ -214,12 +274,23 @@ def start_scheduler() -> None:
         misfire_grace_time=600,
     )
 
+    # 4. Daily digest — 09:00 ET Mon–Fri
+    scheduler.add_job(
+        _daily_digest_job,
+        trigger=CronTrigger(hour=9, minute=0, day_of_week="mon-fri", timezone=ET),
+        id="daily_digest",
+        name="Daily watchlist digest",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+
     scheduler.start()
     logger.info(
         "scheduler_started",
         interval_minutes=settings.ingestion_interval_minutes,
         tickers=settings.ticker_list,
-        jobs=["market_pipeline", "premarket_sweep (08:00 ET)", "perf_tracker (06:00 UTC)"],
+        jobs=["market_pipeline", "premarket_sweep (08:00 ET)", "perf_tracker (06:00 UTC)", "daily_digest (09:00 ET)"],
     )
 
 

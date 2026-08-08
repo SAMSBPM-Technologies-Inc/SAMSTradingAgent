@@ -1,9 +1,136 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, LogOut, Pencil, User, X } from 'lucide-react'
-import { authApi } from '../lib/api'
+import { Bell, Check, ExternalLink, LogOut, Pencil, User, X } from 'lucide-react'
+import { alertsApi, authApi } from '../lib/api'
+import type { AlertSettings } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
+
+// ── Alert Settings section ────────────────────────────────────────────────────
+
+function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex items-center justify-between gap-4 cursor-pointer select-none">
+      <span className="text-sm text-[var(--color-fg)]">{label}</span>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative w-10 h-6 rounded-full transition-colors duration-200 flex-shrink-0
+          ${checked ? 'bg-brand-500' : 'bg-[var(--color-border)]'}`}
+      >
+        <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200
+          ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
+      </button>
+    </label>
+  )
+}
+
+function AlertSettingsCard() {
+  const [settings, setSettings] = useState<AlertSettings>({
+    slack_webhook_url: '',
+    notify_on_signal_flip: true,
+    notify_on_high_conviction: true,
+    daily_digest: false,
+  })
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [savedOk, setSavedOk] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    alertsApi.getSettings()
+      .then((res) => setSettings({ ...res.data, slack_webhook_url: res.data.slack_webhook_url ?? '' }))
+      .catch(() => {})
+      .finally(() => setIsLoading(false))
+  }, [])
+
+  const save = async () => {
+    setIsSaving(true)
+    setError(null)
+    try {
+      const payload = { ...settings, slack_webhook_url: settings.slack_webhook_url?.trim() || undefined }
+      await alertsApi.updateSettings(payload)
+      setSavedOk(true)
+      setTimeout(() => setSavedOk(false), 2500)
+    } catch {
+      setError('Failed to save. Please try again.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  if (isLoading) return (
+    <div className="card p-5 flex items-center justify-center h-32">
+      <LoadingSpinner size="sm" />
+    </div>
+  )
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-medium text-[var(--color-fg-muted)] mb-4 uppercase tracking-wide flex items-center gap-2">
+        <Bell className="w-3.5 h-3.5" />
+        Alerts
+      </h3>
+
+      <div className="flex flex-col gap-4">
+        {/* Webhook URL */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm text-[var(--color-fg)]">
+            Slack Webhook URL
+          </label>
+          <input
+            type="url"
+            value={settings.slack_webhook_url ?? ''}
+            onChange={(e) => setSettings((s) => ({ ...s, slack_webhook_url: e.target.value }))}
+            placeholder="https://hooks.slack.com/services/..."
+            className="input text-sm"
+          />
+          <a
+            href="https://api.slack.com/messaging/webhooks"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-brand-500 flex items-center gap-1 hover:underline"
+          >
+            How to create a Slack webhook <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+
+        {/* Toggles */}
+        <div className="flex flex-col gap-3 pt-1 border-t border-[var(--color-border)]">
+          <Toggle
+            checked={settings.notify_on_signal_flip}
+            onChange={(v) => setSettings((s) => ({ ...s, notify_on_signal_flip: v }))}
+            label="Notify when signal flips (e.g. HOLD → BUY)"
+          />
+          <Toggle
+            checked={settings.notify_on_high_conviction}
+            onChange={(v) => setSettings((s) => ({ ...s, notify_on_high_conviction: v }))}
+            label="Notify on Strong Signal conviction"
+          />
+          <Toggle
+            checked={settings.daily_digest}
+            onChange={(v) => setSettings((s) => ({ ...s, daily_digest: v }))}
+            label="Daily digest at 9 AM ET (weekdays)"
+          />
+        </div>
+
+        {/* Save */}
+        <button
+          onClick={save}
+          disabled={isSaving}
+          className="btn-primary w-full"
+        >
+          {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
+          {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save Alert Settings'}
+        </button>
+
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    </div>
+  )
+}
 
 export default function ProfilePage() {
   const { user, logout } = useAuth()
@@ -165,6 +292,9 @@ export default function ProfilePage() {
             </div>
           </div>
         </div>
+
+        {/* Alert settings */}
+        <AlertSettingsCard />
 
         {/* Danger zone */}
         <div className="card p-5 border-red-500/20">
