@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage'
 import TickerPage from './pages/TickerPage'
 import PerformancePage from './pages/PerformancePage'
 import ProfilePage from './pages/ProfilePage'
+import GuidePage from './pages/GuidePage'
 import LoadingSpinner from './components/LoadingSpinner'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -60,6 +61,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/guide"
+        element={
+          <ProtectedRoute>
+            <GuidePage />
           </ProtectedRoute>
         }
       />

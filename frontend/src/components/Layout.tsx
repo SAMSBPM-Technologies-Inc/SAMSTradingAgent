@@ -2,6 +2,7 @@ import React from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   BarChart2,
+  BookOpen,
   Home,
   LogOut,
   Search,
@@ -46,6 +47,7 @@ function LogoMark() {
 const navLinks = [
   { to: '/', label: 'Dashboard', icon: Home, exact: true },
   { to: '/performance', label: 'Performance', icon: BarChart2, exact: false },
+  { to: '/guide', label: 'Guide', icon: BookOpen, exact: false },
 ]
 
 function DesktopNav() {
@@ -115,6 +117,7 @@ const bottomTabs = [
   { to: '/', label: 'Home', icon: Home, exact: true },
   { to: '/ticker/search', label: 'Analyze', icon: Search, exact: false },
   { to: '/performance', label: 'Performance', icon: BarChart2, exact: false },
+  { to: '/guide', label: 'Guide', icon: BookOpen, exact: false },
   { to: '/profile', label: 'Profile', icon: User, exact: false },
 ]
 
