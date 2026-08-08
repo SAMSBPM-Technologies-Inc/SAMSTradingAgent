@@ -116,6 +116,7 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([])
   const [isSearching, setIsSearching] = useState(false)
   const [isAdding, setIsAdding] = useState(false)
+  const [analyzingTicker, setAnalyzingTicker] = useState<string | null>(null)
   const [activeIdx, setActiveIdx] = useState(-1)
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -172,8 +173,12 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
       setOpen(false)
       onAdded()
       inputRef.current?.focus()
-      // Trigger analysis in background — don't block the UI
-      analyzeApi.get(t, true).then(() => onAdded()).catch(() => {})
+      // Trigger analysis in background — show persistent status while it runs
+      setAnalyzingTicker(t)
+      analyzeApi.get(t, true)
+        .then(() => onAdded())
+        .catch(() => {})
+        .finally(() => setAnalyzingTicker(null))
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })
         ?.response?.data?.detail
@@ -267,8 +272,15 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl
                         bg-brand-500/10 border border-brand-500/30 text-brand-500">
           <LoadingSpinner size="sm" />
+          <span className="text-sm font-medium">Adding to watchlist…</span>
+        </div>
+      )}
+      {analyzingTicker && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-xl
+                        bg-brand-500/10 border border-brand-500/30 text-brand-500">
+          <LoadingSpinner size="sm" />
           <span className="text-sm font-medium">
-            Fetching &amp; analysing <strong>{value.trim().toUpperCase()}</strong> — this may take 5–10 seconds…
+            Fetching &amp; analysing <strong>{analyzingTicker}</strong> — this may take 5–10 seconds…
           </span>
         </div>
       )}
