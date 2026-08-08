@@ -13,6 +13,8 @@ export interface WatchlistItem {
   score: number
   confidence: number
   conviction?: Conviction
+  current_price?: number
+  day_change_pct?: number
   price_target?: number
   thesis?: string
   generated_at: string

@@ -60,12 +60,24 @@ function WatchlistCard({ item }: { item: WatchlistItem }) {
       {/* Header row */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div>
-          <span
-            className="block text-xl font-semibold text-[var(--color-fg)] leading-none mb-1"
-            style={{ fontFamily: 'Fraunces, Georgia, serif' }}
-          >
-            {item.ticker}
-          </span>
+          <div className="flex items-baseline gap-2 mb-1">
+            <span
+              className="text-xl font-semibold text-[var(--color-fg)] leading-none"
+              style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+            >
+              {item.ticker}
+            </span>
+            {item.current_price != null && (
+              <span className="text-sm text-[var(--color-fg-muted)] tabular-nums">
+                ${item.current_price.toFixed(2)}
+                {item.day_change_pct != null && (
+                  <span className={`ml-1 text-xs ${item.day_change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
+                  </span>
+                )}
+              </span>
+            )}
+          </div>
           {item.conviction && <ConvictionBadge conviction={item.conviction} />}
         </div>
         <SignalBadge signal={item.signal} />

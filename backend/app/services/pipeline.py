@@ -11,7 +11,7 @@ Every pipeline run upserts a record to stocks_signal_history keyed on
 (ticker, hour_bucket) to prevent duplicates within the same hour.
 """
 from app.config import get_settings
-from app.db import COLL_SIGNAL_HISTORY, get_db
+from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, get_db
 from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
@@ -38,6 +38,9 @@ async def run_pipeline(ticker: str) -> dict:
     settings = get_settings()
     signal = None
 
+    current_price = raw_doc.get("current_price")
+    day_change_pct = raw_doc.get("day_change_pct")
+
     if settings.enable_ai_analyst and settings.anthropic_api_key:
         from app.services.analyst import run_analysis
         try:
@@ -45,6 +48,13 @@ async def run_pipeline(ticker: str) -> dict:
             if signal:
                 signal["data_sources"] = data_sources
                 signal["analyst_used"] = True
+                signal["current_price"] = current_price
+                signal["day_change_pct"] = day_change_pct
+                db = await get_db()
+                await db[COLL_SIGNALS].update_one(
+                    {"ticker": ticker},
+                    {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
+                )
                 await _append_history(signal, raw_doc)
                 logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst", signal=signal.get("signal"))
                 return signal
@@ -54,6 +64,13 @@ async def run_pipeline(ticker: str) -> dict:
     signal = await generate_signal(ticker)
     signal["data_sources"] = data_sources
     signal["analyst_used"] = False
+    signal["current_price"] = current_price
+    signal["day_change_pct"] = day_change_pct
+    db = await get_db()
+    await db[COLL_SIGNALS].update_one(
+        {"ticker": ticker},
+        {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
+    )
     await _append_history(signal, raw_doc)
     logger.info("pipeline_complete", ticker=ticker, mode="rule_based", signal=signal.get("signal"))
     return signal

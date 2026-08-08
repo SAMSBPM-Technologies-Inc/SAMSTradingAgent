@@ -152,6 +152,8 @@ class WatchlistItem(BaseModel):
     score: float
     confidence: float
     conviction: Optional[str] = None
+    current_price: Optional[float] = None
+    day_change_pct: Optional[float] = None
     price_target: Optional[float] = None
     thesis: Optional[str] = None
     generated_at: datetime
