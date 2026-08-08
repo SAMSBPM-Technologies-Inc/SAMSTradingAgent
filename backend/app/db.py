@@ -43,6 +43,13 @@ async def _ensure_indexes() -> None:
         partialFilterExpression={"hour_bucket": {"$type": "date"}},
         background=True,
     )
+    # Drop legacy global-unique ticker index if it still exists from pre-auth deployment
+    try:
+        await db[COLL_WATCHED].drop_index("ticker_1")
+        logger.info("dropped_legacy_ticker_1_index")
+    except Exception:
+        pass  # already gone — safe to ignore
+
     # watched_tickers: unique per (user_id, ticker) — one entry per user per ticker
     await db[COLL_WATCHED].create_index(
         [("user_id", 1), ("ticker", 1)], unique=True, background=True
