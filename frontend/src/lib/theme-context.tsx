@@ -19,7 +19,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     } catch {
       // localStorage not available
     }
-    return 'dark'
+    return 'light'
   })
 
   useEffect(() => {
