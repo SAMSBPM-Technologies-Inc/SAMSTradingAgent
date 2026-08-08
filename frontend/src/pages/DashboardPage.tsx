@@ -167,13 +167,13 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
     flushSync(() => { setIsAdding(true); setError(null) })
     try {
       await watchlistApi.add(t)
-      // Trigger full analysis pipeline (5-10s) — keeps busy state visible
-      await analyzeApi.get(t, true)
       setValue('')
       setSuggestions([])
       setOpen(false)
       onAdded()
       inputRef.current?.focus()
+      // Trigger analysis in background — don't block the UI
+      analyzeApi.get(t, true).then(() => onAdded()).catch(() => {})
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })
         ?.response?.data?.detail

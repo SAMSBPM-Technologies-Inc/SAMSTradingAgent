@@ -18,7 +18,7 @@ from app.utils.logger import get_logger
 router = APIRouter(tags=["analysis"])
 logger = get_logger(__name__)
 
-_CACHE_TTL_MINUTES = 5
+_CACHE_TTL_MINUTES = 30
 
 
 @router.get("/ticker/search", summary="Search ticker symbols")

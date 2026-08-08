@@ -7,8 +7,10 @@ raw records to `stocks_raw` in MongoDB.
 """
 from datetime import datetime, timezone
 
+import asyncio
+
+import httpx
 import pandas as pd
-import requests
 
 from app.db import COLL_RAW, get_db
 from app.services.fundamentals import fetch_fundamentals
@@ -33,7 +35,7 @@ async def ingest_ticker(ticker: str) -> dict:
     logger.info("ingestion_start", ticker=ticker)
 
     try:
-        df = _fetch_price_history(ticker)
+        df = await _fetch_price_history(ticker)
     except Exception as exc:
         logger.error("ingestion_fetch_failed", ticker=ticker, error=str(exc))
         raise
@@ -142,31 +144,27 @@ async def _fetch_enrichment(ticker: str) -> tuple[dict, list, dict, dict]:
     return sentiment, headlines, fundamentals, macro
 
 
-def _fetch_price_history(ticker: str) -> pd.DataFrame:
-    """Download OHLCV history via Yahoo Finance v8 chart API. Returns a DataFrame."""
-    import time
-
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/json",
-    }
-    params = f"?interval=1d&range={HISTORY_DAYS}d"
+async def _fetch_price_history(ticker: str) -> pd.DataFrame:
+    """Download OHLCV history via Yahoo Finance v8 chart API. Non-blocking async."""
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    params = {"interval": "1d", "range": f"{HISTORY_DAYS}d"}
     hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
 
-    last_exc = None
-    for attempt, host in enumerate(hosts):
-        if attempt > 0:
-            time.sleep(2)
-        try:
-            url = f"https://{host}/v8/finance/chart/{ticker}{params}"
-            resp = requests.get(url, headers=headers, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            break
-        except Exception as exc:
-            last_exc = exc
-    else:
-        raise last_exc
+    last_exc: Exception | None = None
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for attempt, host in enumerate(hosts):
+            if attempt > 0:
+                await asyncio.sleep(1)
+            try:
+                url = f"https://{host}/v8/finance/chart/{ticker}"
+                resp = await client.get(url, headers=headers, params=params)
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except Exception as exc:
+                last_exc = exc
+        else:
+            raise last_exc  # type: ignore[misc]
 
     result = data.get("chart", {}).get("result", [])
     if not result:
