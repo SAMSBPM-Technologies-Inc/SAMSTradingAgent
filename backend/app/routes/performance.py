@@ -1,7 +1,9 @@
 """
 GET /performance — historical signal accuracy scoped to the current user's watchlist.
+GET /performance/signals — last 100 individual signal history records for watchlist tickers.
 """
 from collections import defaultdict
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
 
@@ -89,3 +91,36 @@ async def get_performance(current_user: dict = Depends(get_current_user)) -> Per
         overall_avg_return_20d=round(overall_avg, 4) if overall_avg is not None else None,
         by_signal=by_signal, by_ticker=by_ticker,
     )
+
+
+@router.get("/performance/signals", summary="Recent individual signal history for your watchlist")
+async def get_signal_history(current_user: dict = Depends(get_current_user)) -> list[dict[str, Any]]:
+    user_id = str(current_user["_id"])
+    db = await get_db()
+
+    watched = await db[COLL_WATCHED].find({"user_id": user_id}, {"ticker": 1}).to_list(length=2000)
+    tickers = [d["ticker"] for d in watched]
+
+    cursor = db[COLL_SIGNAL_HISTORY].find(
+        {"ticker": {"$in": tickers}} if tickers else {},
+        {"_id": 0},
+    ).sort("generated_at", -1).limit(100)
+
+    records = await cursor.to_list(length=100)
+
+    result: list[dict[str, Any]] = []
+    for rec in records:
+        result.append({
+            "ticker":          rec.get("ticker"),
+            "signal":          rec.get("signal"),
+            "score":           rec.get("score"),
+            "conviction":      rec.get("conviction"),
+            "price_at_signal": rec.get("price_at_signal"),
+            "return_20d":      rec.get("return_20d"),
+            "was_correct":     rec.get("was_correct"),
+            "generated_at":    rec.get("generated_at"),
+            "analyst_used":    rec.get("analyst_used"),
+        })
+
+    logger.info("signal_history_fetched", count=len(result), user_id=user_id)
+    return result

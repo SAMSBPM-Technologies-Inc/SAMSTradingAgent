@@ -68,6 +68,18 @@ export interface TickerPerformance {
   avg_return_20d?: number
 }
 
+export interface SignalRecord {
+  ticker: string
+  signal: Signal
+  score: number
+  conviction?: string
+  price_at_signal?: number
+  return_20d?: number
+  was_correct?: boolean
+  generated_at: string
+  analyst_used?: boolean
+}
+
 export interface AuthResponse {
   access_token: string
   token_type: string

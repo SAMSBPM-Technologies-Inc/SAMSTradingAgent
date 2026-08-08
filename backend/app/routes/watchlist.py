@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from app.db import COLL_SIGNALS, COLL_WATCHED, get_db
+from app.db import COLL_RAW, COLL_SIGNALS, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import (
     TickerAddRequest,
@@ -35,20 +35,28 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
 
     docs = await db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000)
 
+    # Build price lookup from stocks_raw (always current, independent of signal cache age)
+    raw_docs = await db[COLL_RAW].find(
+        {"ticker": {"$in": tickers}},
+        {"ticker": 1, "current_price": 1, "day_change_pct": 1},
+    ).to_list(length=2000)
+    raw_by_ticker = {r["ticker"]: r for r in raw_docs}
+
     items = []
     for doc in docs:
         ao = doc.get("analyst_output") or {}
         generated_at = doc.get("generated_at", datetime.now(tz=timezone.utc))
         if isinstance(generated_at, datetime) and generated_at.tzinfo is None:
             generated_at = generated_at.replace(tzinfo=timezone.utc)
+        raw = raw_by_ticker.get(doc["ticker"], {})
         items.append(WatchlistItem(
             ticker=doc["ticker"],
             signal=doc.get("signal", "HOLD"),
             score=doc.get("score", 0.0),
             confidence=doc.get("confidence", 0.0),
             conviction=ao.get("conviction"),
-            current_price=doc.get("current_price"),
-            day_change_pct=doc.get("day_change_pct"),
+            current_price=raw.get("current_price") or doc.get("current_price"),
+            day_change_pct=raw.get("day_change_pct") or doc.get("day_change_pct"),
             price_target=ao.get("price_target"),
             thesis=ao.get("thesis"),
             generated_at=generated_at,
