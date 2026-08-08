@@ -1,5 +1,5 @@
 import React from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { Link, NavLink, useNavigate } from 'react-router-dom'
 import {
   BarChart2,
   BookOpen,
@@ -91,15 +91,19 @@ function DesktopNav() {
 
         {/* User info + logout */}
         <div className="flex items-center gap-2 pl-2 border-l border-[var(--color-border)]">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl
-                          bg-[var(--color-border)]/30">
+          <Link
+            to="/profile"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl
+                       bg-[var(--color-border)]/30 hover:bg-brand-500/10
+                       transition-colors duration-200"
+          >
             <div className="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center flex-shrink-0">
               <User className="w-3.5 h-3.5 text-brand-500" />
             </div>
             <span className="text-sm text-[var(--color-fg-muted)] max-w-[10rem] truncate">
               {user?.display_name ?? user?.email ?? 'Account'}
             </span>
-          </div>
+          </Link>
           <button
             onClick={logout}
             aria-label="Log out"
