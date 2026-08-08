@@ -202,3 +202,27 @@ class HealthResponse(BaseModel):
     status: str
     db_connected: bool
     version: str = "1.0.0"
+
+
+# ── Dip-buy scan ──────────────────────────────────────────────────────────────
+
+class DipBuyCandidate(BaseModel):
+    """A single stock matching dip-buy entry or exit-alert criteria."""
+    ticker: str
+    current_price: float
+    rsi_14: Optional[float] = None
+    stoch_rsi: Optional[float] = None
+    bb_pct: Optional[float] = None          # 0=lower band, 1=upper band
+    ma_20: Optional[float] = None
+    volume_anomaly: Optional[float] = None  # latest vol / 20d avg
+    technical_score: float = 0.0
+    pct_from_ma20: Optional[float] = None   # (price - ma20) / ma20 * 100
+    trigger: str                             # "ENTRY" or "EXIT_ALERT"
+    computed_at: datetime
+
+
+class DipBuyScanResponse(BaseModel):
+    """Response from GET /signals/dip-buy."""
+    entry_candidates: list[DipBuyCandidate]  # ranked by stoch_rsi asc (most oversold first)
+    exit_alerts: list[DipBuyCandidate]       # positions to consider taking profit on
+    scanned: int                             # total watched tickers evaluated

@@ -125,3 +125,23 @@ export interface AuthResponse {
   access_token: string
   token_type: string
 }
+
+export interface DipBuyCandidate {
+  ticker: string
+  current_price: number
+  rsi_14?: number
+  stoch_rsi?: number
+  bb_pct?: number
+  ma_20?: number
+  volume_anomaly?: number
+  technical_score: number
+  pct_from_ma20?: number
+  trigger: 'ENTRY' | 'EXIT_ALERT'
+  computed_at: string
+}
+
+export interface DipBuyScanResponse {
+  entry_candidates: DipBuyCandidate[]
+  exit_alerts: DipBuyCandidate[]
+  scanned: number
+}

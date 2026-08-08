@@ -82,6 +82,10 @@ export const performanceApi = {
   signals: () => api.get<import('../types').SignalRecord[]>('/performance/signals'),
 }
 
+export const radarApi = {
+  scan: () => api.get<import('../types').DipBuyScanResponse>('/signals/dip-buy'),
+}
+
 export const alertsApi = {
   getSettings: () => api.get<import('../types').AlertSettings>('/alerts/settings'),
   updateSettings: (data: import('../types').AlertSettings) => api.put<import('../types').AlertSettings>('/alerts/settings', data),

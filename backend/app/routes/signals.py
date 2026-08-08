@@ -7,9 +7,9 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from app.db import COLL_SIGNALS, COLL_WATCHED, get_db
+from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
-from app.models.stock import AnalyzeResponse, SignalListResponse, SignalSummary
+from app.models.stock import AnalyzeResponse, DipBuyCandidate, DipBuyScanResponse, SignalListResponse, SignalSummary
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["signals"])
@@ -67,6 +67,100 @@ async def signals_summary(current_user: dict = Depends(get_current_user)) -> Sig
         high_conviction_tickers=sorted(high_conviction),
         signals=sorted(responses, key=lambda r: r.score, reverse=True),
     )
+
+
+# ── Entry thresholds (your dip-buy strategy) ──────────────────────────────────
+_ENTRY_RSI_MAX       = 45.0   # RSI not yet overbought
+_ENTRY_STOCH_MAX     = 0.20   # oversold on Stochastic RSI
+_ENTRY_BB_MAX        = 0.35   # near or below lower Bollinger Band
+
+# ── Exit-alert thresholds ─────────────────────────────────────────────────────
+_EXIT_RSI_MIN        = 70.0   # overbought
+_EXIT_BB_MIN         = 0.90   # near upper Bollinger Band
+
+
+@router.get(
+    "/signals/dip-buy",
+    response_model=DipBuyScanResponse,
+    summary="Scan watchlist for dip-buy entries and profit-taking alerts",
+)
+async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuyScanResponse:
+    """
+    Entry candidates  — stoch_rsi ≤ 0.20  AND  bb_pct ≤ 0.35  AND  rsi_14 ≤ 45
+    Exit alerts       — rsi_14 ≥ 70  OR  bb_pct ≥ 0.90
+
+    Results are pulled from the latest stocks_features documents so no
+    re-analysis is triggered; call /analyze?ticker=X&force_refresh=true first
+    if you want fresh data.
+    """
+    user_id = str(current_user["_id"])
+    db = await get_db()
+    tickers = await _user_tickers(user_id, db)
+
+    if not tickers:
+        return DipBuyScanResponse(entry_candidates=[], exit_alerts=[], scanned=0)
+
+    # Fetch latest features doc per watched ticker
+    docs = await db[COLL_FEATURES].find(
+        {"ticker": {"$in": tickers}},
+        {
+            "ticker": 1, "current_price": 1, "computed_at": 1,
+            "rsi_14": 1, "stoch_rsi": 1, "bb_pct": 1,
+            "ma_20": 1, "volume_anomaly": 1, "technical_score": 1,
+        },
+    ).to_list(length=2000)
+
+    entries: list[DipBuyCandidate] = []
+    exits: list[DipBuyCandidate] = []
+
+    for doc in docs:
+        rsi       = doc.get("rsi_14")
+        stoch     = doc.get("stoch_rsi")
+        bb        = doc.get("bb_pct")
+        price     = doc.get("current_price", 0.0)
+        ma20      = doc.get("ma_20")
+        computed  = doc.get("computed_at", datetime.now(tz=timezone.utc))
+        if isinstance(computed, datetime) and computed.tzinfo is None:
+            computed = computed.replace(tzinfo=timezone.utc)
+
+        pct_from_ma20 = round((price - ma20) / ma20 * 100, 2) if ma20 else None
+
+        candidate_base = dict(
+            ticker=doc["ticker"],
+            current_price=price,
+            rsi_14=rsi,
+            stoch_rsi=stoch,
+            bb_pct=bb,
+            ma_20=ma20,
+            volume_anomaly=doc.get("volume_anomaly"),
+            technical_score=doc.get("technical_score", 0.0),
+            pct_from_ma20=pct_from_ma20,
+            computed_at=computed,
+        )
+
+        # Entry: all three conditions must hold; None values are skipped safely
+        is_entry = (
+            (rsi is not None and rsi <= _ENTRY_RSI_MAX)
+            and (stoch is not None and stoch <= _ENTRY_STOCH_MAX)
+            and (bb is not None and bb <= _ENTRY_BB_MAX)
+        )
+        if is_entry:
+            entries.append(DipBuyCandidate(**candidate_base, trigger="ENTRY"))
+
+        # Exit alert: either condition fires
+        is_exit = (
+            (rsi is not None and rsi >= _EXIT_RSI_MIN)
+            or (bb is not None and bb >= _EXIT_BB_MIN)
+        )
+        if is_exit:
+            exits.append(DipBuyCandidate(**candidate_base, trigger="EXIT_ALERT"))
+
+    # Most oversold first for entries; most overbought first for exits
+    entries.sort(key=lambda c: (c.stoch_rsi or 1.0))
+    exits.sort(key=lambda c: (c.rsi_14 or 0.0), reverse=True)
+
+    logger.info("dip_buy_scan_complete", scanned=len(docs), entries=len(entries), exits=len(exits))
+    return DipBuyScanResponse(entry_candidates=entries, exit_alerts=exits, scanned=len(docs))
 
 
 def _doc_to_response(doc: dict) -> AnalyzeResponse:
