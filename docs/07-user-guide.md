@@ -284,7 +284,71 @@ The digest is sent via whichever channels you have configured (Slack and/or What
 
 ---
 
-## 8. The Guide Page
+## 8. Alpha Radar
+
+Alpha Radar is a dedicated scanning page that automatically scans your entire watchlist and highlights two types of setups:
+
+- **Entry Setups** (green cards) — tickers that are technically oversold and may be approaching a good buying entry point.
+- **Exit Alerts** (amber cards) — tickers that are technically overbought and may be approaching a profit-taking or exit point.
+
+You can find Alpha Radar in the main navigation (the crosshair icon).
+
+### How It Works
+
+Alpha Radar reads the most recent technical data for every ticker on your watchlist and checks it against fixed thresholds. **It does not run a new analysis** — results are based on the last time each ticker was refreshed. If a ticker hasn't been analyzed recently, visit its ticker page and run a fresh analysis first, then come back and click "Scan Now."
+
+### Entry Setup Criteria
+
+A ticker shows up as an **Entry Setup** only when all three conditions are true at the same time:
+
+| Indicator | Threshold | What it means |
+|---|---|---|
+| RSI-14 | ≤ 45 | Stock is not overbought — still room to run |
+| Stochastic RSI | ≤ 20% | Momentum is oversold — buying pressure may be building |
+| Bollinger Band position | ≤ 35% | Price is near the lower Bollinger Band — statistically cheap relative to recent range |
+
+All three must be true. A ticker with RSI of 40 but Stochastic RSI of 50% will **not** appear as an entry setup. This keeps the list tight and high-quality.
+
+Entry cards are sorted by most oversold first (lowest Stochastic RSI at the top).
+
+### Exit Alert Criteria
+
+A ticker shows up as an **Exit Alert** when **either** condition is true:
+
+| Indicator | Threshold | What it means |
+|---|---|---|
+| RSI-14 | ≥ 70 | Overbought — potential reversal risk |
+| Bollinger Band position | ≥ 90% | Price near the upper band — extended relative to recent range |
+
+Exit cards are sorted by most overbought first (highest RSI at the top).
+
+### Reading a Radar Card
+
+Each card shows:
+- **Ticker and current price**
+- **DIP ENTRY** (green) or **TAKE PROFIT** (amber) badge
+- **Time since last analysis** (top right corner)
+- **% from MA-20** — how far the current price is above or below the 20-day moving average. Negative means below — a stock trading 7% below its 20-day MA is in a clear short-term dip.
+- **RSI-14, Stoch RSI, BB Position bars** — color-coded progress bars showing where each indicator sits in its range.
+- **Volume vs avg** — if volume is ≥ 1.2× the 20-day average, it shows in the card's accent color. Elevated volume on a dip = stronger signal.
+
+Click any card to open the full analysis for that ticker.
+
+### Adding a Ticker to Your Radar
+
+Use the **"Add ticker to radar"** form at the top of the page to search for and add a new ticker to your watchlist directly from the radar view. After adding, wait about 30 seconds for the background analysis to complete, then click **Scan Now** to include it in the results.
+
+### When to Use Alpha Radar
+
+- **Morning scan** — Before the market opens, run a scan to see which of your watchlist stocks pulled back overnight and may have fresh entry setups.
+- **Mid-session check** — After a broad market selloff, scan for dip entries that emerged during the day.
+- **End-of-day review** — Check exit alerts to decide whether to take profit on any overbought holdings before the next session.
+
+> Alpha Radar shows technical setups only. Always check the full analysis (score, AI thesis, alternative data) before acting on any entry or exit signal.
+
+---
+
+## 9. The Guide Page
 
 The Guide page contains two companion tools: the **Buyer's Guide** and the **Seller's Guide**. These are designed to help you use the signals correctly depending on where you are in the trade lifecycle.
 

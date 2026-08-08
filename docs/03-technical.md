@@ -392,7 +392,57 @@ When `ENABLE_AI_ANALYST=true`, Claude `claude-sonnet-4-6` generates a full resea
 
 ---
 
-## 7. Risk Engine
+## 7. Alpha Radar
+
+Alpha Radar is a dedicated scan page that surfaces actionable entry and exit setups from the user's watchlist without triggering a new pipeline run. It reads directly from the latest `stocks_features` documents in MongoDB.
+
+### 7.1 Backend — `GET /signals/dip-buy`
+
+Implemented in `backend/app/routes/signals.py`. Fetches feature docs for all watched tickers in one MongoDB query (projection to 8 fields, index-covered), then applies thresholds in Python.
+
+**Entry thresholds (AND logic — all three must hold):**
+
+| Constant | Value | Indicator |
+|---|---|---|
+| `_ENTRY_RSI_MAX` | 45.0 | RSI-14 |
+| `_ENTRY_STOCH_MAX` | 0.20 | Stochastic RSI (0–1) |
+| `_ENTRY_BB_MAX` | 0.35 | Bollinger Band % position |
+
+**Exit-alert thresholds (OR logic — either fires):**
+
+| Constant | Value | Indicator |
+|---|---|---|
+| `_EXIT_RSI_MIN` | 70.0 | RSI-14 |
+| `_EXIT_BB_MIN` | 0.90 | Bollinger Band % position |
+
+Entry results are sorted ascending by `stoch_rsi` (most oversold first). Exit results are sorted descending by `rsi_14` (most overbought first). Both lists are returned in the single `DipBuyScanResponse`.
+
+### 7.2 Frontend — `AlphaRadarPage.tsx`
+
+- Calls `radarApi.scan()` → `GET /signals/dip-buy` on mount and on user-triggered "Scan Now".
+- Renders a stats strip: tickers scanned / entry setups / exit alerts.
+- **EntryCard** (green left border): shows RSI-14, Stochastic RSI, and BB % as colored progress bars. Blue bar = very oversold (target zone). Clicking navigates to the full ticker analysis page.
+- **ExitAlertCard** (amber left border): same indicator bars. Amber bar highlights overbought zone.
+- **IndicatorBar** component: color-coded — `danger="high"` (overbought risk) colors red above 75%, amber 50–75%, green below 50%. `danger="low"` (oversold opportunity) colors blue below 25%, amber 25–50%, green above 50%.
+- **AddTickerForm**: inline ticker search with debounced autocomplete (300ms) via `analyzeApi.search()`. Adds the ticker to the watchlist and displays a 30-second delay message before suggesting a re-scan.
+- Collapsible **"How signals are detected"** section lists the exact thresholds for user transparency.
+
+### 7.3 Data Flow
+
+```
+User clicks "Scan Now"
+  → radarApi.scan() → GET /signals/dip-buy
+  → signals.py reads stocks_features for all watched tickers
+  → applies RSI/Stoch/BB thresholds in Python
+  → returns entry_candidates[] + exit_alerts[] + scanned count
+  → AlphaRadarPage renders EntryCard / ExitAlertCard grids
+```
+
+No new analysis is run during the scan. If the user wants fresh data for a specific ticker, they should visit that ticker's analysis page and trigger a force refresh.
+
+---
+
+## 8. Risk Engine
 
 The risk engine (`risk_engine.py`) produces a `risk_score` in `[0, 10]` that is used both for display and as a gate on BUY signals.
 

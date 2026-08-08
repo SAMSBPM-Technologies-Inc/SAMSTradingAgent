@@ -251,6 +251,29 @@ The system shall provide a contextual guide page offering a "Buyer's Guide" view
 
 ---
 
+### 3.12 Alpha Radar
+
+#### FR-038 — Dip-Buy Scanner
+The system shall provide an **Alpha Radar** page that scans all tickers in the current user's watchlist and identifies:
+- **Entry setups** — tickers simultaneously satisfying RSI-14 ≤ 45, Stochastic RSI ≤ 20%, and Bollinger Band position ≤ 35% (all three conditions required).
+- **Exit alerts** — tickers where RSI-14 ≥ 70 OR Bollinger Band position ≥ 90% (either condition sufficient).
+
+Results shall be sourced from the most recently computed `stocks_features` document for each ticker. No new pipeline run shall be triggered by the scan itself.
+
+#### FR-039 — Radar Scan Sorting
+Entry candidates shall be sorted by ascending Stochastic RSI (most oversold first). Exit alerts shall be sorted by descending RSI-14 (most overbought first).
+
+#### FR-040 — Radar Scan Statistics
+The page shall display a summary strip showing: total tickers scanned, number of entry setups found, number of exit alerts found.
+
+#### FR-041 — Add Ticker from Radar
+The Alpha Radar page shall include an inline ticker search form allowing the user to add a new ticker to their watchlist without navigating away from the radar view. The system shall display a post-add message advising the user to wait approximately 30 seconds for background analysis to complete before re-scanning.
+
+#### FR-042 — Radar Criteria Disclosure
+The page shall include a collapsible "How signals are detected" section listing the exact RSI, Stochastic RSI, and Bollinger Band thresholds used for both entry and exit criteria.
+
+---
+
 ## 4. Non-Functional Requirements
 
 ---

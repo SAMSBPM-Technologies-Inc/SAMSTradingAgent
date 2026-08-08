@@ -452,6 +452,101 @@ username=trader%40example.com&password=securepassword123
 
 ---
 
+### GET /signals/dip-buy
+
+**Description:** Scans all tickers in the current user's watchlist and returns entry setups and exit alerts based on technical indicator thresholds. No pipeline run is triggered — results come from the latest cached `stocks_features` documents. Call `POST /analyze?ticker=X&force_refresh=true` first if you need fresh data for a specific ticker.
+
+**Auth required:** Yes
+
+**Query parameters:** None
+
+**Entry criteria (all three must hold):**
+
+| Indicator | Threshold | Meaning |
+|---|---|---|
+| RSI-14 | ≤ 45 | Not yet overbought |
+| Stochastic RSI | ≤ 0.20 (20%) | Oversold momentum |
+| Bollinger Band % | ≤ 0.35 (35%) | Near or below lower band |
+
+**Exit alert criteria (either fires):**
+
+| Indicator | Threshold | Meaning |
+|---|---|---|
+| RSI-14 | ≥ 70 | Overbought territory |
+| Bollinger Band % | ≥ 0.90 (90%) | Near upper band |
+
+**Response:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| entry_candidates | `DipBuyCandidate[]` | Tickers matching all entry criteria, sorted most oversold first |
+| exit_alerts | `DipBuyCandidate[]` | Tickers triggering exit criteria, sorted most overbought first |
+| scanned | integer | Total number of watchlist tickers evaluated |
+
+**`DipBuyCandidate` object:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| ticker | string | Stock ticker symbol |
+| current_price | number | Latest price |
+| rsi_14 | number \| null | RSI over 14 periods |
+| stoch_rsi | number \| null | Stochastic RSI (0–1 scale) |
+| bb_pct | number \| null | Bollinger Band position (0 = lower band, 1 = upper band) |
+| ma_20 | number \| null | 20-day moving average price |
+| pct_from_ma20 | number \| null | % difference of current price from MA-20 (negative = below) |
+| volume_anomaly | number \| null | Current volume / 20-day average volume ratio |
+| technical_score | number | Composite technical sub-score (0–1) |
+| trigger | string | `"ENTRY"` or `"EXIT_ALERT"` |
+| computed_at | string (ISO 8601) | When the feature document was last computed |
+
+**Error responses:**
+
+| Status | Condition |
+|--------|-----------|
+| 401 | Missing or invalid token |
+
+**Example:**
+
+```json
+// GET /signals/dip-buy
+// Response 200
+{
+  "entry_candidates": [
+    {
+      "ticker": "PLTR",
+      "current_price": 21.40,
+      "rsi_14": 38.2,
+      "stoch_rsi": 0.12,
+      "bb_pct": 0.18,
+      "ma_20": 23.10,
+      "pct_from_ma20": -7.4,
+      "volume_anomaly": 1.45,
+      "technical_score": 0.41,
+      "trigger": "ENTRY",
+      "computed_at": "2026-08-08T14:05:00Z"
+    }
+  ],
+  "exit_alerts": [
+    {
+      "ticker": "NVDA",
+      "current_price": 142.80,
+      "rsi_14": 74.1,
+      "stoch_rsi": 0.88,
+      "bb_pct": 0.93,
+      "ma_20": 128.50,
+      "pct_from_ma20": 11.1,
+      "volume_anomaly": 0.92,
+      "technical_score": 0.78,
+      "trigger": "EXIT_ALERT",
+      "computed_at": "2026-08-08T14:05:00Z"
+    }
+  ],
+  "scanned": 5
+}
+```
+
+---
+
 ### GET /watchlist
 
 **Description:** Returns all tickers in the current user's watchlist along with their latest cached signal data.
