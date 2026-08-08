@@ -23,7 +23,7 @@ export default function ConvictionBadge({ conviction, size = 'sm' }: ConvictionB
         ${isLg ? 'px-3.5 py-1 text-sm' : 'px-2 py-0.5 text-xs'}
       `}
     >
-      {conviction}
+      {{ HIGH: 'Strong Signal', MEDIUM: 'Moderate', LOW: 'Weak Signal' }[conviction]}
     </span>
   )
 }
