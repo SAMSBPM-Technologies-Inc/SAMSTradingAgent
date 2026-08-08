@@ -9,6 +9,7 @@ import {
   Crosshair,
   Plus,
   RefreshCw,
+  Trash2,
   TrendingDown,
   TrendingUp,
   X,
@@ -85,11 +86,24 @@ function IndicatorBar({ label, value, min, max, danger, format }: IndicatorBarPr
 
 // ── Candidate card ────────────────────────────────────────────────────────────
 
-function EntryCard({ c, onNavigate }: { c: DipBuyCandidate; onNavigate: (t: string) => void }) {
+function EntryCard({ c, onNavigate, onRemove }: { c: DipBuyCandidate; onNavigate: (t: string) => void; onRemove: (t: string) => void }) {
+  const [removing, setRemoving] = useState(false)
   const distLabel =
     c.pct_from_ma20 != null
       ? `${c.pct_from_ma20 > 0 ? '+' : ''}${c.pct_from_ma20.toFixed(1)}% from MA-20`
       : null
+
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (removing) return
+    setRemoving(true)
+    try {
+      await watchlistApi.remove(c.ticker)
+      onRemove(c.ticker)
+    } catch {
+      setRemoving(false)
+    }
+  }
 
   return (
     <div
@@ -110,11 +124,21 @@ function EntryCard({ c, onNavigate }: { c: DipBuyCandidate; onNavigate: (t: stri
           </div>
           <div className="text-[var(--color-fg-muted)] text-sm mt-0.5">{fmtPrice(c.current_price)}</div>
         </div>
-        <div className="text-right">
-          <div className="text-xs text-[var(--color-fg-muted)]">{relativeTime(c.computed_at)}</div>
-          {distLabel && (
-            <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">{distLabel}</div>
-          )}
+        <div className="flex items-start gap-2">
+          <div className="text-right">
+            <div className="text-xs text-[var(--color-fg-muted)]">{relativeTime(c.computed_at)}</div>
+            {distLabel && (
+              <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">{distLabel}</div>
+            )}
+          </div>
+          <button
+            onClick={handleRemove}
+            disabled={removing}
+            className="p-1 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors flex-shrink-0"
+            title="Remove from watchlist"
+          >
+            {removing ? <LoadingSpinner size="sm" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </div>
 
@@ -153,11 +177,24 @@ function EntryCard({ c, onNavigate }: { c: DipBuyCandidate; onNavigate: (t: stri
   )
 }
 
-function ExitAlertCard({ c, onNavigate }: { c: DipBuyCandidate; onNavigate: (t: string) => void }) {
+function ExitAlertCard({ c, onNavigate, onRemove }: { c: DipBuyCandidate; onNavigate: (t: string) => void; onRemove: (t: string) => void }) {
+  const [removing, setRemoving] = useState(false)
   const distLabel =
     c.pct_from_ma20 != null
       ? `${c.pct_from_ma20 > 0 ? '+' : ''}${c.pct_from_ma20.toFixed(1)}% from MA-20`
       : null
+
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (removing) return
+    setRemoving(true)
+    try {
+      await watchlistApi.remove(c.ticker)
+      onRemove(c.ticker)
+    } catch {
+      setRemoving(false)
+    }
+  }
 
   return (
     <div
@@ -178,11 +215,21 @@ function ExitAlertCard({ c, onNavigate }: { c: DipBuyCandidate; onNavigate: (t: 
           </div>
           <div className="text-[var(--color-fg-muted)] text-sm mt-0.5">{fmtPrice(c.current_price)}</div>
         </div>
-        <div className="text-right">
-          <div className="text-xs text-[var(--color-fg-muted)]">{relativeTime(c.computed_at)}</div>
-          {distLabel && (
-            <div className="text-xs font-medium text-amber-500 mt-0.5">{distLabel}</div>
-          )}
+        <div className="flex items-start gap-2">
+          <div className="text-right">
+            <div className="text-xs text-[var(--color-fg-muted)]">{relativeTime(c.computed_at)}</div>
+            {distLabel && (
+              <div className="text-xs font-medium text-amber-500 mt-0.5">{distLabel}</div>
+            )}
+          </div>
+          <button
+            onClick={handleRemove}
+            disabled={removing}
+            className="p-1 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors flex-shrink-0"
+            title="Remove from watchlist"
+          >
+            {removing ? <LoadingSpinner size="sm" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
         </div>
       </div>
 
@@ -393,6 +440,16 @@ export default function AlphaRadarPage() {
     // Don't auto-rescan — analysis runs in background, user should trigger manually
   }
 
+  const handleRemove = (ticker: string) => {
+    if (!scan) return
+    setScan({
+      ...scan,
+      entry_candidates: scan.entry_candidates.filter((c) => c.ticker !== ticker),
+      exit_alerts: scan.exit_alerts.filter((c) => c.ticker !== ticker),
+      scanned: scan.scanned - 1,
+    })
+  }
+
   return (
     <Layout>
       <div className="space-y-6">
@@ -531,7 +588,7 @@ export default function AlphaRadarPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 gap-3">
                   {scan.entry_candidates.map(c => (
-                    <EntryCard key={c.ticker} c={c} onNavigate={(t) => navigate(`/ticker/${t}`)} />
+                    <EntryCard key={c.ticker} c={c} onNavigate={(t) => navigate(`/ticker/${t}`)} onRemove={handleRemove} />
                   ))}
                 </div>
               )}
@@ -556,7 +613,7 @@ export default function AlphaRadarPage() {
               ) : (
                 <div className="grid sm:grid-cols-2 gap-3">
                   {scan.exit_alerts.map(c => (
-                    <ExitAlertCard key={c.ticker} c={c} onNavigate={(t) => navigate(`/ticker/${t}`)} />
+                    <ExitAlertCard key={c.ticker} c={c} onNavigate={(t) => navigate(`/ticker/${t}`)} onRemove={handleRemove} />
                   ))}
                 </div>
               )}

@@ -1,126 +1,160 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { flushSync } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { AlertCircle, Plus, Search, TrendingUp } from 'lucide-react'
+import { AlertCircle, ArrowRight, Plus, Search, Trash2, TrendingUp } from 'lucide-react'
 import { watchlistApi, analyzeApi } from '../lib/api'
-import type { WatchlistItem } from '../types'
+import type { Signal, WatchlistItem } from '../types'
 import Layout from '../components/Layout'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
 import LoadingSpinner from '../components/LoadingSpinner'
 
-// ── Score bar ─────────────────────────────────────────────────────────────────
+// ── Filter bar ────────────────────────────────────────────────────────────────
 
-function ScoreBar({ score }: { score: number }) {
-  const pct = Math.round(score * 100)
+type Filter = 'ALL' | Signal
+
+function FilterBar({ active, onChange, counts }: {
+  active: Filter
+  onChange: (f: Filter) => void
+  counts: Record<Filter, number>
+}) {
+  const options: Filter[] = ['ALL', 'BUY', 'HOLD', 'SELL']
   return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
-        <div
-          className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <span className="text-xs font-medium text-[var(--color-fg-muted)] w-8 text-right tabular-nums">
-        {pct}
-      </span>
+    <div className="flex items-center gap-1 flex-wrap">
+      {options.map((f) => (
+        <button
+          key={f}
+          onClick={() => onChange(f)}
+          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            active === f
+              ? 'bg-brand-500 text-white'
+              : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
+          }`}
+        >
+          {f}
+          <span className={`ml-1.5 tabular-nums ${active === f ? 'opacity-80' : 'opacity-60'}`}>
+            {counts[f]}
+          </span>
+        </button>
+      ))}
     </div>
   )
 }
 
-// ── Skeleton card ─────────────────────────────────────────────────────────────
+// ── Skeleton row ──────────────────────────────────────────────────────────────
 
-function SkeletonCard() {
+function SkeletonRow() {
   return (
-    <div className="card p-4 animate-pulse">
-      <div className="flex items-start justify-between mb-3">
-        <div className="h-6 w-20 rounded-lg bg-[var(--color-border)]" />
-        <div className="h-5 w-12 rounded-full bg-[var(--color-border)]" />
-      </div>
-      <div className="h-4 w-16 rounded-lg bg-[var(--color-border)] mb-3" />
-      <div className="h-1.5 rounded-full bg-[var(--color-border)] mb-4" />
-      <div className="h-3 w-full rounded bg-[var(--color-border)] mb-1.5" />
-      <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] animate-pulse">
+      <div className="h-4 w-14 rounded bg-[var(--color-border)]" />
+      <div className="h-5 w-12 rounded-full bg-[var(--color-border)]" />
+      <div className="h-3 flex-1 max-w-24 rounded bg-[var(--color-border)]" />
+      <div className="h-4 w-16 rounded bg-[var(--color-border)] ml-auto" />
     </div>
   )
 }
 
-// ── Watchlist card ────────────────────────────────────────────────────────────
+// ── Watchlist row ─────────────────────────────────────────────────────────────
 
-function WatchlistCard({ item }: { item: WatchlistItem }) {
+function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: string) => void }) {
   const navigate = useNavigate()
+  const [removing, setRemoving] = useState(false)
+  const scorePct = Math.round(item.score * 100)
+
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (removing) return
+    setRemoving(true)
+    try {
+      await watchlistApi.remove(item.ticker)
+      onRemove(item.ticker)
+    } catch {
+      setRemoving(false)
+    }
+  }
 
   return (
-    <button
-      onClick={() => navigate(`/ticker/${item.ticker}`)}
-      className="card p-4 text-left w-full hover:border-brand-500/40 hover:shadow-brand-sm
-                 active:scale-[0.98] transition-all duration-200 focus:outline-none
-                 focus:ring-2 focus:ring-brand-500/50"
-    >
-      {/* Header row */}
-      <div className="flex items-start justify-between gap-2 mb-2">
-        <div>
-          <div className="flex items-baseline gap-2 mb-1">
-            <span
-              className="text-xl font-semibold text-[var(--color-fg)] leading-none"
-              style={{ fontFamily: 'Fraunces, Georgia, serif' }}
-            >
-              {item.ticker}
-            </span>
-            {item.current_price != null && (
-              <span className="text-sm text-[var(--color-fg-muted)] tabular-nums">
-                ${item.current_price.toFixed(2)}
-                {item.day_change_pct != null && (
-                  <span className={`ml-1 text-xs ${item.day_change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                    {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
-                  </span>
-                )}
-              </span>
-            )}
-          </div>
-          {item.conviction && <ConvictionBadge conviction={item.conviction} />}
-        </div>
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] hover:bg-[var(--color-bg)] transition-colors group">
+      {/* Ticker */}
+      <button
+        onClick={() => navigate(`/ticker/${item.ticker}`)}
+        className="font-semibold text-sm text-[var(--color-fg)] w-14 flex-shrink-0 text-left hover:text-brand-500 transition-colors"
+        style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+      >
+        {item.ticker}
+      </button>
+
+      {/* Signal */}
+      <div className="flex-shrink-0">
         <SignalBadge signal={item.signal} />
       </div>
 
-      {/* Score bar */}
-      <div className="mb-3">
-        <div className="flex justify-between mb-1">
-          <span className="text-xs text-[var(--color-fg-muted)]">Score</span>
-          <span className="text-xs text-[var(--color-fg-muted)]">
-            {Math.round(item.confidence * 100)}% confidence
-          </span>
+      {/* Score bar + number */}
+      <div className="flex items-center gap-2 w-28 flex-shrink-0">
+        <div className="flex-1 h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-brand-500 to-brand-600 transition-all duration-500"
+            style={{ width: `${scorePct}%` }}
+          />
         </div>
-        <ScoreBar score={item.score} />
+        <span className="text-xs tabular-nums text-[var(--color-fg-muted)] w-6 text-right">{scorePct}</span>
       </div>
 
-      {/* Price target */}
-      {item.price_target && (
-        <div className="flex items-center gap-1.5 mb-2">
-          <TrendingUp className="w-3.5 h-3.5 text-brand-500 flex-shrink-0" />
-          <span className="text-xs text-[var(--color-fg-muted)]">
-            Target: <span className="text-[var(--color-fg)] font-medium">${item.price_target.toFixed(2)}</span>
-          </span>
-        </div>
-      )}
+      {/* Price + change */}
+      <div className="hidden sm:flex items-baseline gap-1.5 flex-shrink-0 w-28">
+        {item.current_price != null ? (
+          <>
+            <span className="text-sm tabular-nums text-[var(--color-fg)]">
+              ${item.current_price.toFixed(2)}
+            </span>
+            {item.day_change_pct != null && (
+              <span className={`text-xs tabular-nums ${item.day_change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
+              </span>
+            )}
+          </>
+        ) : (
+          <span className="text-xs text-[var(--color-fg-muted)]">—</span>
+        )}
+      </div>
 
-      {/* Thesis preview */}
+      {/* Conviction */}
+      <div className="hidden md:block flex-shrink-0">
+        {item.conviction
+          ? <ConvictionBadge conviction={item.conviction} />
+          : <span className="text-xs text-[var(--color-fg-muted)]">—</span>
+        }
+      </div>
+
+      {/* Thesis snippet */}
       {item.thesis && (
-        <p className="text-xs text-[var(--color-fg-muted)] line-clamp-2 leading-relaxed">
+        <p className="hidden lg:block flex-1 text-xs text-[var(--color-fg-muted)] truncate min-w-0">
           {item.thesis}
         </p>
       )}
 
-      {/* Footer timestamp */}
-      <div className="mt-3 pt-2 border-t border-[var(--color-border)]">
-        <span className="text-[0.65rem] text-[var(--color-fg-muted)]">
-          Updated {new Date(item.generated_at).toLocaleString(undefined, {
-            month: 'short', day: 'numeric',
-            hour: '2-digit', minute: '2-digit',
-          })}
-        </span>
+      {/* Actions */}
+      <div className="flex items-center gap-1 ml-auto flex-shrink-0">
+        <button
+          onClick={() => navigate(`/ticker/${item.ticker}`)}
+          className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-brand-500 hover:bg-brand-500/10 transition-colors opacity-0 group-hover:opacity-100"
+          title="View analysis"
+        >
+          View <ArrowRight className="w-3 h-3" />
+        </button>
+        <button
+          onClick={handleRemove}
+          disabled={removing}
+          className="p-1.5 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors"
+          title="Remove from watchlist"
+        >
+          {removing
+            ? <LoadingSpinner size="sm" />
+            : <Trash2 className="w-3.5 h-3.5" />
+          }
+        </button>
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -139,7 +173,6 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  // Debounced Finnhub search
   const search = useCallback((q: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
     if (!q || q.length < 1) { setSuggestions([]); setOpen(false); return }
@@ -159,7 +192,6 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
     }, 300)
   }, [])
 
-  // Close dropdown on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
@@ -188,7 +220,6 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
       setOpen(false)
       onAdded()
       inputRef.current?.focus()
-      // Trigger analysis in background — show persistent status while it runs
       setAnalyzingTicker(t)
       analyzeApi.get(t, true)
         .then(() => onAdded())
@@ -223,11 +254,8 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
     <div ref={containerRef} className="flex flex-col gap-2">
       <div className="flex gap-2">
         <div className="relative flex-1">
-          {/* Search icon / spinner */}
           <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)]">
-            {isSearching
-              ? <LoadingSpinner size="sm" />
-              : <Search className="w-4 h-4" />}
+            {isSearching ? <LoadingSpinner size="sm" /> : <Search className="w-4 h-4" />}
           </div>
           <input
             ref={inputRef}
@@ -247,8 +275,6 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
             disabled={isAdding}
             autoComplete="off"
           />
-
-          {/* Dropdown */}
           {open && suggestions.length > 0 && (
             <div className="absolute z-50 top-full mt-1 w-full rounded-xl border border-[var(--color-border)]
                             bg-[var(--color-surface)] shadow-lg overflow-hidden">
@@ -262,16 +288,13 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
                       ? 'bg-brand-500/10 text-[var(--color-fg)]'
                       : 'hover:bg-[var(--color-bg)] text-[var(--color-fg)]'}`}
                 >
-                  <span className="font-semibold text-sm w-16 flex-shrink-0 text-brand-500">
-                    {s.symbol}
-                  </span>
+                  <span className="font-semibold text-sm w-16 flex-shrink-0 text-brand-500">{s.symbol}</span>
                   <span className="text-sm text-[var(--color-fg-muted)] truncate">{s.name}</span>
                 </button>
               ))}
             </div>
           )}
         </div>
-
         <button
           type="button"
           onClick={() => addTicker(value)}
@@ -283,23 +306,15 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
         </button>
       </div>
 
-      {isAdding && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl
-                        bg-brand-500/10 border border-brand-500/30 text-brand-500">
-          <LoadingSpinner size="sm" />
-          <span className="text-sm font-medium">Adding to watchlist…</span>
-        </div>
-      )}
       {analyzingTicker && (
         <div className="flex items-center gap-3 px-4 py-3 rounded-xl
                         bg-brand-500/10 border border-brand-500/30 text-brand-500">
           <LoadingSpinner size="sm" />
           <span className="text-sm font-medium">
-            Fetching &amp; analysing <strong>{analyzingTicker}</strong> — this may take 5–10 seconds…
+            Analysing <strong>{analyzingTicker}</strong> — takes 5–10 seconds…
           </span>
         </div>
       )}
-
       {error && (
         <div className="flex items-center gap-2 text-red-500 text-xs">
           <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
@@ -325,7 +340,7 @@ function EmptyState() {
         Your watchlist is empty
       </h3>
       <p className="text-sm text-[var(--color-fg-muted)] max-w-xs">
-        Add tickers to your watchlist above to get AI-powered signal analysis.
+        Add tickers above to get AI-powered signal analysis.
       </p>
     </div>
   )
@@ -337,13 +352,13 @@ export default function DashboardPage() {
   const [items, setItems] = useState<WatchlistItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<Filter>('ALL')
 
   const fetchWatchlist = async () => {
     setError(null)
     try {
       const res = await watchlistApi.get()
       const data = res.data
-      // Support both array and { items: [] } response shapes
       setItems(Array.isArray(data) ? data : (data.items ?? []))
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })
@@ -354,9 +369,20 @@ export default function DashboardPage() {
     }
   }
 
-  useEffect(() => {
-    fetchWatchlist()
-  }, [])
+  useEffect(() => { fetchWatchlist() }, [])
+
+  const handleRemove = (ticker: string) => {
+    setItems((prev) => prev.filter((i) => i.ticker !== ticker))
+  }
+
+  const counts: Record<Filter, number> = {
+    ALL: items.length,
+    BUY: items.filter((i) => i.signal === 'BUY').length,
+    HOLD: items.filter((i) => i.signal === 'HOLD').length,
+    SELL: items.filter((i) => i.signal === 'SELL').length,
+  }
+
+  const filtered = filter === 'ALL' ? items : items.filter((i) => i.signal === filter)
 
   return (
     <Layout>
@@ -393,16 +419,35 @@ export default function DashboardPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="flex flex-col gap-3 sm:grid sm:grid-cols-2">
-          {[...Array(4)].map((_, i) => <SkeletonCard key={i} />)}
+        <div className="card overflow-hidden p-0">
+          {[...Array(4)].map((_, i) => <SkeletonRow key={i} />)}
         </div>
       ) : items.length === 0 ? (
         <EmptyState />
       ) : (
-        <div className="flex flex-col gap-3 sm:grid sm:grid-cols-2">
-          {items.map((item) => (
-            <WatchlistCard key={item.ticker} item={item} />
-          ))}
+        <div className="card overflow-hidden p-0">
+          {/* Filter + column headers */}
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-[var(--color-border)] flex-wrap gap-y-2">
+            <FilterBar active={filter} onChange={setFilter} counts={counts} />
+            {/* Column labels */}
+            <div className="hidden sm:flex items-center gap-3 text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none">
+              <span className="w-14">Ticker</span>
+              <span className="w-12">Signal</span>
+              <span className="w-28">Score</span>
+              <span className="w-28">Price</span>
+              <span className="hidden md:block">Conviction</span>
+            </div>
+          </div>
+
+          {filtered.length === 0 ? (
+            <div className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
+              No {filter} signals in your watchlist.
+            </div>
+          ) : (
+            filtered.map((item) => (
+              <WatchlistRow key={item.ticker} item={item} onRemove={handleRemove} />
+            ))
+          )}
         </div>
       )}
     </Layout>
