@@ -30,18 +30,27 @@ function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: 
 function AlertSettingsCard() {
   const [settings, setSettings] = useState<AlertSettings>({
     slack_webhook_url: '',
+    whatsapp_phone: '',
+    whatsapp_apikey: '',
     notify_on_signal_flip: true,
     notify_on_high_conviction: true,
     daily_digest: false,
   })
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
+  const [isTesting, setIsTesting] = useState(false)
   const [savedOk, setSavedOk] = useState(false)
+  const [testOk, setTestOk] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     alertsApi.getSettings()
-      .then((res) => setSettings({ ...res.data, slack_webhook_url: res.data.slack_webhook_url ?? '' }))
+      .then((res) => setSettings({
+        ...res.data,
+        slack_webhook_url: res.data.slack_webhook_url ?? '',
+        whatsapp_phone: res.data.whatsapp_phone ?? '',
+        whatsapp_apikey: res.data.whatsapp_apikey ?? '',
+      }))
       .catch(() => {})
       .finally(() => setIsLoading(false))
   }, [])
@@ -50,7 +59,12 @@ function AlertSettingsCard() {
     setIsSaving(true)
     setError(null)
     try {
-      const payload = { ...settings, slack_webhook_url: settings.slack_webhook_url?.trim() || undefined }
+      const payload = {
+        ...settings,
+        slack_webhook_url: settings.slack_webhook_url?.trim() || undefined,
+        whatsapp_phone: settings.whatsapp_phone?.trim() || undefined,
+        whatsapp_apikey: settings.whatsapp_apikey?.trim() || undefined,
+      }
       await alertsApi.updateSettings(payload)
       setSavedOk(true)
       setTimeout(() => setSavedOk(false), 2500)
@@ -61,10 +75,29 @@ function AlertSettingsCard() {
     }
   }
 
+  const sendTest = async () => {
+    setIsTesting(true)
+    setError(null)
+    try {
+      await alertsApi.sendTest()
+      setTestOk(true)
+      setTimeout(() => setTestOk(false), 3000)
+    } catch {
+      setError('Test failed. Check your channel settings.')
+    } finally {
+      setIsTesting(false)
+    }
+  }
+
   if (isLoading) return (
     <div className="card p-5 flex items-center justify-center h-32">
       <LoadingSpinner size="sm" />
     </div>
+  )
+
+  const hasChannel = !!(
+    settings.slack_webhook_url?.trim() ||
+    (settings.whatsapp_phone?.trim() && settings.whatsapp_apikey?.trim())
   )
 
   return (
@@ -75,11 +108,9 @@ function AlertSettingsCard() {
       </h3>
 
       <div className="flex flex-col gap-4">
-        {/* Webhook URL */}
+        {/* Slack */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm text-[var(--color-fg)]">
-            Slack Webhook URL
-          </label>
+          <label className="text-sm font-medium text-[var(--color-fg)]">Slack Webhook URL</label>
           <input
             type="url"
             value={settings.slack_webhook_url ?? ''}
@@ -94,6 +125,33 @@ function AlertSettingsCard() {
             className="text-xs text-brand-500 flex items-center gap-1 hover:underline"
           >
             How to create a Slack webhook <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
+
+        {/* WhatsApp */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-sm font-medium text-[var(--color-fg)]">WhatsApp (via CallMeBot)</label>
+          <input
+            type="tel"
+            value={settings.whatsapp_phone ?? ''}
+            onChange={(e) => setSettings((s) => ({ ...s, whatsapp_phone: e.target.value }))}
+            placeholder="+1234567890 (international format)"
+            className="input text-sm"
+          />
+          <input
+            type="text"
+            value={settings.whatsapp_apikey ?? ''}
+            onChange={(e) => setSettings((s) => ({ ...s, whatsapp_apikey: e.target.value }))}
+            placeholder="CallMeBot API key"
+            className="input text-sm"
+          />
+          <a
+            href="https://www.callmebot.com/blog/free-api-whatsapp-messages/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-brand-500 flex items-center gap-1 hover:underline"
+          >
+            How to get your CallMeBot API key <ExternalLink className="w-3 h-3" />
           </a>
         </div>
 
@@ -116,15 +174,26 @@ function AlertSettingsCard() {
           />
         </div>
 
-        {/* Save */}
-        <button
-          onClick={save}
-          disabled={isSaving}
-          className="btn-primary w-full"
-        >
-          {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
-          {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save Alert Settings'}
-        </button>
+        {/* Actions */}
+        <div className="flex gap-2">
+          <button
+            onClick={save}
+            disabled={isSaving}
+            className="btn-primary flex-1"
+          >
+            {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
+            {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save'}
+          </button>
+          <button
+            onClick={sendTest}
+            disabled={isTesting || !hasChannel}
+            className="btn-secondary flex-1"
+            title={hasChannel ? 'Send a test alert to configured channels' : 'Configure a channel first'}
+          >
+            {isTesting ? <LoadingSpinner size="sm" /> : <Bell className="w-4 h-4" />}
+            {isTesting ? 'Sending…' : testOk ? 'Sent!' : 'Test'}
+          </button>
+        </div>
 
         {error && <p className="text-xs text-red-500">{error}</p>}
       </div>

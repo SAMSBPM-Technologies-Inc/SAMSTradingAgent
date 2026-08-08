@@ -85,4 +85,5 @@ export const performanceApi = {
 export const alertsApi = {
   getSettings: () => api.get<import('../types').AlertSettings>('/alerts/settings'),
   updateSettings: (data: import('../types').AlertSettings) => api.put<import('../types').AlertSettings>('/alerts/settings', data),
+  sendTest: () => api.post<{ status: string; channels: string[] }>('/alerts/test'),
 }

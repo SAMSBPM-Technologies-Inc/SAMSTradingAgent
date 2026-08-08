@@ -172,7 +172,7 @@ async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -
                 pass
 
         users = await db[COLL_USERS].find(
-            {"_id": {"$in": user_ids}, "alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+            {"_id": {"$in": user_ids}},
             {"alert_settings": 1},
         ).to_list(length=500)
 
@@ -180,7 +180,9 @@ async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -
         for user in users:
             prefs = user.get("alert_settings") or {}
             webhook = prefs.get("slack_webhook_url")
-            if not webhook:
+            wa_phone = prefs.get("whatsapp_phone")
+            wa_apikey = prefs.get("whatsapp_apikey")
+            if not webhook and not (wa_phone and wa_apikey):
                 continue
             if signal_flipped and not prefs.get("notify_on_signal_flip", True):
                 continue
@@ -196,6 +198,8 @@ async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -
                 confidence=new_signal.get("confidence", 0.0),
                 price_target=ao.get("price_target"),
                 stop_loss=ao.get("stop_loss"),
+                whatsapp_phone=wa_phone,
+                whatsapp_apikey=wa_apikey,
             )
     except Exception as exc:
         logger.warning("fire_alerts_failed", ticker=ticker, error=str(exc))

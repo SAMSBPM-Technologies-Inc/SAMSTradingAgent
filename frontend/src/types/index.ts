@@ -82,6 +82,8 @@ export interface SignalRecord {
 
 export interface AlertSettings {
   slack_webhook_url?: string
+  whatsapp_phone?: string
+  whatsapp_apikey?: string
   notify_on_signal_flip: boolean
   notify_on_high_conviction: boolean
   daily_digest: boolean

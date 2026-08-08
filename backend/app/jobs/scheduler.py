@@ -102,7 +102,10 @@ async def _daily_digest_job() -> None:
     try:
         db = await get_db()
         users = await db[COLL_USERS].find(
-            {"alert_settings.daily_digest": True, "alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+            {"alert_settings.daily_digest": True, "$or": [
+                {"alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+                {"alert_settings.whatsapp_phone": {"$exists": True, "$ne": None}},
+            ]},
         ).to_list(length=2000)
 
         if not users:
@@ -115,8 +118,11 @@ async def _daily_digest_job() -> None:
 
         for user in users:
             try:
-                webhook = (user.get("alert_settings") or {}).get("slack_webhook_url")
-                if not webhook:
+                prefs = user.get("alert_settings") or {}
+                webhook = prefs.get("slack_webhook_url")
+                wa_phone = prefs.get("whatsapp_phone")
+                wa_apikey = prefs.get("whatsapp_apikey")
+                if not webhook and not (wa_phone and wa_apikey):
                     continue
 
                 user_id = str(user["_id"])
@@ -145,6 +151,8 @@ async def _daily_digest_job() -> None:
                     webhook_url=webhook,
                     display_name=user.get("display_name", ""),
                     signals=signals,
+                    whatsapp_phone=wa_phone,
+                    whatsapp_apikey=wa_apikey,
                 )
             except Exception as exc:
                 logger.warning("daily_digest_user_failed", user_id=str(user.get("_id")), error=str(exc))

@@ -1,9 +1,10 @@
 """
 GET  /alerts/settings  — get the current user's alert preferences
 PUT  /alerts/settings  — update alert preferences
+POST /alerts/test      — send a test notification via configured channels
 """
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 from typing import Optional
 
 from app.db import COLL_USERS, get_db
@@ -16,6 +17,8 @@ logger = get_logger(__name__)
 
 class AlertSettings(BaseModel):
     slack_webhook_url: Optional[str] = None
+    whatsapp_phone: Optional[str] = None
+    whatsapp_apikey: Optional[str] = None
     notify_on_signal_flip: bool = True
     notify_on_high_conviction: bool = True
     daily_digest: bool = False
@@ -26,6 +29,8 @@ async def get_alert_settings(current_user: dict = Depends(get_current_user)) -> 
     prefs = current_user.get("alert_settings") or {}
     return AlertSettings(
         slack_webhook_url=prefs.get("slack_webhook_url"),
+        whatsapp_phone=prefs.get("whatsapp_phone"),
+        whatsapp_apikey=prefs.get("whatsapp_apikey"),
         notify_on_signal_flip=prefs.get("notify_on_signal_flip", True),
         notify_on_high_conviction=prefs.get("notify_on_high_conviction", True),
         daily_digest=prefs.get("daily_digest", False),
@@ -40,6 +45,8 @@ async def update_alert_settings(
     db = await get_db()
     prefs = {
         "slack_webhook_url": body.slack_webhook_url or None,
+        "whatsapp_phone": body.whatsapp_phone or None,
+        "whatsapp_apikey": body.whatsapp_apikey or None,
         "notify_on_signal_flip": body.notify_on_signal_flip,
         "notify_on_high_conviction": body.notify_on_high_conviction,
         "daily_digest": body.daily_digest,
@@ -50,3 +57,51 @@ async def update_alert_settings(
     )
     logger.info("alert_settings_updated", user_id=str(current_user["_id"]))
     return AlertSettings(**prefs)
+
+
+@router.post("/test")
+async def send_test_alert(current_user: dict = Depends(get_current_user)) -> dict:
+    """Send a test notification through all configured channels."""
+    prefs = current_user.get("alert_settings") or {}
+    sent = []
+
+    from app.services.notifier import send_signal_alert
+    slack_url = prefs.get("slack_webhook_url")
+    if slack_url:
+        await send_signal_alert(
+            webhook_url=slack_url,
+            ticker="TEST",
+            old_signal="HOLD",
+            new_signal="BUY",
+            score=0.74,
+            conviction="HIGH",
+            confidence=0.81,
+            price_target=35.0,
+            stop_loss=28.5,
+            whatsapp_phone=None,
+            whatsapp_apikey=None,
+        )
+        sent.append("slack")
+
+    phone = prefs.get("whatsapp_phone")
+    apikey = prefs.get("whatsapp_apikey")
+    if phone and apikey:
+        await send_signal_alert(
+            webhook_url=None,
+            ticker="TEST",
+            old_signal="HOLD",
+            new_signal="BUY",
+            score=0.74,
+            conviction="HIGH",
+            confidence=0.81,
+            price_target=35.0,
+            stop_loss=28.5,
+            whatsapp_phone=phone,
+            whatsapp_apikey=apikey,
+        )
+        sent.append("whatsapp")
+
+    if not sent:
+        return {"status": "no_channels", "message": "No notification channels configured."}
+
+    return {"status": "sent", "channels": sent}
