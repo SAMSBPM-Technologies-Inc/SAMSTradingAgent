@@ -102,7 +102,10 @@ function WatchlistCard({ item }: { item: WatchlistItem }) {
       {/* Footer timestamp */}
       <div className="mt-3 pt-2 border-t border-[var(--color-border)]">
         <span className="text-[0.65rem] text-[var(--color-fg-muted)]">
-          Updated {new Date(item.generated_at).toLocaleDateString()}
+          Updated {new Date(item.generated_at).toLocaleString(undefined, {
+            month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit',
+          })}
         </span>
       </div>
     </button>
