@@ -12,34 +12,35 @@ import {
 import { useAuth } from '../lib/auth-context'
 import ThemeToggle from './ThemeToggle'
 
-// SAMSBPM Logo — text-based lockup for desktop
+// Icon mark SVG (inlined so it renders at any size with no extra request)
+const IconMark = ({ size = 32 }: { size?: number }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 34 34" aria-hidden="true">
+    <rect width="34" height="34" rx="8" fill="#f2600c" />
+    <path d="M9 23L15 17L19 20L25 11" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    <path d="M25 11H19M25 11V17" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+  </svg>
+)
+
+// Full horizontal lockup for desktop nav
 function LogoLockup() {
   return (
-    <div className="flex items-center gap-2 select-none">
-      {/* Icon mark */}
-      <div className="flex items-center justify-center w-8 h-8 flex-shrink-0" style={{ background: '#f2600c', borderRadius: '8px' }}>
-        <span style={{ fontFamily: 'Fraunces, Georgia, serif', color: '#fff', fontWeight: 600, fontSize: '15px' }}>S</span>
-      </div>
-      {/* Text lockup */}
+    <div className="flex items-center gap-2.5 select-none">
+      <IconMark size={32} />
       <div className="leading-tight">
         <div style={{ fontFamily: 'Fraunces, Georgia, serif', color: '#f2600c', fontWeight: 600, fontSize: '15px', letterSpacing: '-0.01em' }}>
           SAMSBPM
         </div>
         <div className="text-[var(--color-fg-muted)] text-[0.6rem] tracking-widest uppercase">
-          Trading
+          Trading Agent
         </div>
       </div>
     </div>
   )
 }
 
-// Mobile mark only
+// Icon-only mark for mobile top bar
 function LogoMark() {
-  return (
-    <div className="flex items-center justify-center w-8 h-8 flex-shrink-0" style={{ background: '#f2600c', borderRadius: '8px' }}>
-      <span style={{ fontFamily: 'Fraunces, Georgia, serif', color: '#fff', fontWeight: 600, fontSize: '15px' }}>S</span>
-    </div>
-  )
+  return <IconMark size={32} />
 }
 
 const navLinks = [
@@ -184,11 +185,14 @@ export default function Layout({ children }: LayoutProps) {
       </main>
 
       {/* Footer */}
-      <footer className="hidden md:block border-t border-[var(--color-border)] bg-[var(--color-surface)] transition-colors duration-200">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-          <p className="text-xs text-[var(--color-fg-muted)]">
-            © {new Date().getFullYear()} SAMSBPM Technologies Inc. All rights reserved.
-          </p>
+      <footer className="hidden md:flex border-t border-[var(--color-border)] bg-[var(--color-surface)] transition-colors duration-200">
+        <div className="max-w-5xl mx-auto w-full px-6 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <IconMark size={20} />
+            <p className="text-xs text-[var(--color-fg-muted)]">
+              © {new Date().getFullYear()} SAMSBPM Technologies Inc. All rights reserved.
+            </p>
+          </div>
           <a
             href="https://samsbpmtechnologies.ca"
             target="_blank"

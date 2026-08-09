@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120" viewBox="0 0 320 120" font-family="Georgia, serif">
+<rect width="120" height="120" rx="28" fill="#f2600c"></rect>
+<path d="M31 81L53 60L67 71L88 39" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+<path d="M88 39H67M88 39V60" stroke="white" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+<text x="145" y="60" font-size="34" font-weight="700" fill="#14110c" letter-spacing="1">SAMSBPM</text>
+<text x="145" y="82" font-size="13" font-weight="600" fill="#83786a" letter-spacing="2.5">TRADING AGENT</text>
+</svg>
