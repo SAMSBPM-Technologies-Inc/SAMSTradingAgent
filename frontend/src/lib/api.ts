@@ -91,3 +91,13 @@ export const alertsApi = {
   updateSettings: (data: import('../types').AlertSettings) => api.put<import('../types').AlertSettings>('/alerts/settings', data),
   sendTest: () => api.post<{ status: string; channels: string[] }>('/alerts/test'),
 }
+
+export const tradingApi = {
+  getSettings: () => api.get<import('../types').AutoTradeSettingsResponse>('/trading/settings'),
+  updateSettings: (data: import('../types').AutoTradeSettings) =>
+    api.put<import('../types').AutoTradeSettingsResponse>('/trading/settings', data),
+  getAccount: () => api.get<import('../types').AccountSummaryResponse>('/trading/account'),
+  getPositions: () => api.get<import('../types').TradeRecord[]>('/trading/positions'),
+  getOrders: () => api.get<import('../types').TradeRecord[]>('/trading/orders'),
+  closePosition: (ticker: string) => api.post(`/trading/close/${ticker}`),
+}

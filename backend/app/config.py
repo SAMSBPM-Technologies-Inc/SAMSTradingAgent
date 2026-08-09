@@ -55,6 +55,17 @@ class Settings(BaseSettings):
     fred_api_key: str = Field(default="", description="FRED API key for macro data")
     anthropic_api_key: str = Field(default="", description="Anthropic API key for AI analyst (Claude)")
 
+    # ── IBKR / Automated Trading ──────────────────────────────────────────────
+    # IB Gateway or TWS must be running on the configured host:port with API enabled.
+    # Port 7497 = paper trading (default), 7496 = live trading.
+    # CIRO NOTE: API-based automated trading is only permitted for US-listed securities.
+    ibkr_host: str = Field(default="127.0.0.1")
+    ibkr_port: int = Field(default=7497)          # 7497=paper, 7496=live
+    ibkr_client_id: int = Field(default=1)
+    ibkr_account_id: str = Field(default="")     # optional; leave empty for default account
+    auto_trade_enabled: bool = Field(default=False, description="Global kill-switch for automated trading")
+    auto_trade_live_allowed: bool = Field(default=False, description="Allow live (non-paper) trading")
+
     # ── Feature flags ─────────────────────────────────────────────────────────
     enable_ml_model: bool = Field(default=False)
     enable_backtesting: bool = Field(default=False)

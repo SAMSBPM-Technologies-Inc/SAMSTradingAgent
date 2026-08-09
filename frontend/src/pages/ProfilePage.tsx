@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bell, Check, ExternalLink, LogOut, Pencil, User, X } from 'lucide-react'
-import { alertsApi, authApi } from '../lib/api'
-import type { AlertSettings } from '../types'
+import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, User, Wifi, WifiOff, X } from 'lucide-react'
+import { alertsApi, authApi, tradingApi } from '../lib/api'
+import type { AlertSettings, AutoTradeSettings } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -201,6 +201,226 @@ function AlertSettingsCard() {
   )
 }
 
+// ── Auto Trading Settings section ─────────────────────────────────────────────
+
+const DEFAULT_TRADE_SETTINGS: AutoTradeSettings = {
+  enabled: false,
+  paper_trading: true,
+  min_signal_score: 0.75,
+  position_size_pct: 0.05,
+  max_open_positions: 5,
+  max_daily_loss_pct: 0.02,
+  allowed_tickers: [],
+}
+
+function AutoTradingCard() {
+  const [settings, setSettings] = useState<AutoTradeSettings>(DEFAULT_TRADE_SETTINGS)
+  const [connected, setConnected] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [savedOk, setSavedOk] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [tickerInput, setTickerInput] = useState('')
+
+  useEffect(() => {
+    tradingApi.getSettings()
+      .then((res) => {
+        const { connected: conn, ...s } = res.data
+        setSettings(s)
+        setConnected(conn)
+      })
+      .catch(() => {})
+      .finally(() => setIsLoading(false))
+  }, [])
+
+  const save = async () => {
+    setIsSaving(true)
+    setError(null)
+    try {
+      const res = await tradingApi.updateSettings(settings)
+      setConnected(res.data.connected)
+      setSavedOk(true)
+      setTimeout(() => setSavedOk(false), 2500)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? 'Failed to save settings.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const addTicker = () => {
+    const t = tickerInput.trim().toUpperCase()
+    if (!t || settings.allowed_tickers.includes(t)) return
+    setSettings((s) => ({ ...s, allowed_tickers: [...s.allowed_tickers, t] }))
+    setTickerInput('')
+  }
+
+  const removeTicker = (t: string) =>
+    setSettings((s) => ({ ...s, allowed_tickers: s.allowed_tickers.filter((x) => x !== t) }))
+
+  if (isLoading) return (
+    <div className="card p-5 flex items-center justify-center h-32">
+      <LoadingSpinner size="sm" />
+    </div>
+  )
+
+  return (
+    <div className="card p-5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-medium text-[var(--color-fg-muted)] uppercase tracking-wide flex items-center gap-2">
+          <Bot className="w-3.5 h-3.5" />
+          Auto Trading
+        </h3>
+        <span className={`flex items-center gap-1 text-xs font-medium ${connected ? 'text-green-500' : 'text-[var(--color-fg-muted)]'}`}>
+          {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+          {connected ? 'IB Gateway connected' : 'IB Gateway offline'}
+        </span>
+      </div>
+
+      {/* Warning banner */}
+      <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs mb-4">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+        <div>
+          <span className="font-semibold">Paper trading mode by default.</span> Auto trading places real orders in your IBKR account.
+          Requires Interactive Brokers account + IB Gateway running on the server.{' '}
+          <span className="font-semibold">Only US-listed stocks are supported</span> (CIRO regulation for Canadian residents).
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4">
+        {/* Master toggle */}
+        <Toggle
+          checked={settings.enabled}
+          onChange={(v) => setSettings((s) => ({ ...s, enabled: v }))}
+          label="Enable automated trading"
+        />
+
+        {settings.enabled && (
+          <>
+            {/* Paper / Live */}
+            <div className="flex flex-col gap-1.5">
+              <span className="text-sm font-medium text-[var(--color-fg)]">Trading mode</span>
+              <div className="flex gap-3">
+                {([true, false] as const).map((isPaper) => (
+                  <label key={String(isPaper)} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      checked={settings.paper_trading === isPaper}
+                      onChange={() => setSettings((s) => ({ ...s, paper_trading: isPaper }))}
+                      className="accent-brand-500"
+                    />
+                    <span className="text-sm text-[var(--color-fg)]">
+                      {isPaper ? 'Paper (simulated)' : 'Live (real money)'}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {!settings.paper_trading && (
+                <p className="text-xs text-red-500 mt-1">
+                  Live trading must also be enabled server-side (AUTO_TRADE_LIVE_ALLOWED=true).
+                </p>
+              )}
+            </div>
+
+            {/* Score threshold */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between">
+                <label className="text-sm font-medium text-[var(--color-fg)]">Minimum signal score</label>
+                <span className="text-sm font-semibold text-brand-500">{(settings.min_signal_score * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range" min={0.5} max={1.0} step={0.05}
+                value={settings.min_signal_score}
+                onChange={(e) => setSettings((s) => ({ ...s, min_signal_score: parseFloat(e.target.value) }))}
+                className="w-full accent-brand-500"
+              />
+              <p className="text-xs text-[var(--color-fg-muted)]">Only BUY signals scoring above this threshold trigger an order.</p>
+            </div>
+
+            {/* Position size */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex justify-between">
+                <label className="text-sm font-medium text-[var(--color-fg)]">Position size</label>
+                <span className="text-sm font-semibold text-brand-500">{(settings.position_size_pct * 100).toFixed(0)}% of equity</span>
+              </div>
+              <input
+                type="range" min={0.01} max={0.20} step={0.01}
+                value={settings.position_size_pct}
+                onChange={(e) => setSettings((s) => ({ ...s, position_size_pct: parseFloat(e.target.value) }))}
+                className="w-full accent-brand-500"
+              />
+            </div>
+
+            {/* Max positions + daily loss */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-[var(--color-fg)]">Max open positions</label>
+                <input
+                  type="number" min={1} max={20}
+                  value={settings.max_open_positions}
+                  onChange={(e) => setSettings((s) => ({ ...s, max_open_positions: parseInt(e.target.value) || 1 }))}
+                  className="input text-sm"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-[var(--color-fg)]">Daily loss limit</label>
+                <div className="relative">
+                  <input
+                    type="number" min={0.001} max={0.10} step={0.005}
+                    value={settings.max_daily_loss_pct}
+                    onChange={(e) => setSettings((s) => ({ ...s, max_daily_loss_pct: parseFloat(e.target.value) || 0.02 }))}
+                    className="input text-sm pr-8"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--color-fg-muted)]">%</span>
+                </div>
+                <p className="text-xs text-[var(--color-fg-muted)]">Auto-trading pauses for the day when hit.</p>
+              </div>
+            </div>
+
+            {/* Ticker whitelist */}
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium text-[var(--color-fg)]">Ticker whitelist (optional)</label>
+              <p className="text-xs text-[var(--color-fg-muted)]">Leave empty to allow all watchlist tickers. Add tickers to restrict.</p>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={tickerInput}
+                  onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => e.key === 'Enter' && addTicker()}
+                  placeholder="e.g. AAPL"
+                  className="input text-sm flex-1"
+                  maxLength={10}
+                />
+                <button onClick={addTicker} className="btn-secondary px-3 text-sm">Add</button>
+              </div>
+              {settings.allowed_tickers.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {settings.allowed_tickers.map((t) => (
+                    <span key={t} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-brand-500/10 text-brand-500">
+                      {t}
+                      <button onClick={() => removeTicker(t)} className="hover:text-red-500"><X className="w-3 h-3" /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* Save */}
+        <button onClick={save} disabled={isSaving} className="btn-primary w-full">
+          {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
+          {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save'}
+        </button>
+
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
 export default function ProfilePage() {
   const { user, logout } = useAuth()
   const [isEditing, setIsEditing] = useState(false)
@@ -364,6 +584,9 @@ export default function ProfilePage() {
 
         {/* Alert settings */}
         <AlertSettingsCard />
+
+        {/* Auto trading */}
+        <AutoTradingCard />
 
         {/* Danger zone */}
         <div className="card p-5 border-red-500/20">

@@ -123,6 +123,49 @@ export interface AlertSettings {
   daily_digest: boolean
 }
 
+export interface AutoTradeSettings {
+  enabled: boolean
+  paper_trading: boolean
+  min_signal_score: number
+  position_size_pct: number
+  max_open_positions: number
+  max_daily_loss_pct: number
+  allowed_tickers: string[]
+}
+
+export interface AutoTradeSettingsResponse extends AutoTradeSettings {
+  connected: boolean
+}
+
+export interface AccountSummaryResponse {
+  net_liquidation: number
+  total_cash: number
+  unrealized_pnl: number
+  realized_pnl: number
+  buying_power: number
+  connected: boolean
+}
+
+export interface TradeRecord {
+  id: string
+  user_id: string
+  ticker: string
+  action: string
+  qty: number
+  limit_price: number
+  order_id?: number
+  status: string
+  reason?: string
+  signal_score?: number
+  signal_type?: string
+  entry_price?: number
+  exit_price?: number
+  pnl?: number
+  is_paper: boolean
+  opened_at: string
+  closed_at?: string
+}
+
 export interface AuthResponse {
   access_token: string
   token_type: string

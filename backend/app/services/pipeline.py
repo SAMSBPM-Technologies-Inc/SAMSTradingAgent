@@ -64,6 +64,7 @@ async def run_pipeline(ticker: str) -> dict:
                 await _append_history(signal, raw_doc)
                 logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst", signal=signal.get("signal"))
                 await _fire_alerts(ticker, prev_signal, signal)
+                await _execute_trades(ticker, signal)
                 return signal
         except Exception as exc:
             logger.warning("analyst_failed_falling_back", ticker=ticker, error=str(exc))
@@ -81,6 +82,7 @@ async def run_pipeline(ticker: str) -> dict:
     await _append_history(signal, raw_doc)
     logger.info("pipeline_complete", ticker=ticker, mode="rule_based", signal=signal.get("signal"))
     await _fire_alerts(ticker, prev_signal, signal)
+    await _execute_trades(ticker, signal)
     return signal
 
 
@@ -143,6 +145,38 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
         )
     except Exception as exc:
         logger.warning("history_append_failed", ticker=signal.get("ticker"), error=str(exc))
+
+
+async def _execute_trades(ticker: str, signal: dict) -> None:
+    """
+    Attempt automated trade execution for all users watching this ticker
+    who have auto-trading enabled. Runs fire-and-forget — never raises.
+    Global kill-switch: AUTO_TRADE_ENABLED must be True in env.
+    """
+    try:
+        settings = get_settings()
+        if not settings.auto_trade_enabled:
+            return
+
+        new_sig = signal.get("signal", "HOLD")
+        score = signal.get("score", 0.0)
+        current_price = signal.get("current_price")
+
+        # Only act on BUY signals (SELL signals are handled via EXIT_ALERT from dip-buy scan)
+        if new_sig != "BUY":
+            return
+
+        from bson import ObjectId
+        from app.services.trade_manager import execute_entry
+
+        db = await get_db()
+        watchers = await db[COLL_WATCHED].find({"ticker": ticker}, {"user_id": 1}).to_list(length=500)
+        for w in watchers:
+            user_id = w["user_id"]
+            await execute_entry(user_id, ticker, score, current_price)
+
+    except Exception as exc:
+        logger.warning("execute_trades_failed", ticker=ticker, error=str(exc))
 
 
 async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -> None:

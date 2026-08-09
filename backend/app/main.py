@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db import close_db, connect_db
 from app.jobs.scheduler import start_scheduler, stop_scheduler
-from app.routes import alerts, analysis, auth, health, performance, report, signals, watchlist
+from app.routes import alerts, analysis, auth, health, performance, report, signals, trading, watchlist
 from app.utils.logger import get_logger, setup_logging
 
 setup_logging()
@@ -32,6 +32,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("app_starting")
     await connect_db()
     start_scheduler()
+
+    # Connect to IB Gateway if auto-trading is enabled
+    from app.config import get_settings
+    from app.services import broker as ibkr
+    _settings = get_settings()
+    if _settings.auto_trade_enabled:
+        await ibkr.connect(
+            host=_settings.ibkr_host,
+            port=_settings.ibkr_port,
+            client_id=_settings.ibkr_client_id,
+        )
+
     logger.info("app_ready")
 
     yield  # ← app is running here
@@ -39,6 +51,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Shutdown ──────────────────────────────────────────────────────────────
     logger.info("app_stopping")
     stop_scheduler()
+    from app.services import broker as ibkr
+    ibkr.disconnect()
     await close_db()
     logger.info("app_stopped")
 
@@ -92,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(watchlist.router)
     app.include_router(performance.router)
     app.include_router(alerts.router)
+    app.include_router(trading.router)
 
     return app
 

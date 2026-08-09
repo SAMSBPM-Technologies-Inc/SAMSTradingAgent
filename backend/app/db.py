@@ -55,6 +55,10 @@ async def _ensure_indexes() -> None:
         [("user_id", 1), ("ticker", 1)], unique=True, background=True
     )
     await db[COLL_USERS].create_index("email", unique=True, background=True)
+    # trades: index by user + ticker for fast position lookups
+    await db[COLL_TRADES].create_index([("user_id", 1), ("ticker", 1)], background=True)
+    await db[COLL_TRADES].create_index("opened_at", background=True)
+    await db[COLL_TRADES].create_index("status", background=True)
     logger.info("mongodb_indexes_ensured")
 
 
@@ -81,3 +85,4 @@ COLL_SIGNALS        = "stocks_signals"
 COLL_SIGNAL_HISTORY = "stocks_signal_history"   # append-only historical signals
 COLL_WATCHED        = "watched_tickers"          # per-user watched tickers
 COLL_USERS          = "users"                    # registered users
+COLL_TRADES         = "trades"                   # automated trade execution log
