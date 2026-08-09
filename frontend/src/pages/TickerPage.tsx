@@ -778,6 +778,97 @@ export default function TickerPage() {
               </p>
             </Section>
           )}
+
+          {/* Analysis Sources */}
+          <div className="card p-5">
+            <h3
+              className="text-base font-medium text-[var(--color-fg)] mb-3"
+              style={{ fontFamily: 'Fraunces, Georgia, serif' }}
+            >
+              Analysis Sources
+            </h3>
+            <div className="flex flex-col gap-3">
+              {[
+                {
+                  label: 'Price & Market Data',
+                  value: 'Yahoo Finance — 90 days OHLCV, current price, day change',
+                  status: 'live',
+                },
+                {
+                  label: 'Fundamentals',
+                  value: 'Yahoo Finance (yfinance) — P/E, revenue growth, FCF, debt/equity, analyst consensus',
+                  status: 'live',
+                },
+                {
+                  label: 'News & Sentiment',
+                  value: 'Finnhub API — last 7 days of headlines, scored locally with VADER NLP',
+                  status: 'live',
+                },
+                {
+                  label: 'Macro Environment',
+                  value: 'FRED (Federal Reserve) — Fed funds rate, 10Y/2Y Treasuries, CPI, unemployment, VIX',
+                  status: 'live',
+                },
+                {
+                  label: 'Options Flow',
+                  value: 'Yahoo Finance — nearest-expiry put/call ratio across the full chain',
+                  status: 'live',
+                },
+                {
+                  label: 'Short Interest',
+                  value: 'Yahoo Finance — % of float shorted, days-to-cover, squeeze risk',
+                  status: 'live',
+                },
+                {
+                  label: 'Insider Activity',
+                  value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days',
+                  status: 'live',
+                },
+                {
+                  label: 'AI Analyst',
+                  value: 'Claude Sonnet 4.6 (Anthropic) — synthesises all the above into signal, thesis, price target, and research note',
+                  status: 'live',
+                },
+                {
+                  label: 'Real-time News NLP',
+                  value: 'NewsAPI + Reddit sentiment — broader news search and retail sentiment',
+                  status: 'planned',
+                },
+                {
+                  label: 'SEC Filings',
+                  value: 'EDGAR — 10-K/10-Q filings and earnings call transcripts',
+                  status: 'planned',
+                },
+                {
+                  label: 'Intraday & Options',
+                  value: 'Polygon.io — intraday price data and live options flow',
+                  status: 'planned',
+                },
+                {
+                  label: 'ML Scoring Model',
+                  value: 'XGBoost — trained on signal history with real fundamental + sentiment features',
+                  status: 'planned',
+                },
+              ].map(({ label, value, status }) => (
+                <div key={label} className="flex items-start gap-3">
+                  <span className={`mt-0.5 flex-shrink-0 text-[0.6rem] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                    status === 'live'
+                      ? 'bg-green-500/10 text-green-500'
+                      : 'bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]'
+                  }`}>
+                    {status === 'live' ? 'Live' : 'Soon'}
+                  </span>
+                  <div className="min-w-0">
+                    <span className="text-xs font-medium text-[var(--color-fg)]">{label}</span>
+                    <p className="text-xs text-[var(--color-fg-muted)] mt-0.5">{value}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-4 pt-3 border-t border-[var(--color-border)]">
+              Scoring is a weighted composite of technical, fundamental, sentiment, macro, volatility, and alternative data sub-scores. When the AI analyst is enabled, Claude synthesises all inputs and may override the rule-based signal. See <code className="font-mono">docs/09-analysis-sources.md</code> for full methodology.
+            </p>
+          </div>
         </div>
       ) : null}
     </Layout>

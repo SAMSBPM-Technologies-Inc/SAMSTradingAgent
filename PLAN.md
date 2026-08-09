@@ -372,3 +372,49 @@ Close the feedback loop using the system's own signal history as training data.
 - Compare new model vs current model on held-out recent records before swapping
 - Incorporate user signal ratings (thumbs up/down) as quality weights
 - Scheduler job: retrain every Sunday, auto-deploy if test MAE improves
+
+---
+
+## Phase 14 — Fix Analysis Caveats & Expand Data Sources
+
+Address known reliability gaps in the current scoring pipeline. Full source inventory in `docs/09-analysis-sources.md`.
+
+### 14a — Retrain XGBoost on Real Features (immediate priority)
+- Fundamental and sentiment features are currently **frozen at 0.5** during model inference — ML mode is unreliable until fixed
+- Once signal history has 30+ settled records, retrain with real historical fundamental + sentiment values per ticker
+- Add model validation step: only deploy if held-out MAE improves vs current model
+- Track `analyst_used` flag in signal history to separate rule-based vs AI vs ML accuracy
+
+### 14b — Score Short Interest Directionally
+- Short interest is currently displayed but not included in scoring (directional ambiguity)
+- Add directional signal: high short % + rising price momentum → bullish (squeeze potential); high short % + falling price → bearish confirmation
+- Expose `squeeze_risk` as a modifier in the alternative-data sub-score alongside options and insider
+
+### 14c — Polygon.io Intraday Feed
+- Replace Yahoo Finance day-change % with Polygon.io real-time intraday feed
+- Enable options flow aggregation across all expiries (not just nearest), weighted by open interest
+- New env var: `POLYGON_API_KEY`
+
+### 14d — Replace VADER with FinBERT Sentiment
+- VADER is lexicon-based and misses sarcasm, financial jargon, and context
+- Swap in FinBERT (financial-domain fine-tuned BERT) for headline scoring
+- Run as local inference (sentence-transformers) to avoid external API dependency
+- Benchmark accuracy improvement on settled signal history before switching
+
+### 14e — SEC EDGAR Integration
+- Parse 10-K / 10-Q filings for qualitative risk factors and management discussion
+- Parse earnings call transcripts for forward guidance sentiment
+- Feed transcript summary into Claude analyst prompt as additional context
+- Implement rate-limiting wrapper (EDGAR allows 10 req/s)
+
+### 14f — Reddit & Broader News Sentiment
+- Add Reddit API: WSB + r/investing subreddits per ticker for retail sentiment
+- Add NewsAPI: broader news cycle beyond Finnhub's per-company feed
+- Aggregate into a unified `retail_sentiment_score` separate from institutional (Finnhub)
+- Weight retail sentiment lower in scoring but surface separately in UI
+
+### 14g — Multi-Source Ensemble Signal
+- Combine three signal sources: XGBoost score, rule-based score, Claude analyst
+- Majority vote for final signal; confidence weighted by source agreement
+- If all three agree → HIGH conviction; 2/3 → MEDIUM; split → LOW
+- Track per-source accuracy in signal history for dynamic weight adjustment
