@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.4
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
@@ -10,16 +9,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /build
 
 # System deps for C extensions (pandas, numpy, cryptography)
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --prefix=/install -r requirements.txt
+RUN pip install --prefix=/install -r requirements.txt
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
@@ -30,7 +26,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Non-root user — created before copying files so ownership is set correctly
 RUN addgroup --system appgroup \
     && adduser --system --ingroup appgroup --no-create-home appuser
 
@@ -41,7 +36,6 @@ COPY --from=builder /install /usr/local
 COPY app/ ./app/
 COPY model/ ./model/
 
-# Lock down file ownership
 RUN chown -R appuser:appgroup /app
 
 USER appuser
