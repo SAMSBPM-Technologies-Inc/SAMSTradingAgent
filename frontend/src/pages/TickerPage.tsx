@@ -453,11 +453,23 @@ export default function TickerPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h1
-                  className="text-4xl font-light text-[var(--color-fg)] mb-2"
+                  className="text-4xl font-light text-[var(--color-fg)] mb-1"
                   style={{ fontFamily: 'Fraunces, Georgia, serif' }}
                 >
                   {data.ticker}
                 </h1>
+                {data.current_price != null && (
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span className="text-2xl font-semibold tabular-nums text-[var(--color-fg)]">
+                      ${data.current_price.toFixed(2)}
+                    </span>
+                    {data.day_change_pct != null && (
+                      <span className={`text-sm tabular-nums font-medium ${data.day_change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {data.day_change_pct >= 0 ? '+' : ''}{data.day_change_pct.toFixed(2)}%
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center gap-2 flex-wrap">
                   <SignalBadge signal={data.signal} size="lg" />
                   {data.conviction && <ConvictionBadge conviction={data.conviction} size="lg" />}

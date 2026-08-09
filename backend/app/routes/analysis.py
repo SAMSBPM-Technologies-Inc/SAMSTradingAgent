@@ -127,4 +127,6 @@ def _doc_to_response(doc: dict) -> AnalyzeResponse:
         key_risks=ao.get("key_risks") or [],
         catalysts=ao.get("catalysts") or [],
         alternative_data=doc.get("alternative_data"),
+        current_price=doc.get("current_price"),
+        day_change_pct=doc.get("day_change_pct"),
     )

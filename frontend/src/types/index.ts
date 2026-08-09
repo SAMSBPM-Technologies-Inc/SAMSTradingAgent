@@ -72,6 +72,8 @@ export interface AnalyzeResponse {
   catalysts?: string[]
   key_risks?: string[]
   alternative_data?: AlternativeData
+  current_price?: number
+  day_change_pct?: number
 }
 
 export interface PerformanceResponse {

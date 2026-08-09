@@ -110,6 +110,9 @@ class AnalyzeResponse(BaseModel):
     catalysts: list[str] = []
     # Alternative data
     alternative_data: Optional[dict] = None
+    # Current price snapshot
+    current_price: Optional[float] = None
+    day_change_pct: Optional[float] = None
 
 
 class AnalystReport(BaseModel):

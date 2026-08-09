@@ -90,8 +90,8 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
       </div>
 
       {/* Score bar + number */}
-      <div className="flex items-center gap-2 w-28 flex-shrink-0">
-        <div className="flex-1 h-1.5 rounded-sm bg-[var(--color-border)] overflow-hidden">
+      <div className="flex items-center gap-1.5 w-16 sm:w-24 flex-shrink-0">
+        <div className="flex-1 h-1.5 rounded-sm bg-[var(--color-border)] overflow-hidden hidden sm:block">
           <div
             className="h-full transition-all duration-500"
             style={{ width: `${scorePct}%`, background: '#f2600c', borderRadius: '2px' }}
@@ -101,10 +101,10 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
       </div>
 
       {/* Price + change */}
-      <div className="hidden sm:flex items-baseline gap-1.5 flex-shrink-0 w-28">
+      <div className="flex items-baseline gap-1 flex-shrink-0 min-w-0">
         {item.current_price != null ? (
           <>
-            <span className="text-sm tabular-nums text-[var(--color-fg)]">
+            <span className="text-sm tabular-nums font-medium text-[var(--color-fg)]">
               ${item.current_price.toFixed(2)}
             </span>
             {item.day_change_pct != null && (
@@ -435,8 +435,8 @@ export default function DashboardPage() {
           <div className="hidden sm:flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)] text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none">
             <span className="w-14 flex-shrink-0">Ticker</span>
             <span className="w-20 flex-shrink-0">Signal</span>
-            <span className="w-28 flex-shrink-0">Score</span>
-            <span className="w-28 flex-shrink-0">Price</span>
+            <span className="w-24 flex-shrink-0">Score</span>
+            <span className="flex-shrink-0">Price</span>
             <span className="hidden md:block flex-shrink-0">Conviction</span>
           </div>
 
