@@ -12,10 +12,12 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libssl-dev \
+        libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt
+RUN pip install --prefix=/install -r requirements.txt && \
+    pip install --prefix=/install ib-insync==0.9.86 || echo "WARNING: ib-insync optional — automated trading disabled"
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
