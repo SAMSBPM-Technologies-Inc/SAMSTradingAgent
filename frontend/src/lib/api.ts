@@ -67,7 +67,7 @@ export const authApi = {
 export const watchlistApi = {
   get: () => api.get('/watchlist'),
   add: (ticker: string) => api.post('/ticker', { ticker }),
-  remove: (ticker: string) => api.delete(`/watchlist/${ticker}`),
+  remove: (ticker: string) => api.delete(`/ticker/${ticker}`),
 }
 
 export const analyzeApi = {
