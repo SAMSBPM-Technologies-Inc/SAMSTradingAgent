@@ -194,7 +194,7 @@ export default function Layout({ children }: LayoutProps) {
             </p>
           </div>
           <a
-            href="https://samsbpmtechnologies.ca"
+            href="https://samsbpm.com"
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-[var(--color-fg-muted)] hover:text-brand-500 transition-colors"
