@@ -145,5 +145,7 @@ export interface DipBuyCandidate {
 export interface DipBuyScanResponse {
   entry_candidates: DipBuyCandidate[]
   exit_alerts: DipBuyCandidate[]
+  neutral_tickers: DipBuyCandidate[]
+  unanalyzed_tickers: string[]
   scanned: number
 }

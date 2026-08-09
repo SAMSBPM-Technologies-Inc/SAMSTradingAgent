@@ -6,7 +6,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Clock,
   Crosshair,
+  Minus,
   Plus,
   RefreshCw,
   Trash2,
@@ -268,6 +270,123 @@ function ExitAlertCard({ c, onNavigate, onRemove }: { c: DipBuyCandidate; onNavi
   )
 }
 
+function NeutralCard({ c, onNavigate, onRemove }: { c: DipBuyCandidate; onNavigate: (t: string) => void; onRemove: (t: string) => void }) {
+  const [removing, setRemoving] = useState(false)
+
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (removing) return
+    setRemoving(true)
+    try {
+      await watchlistApi.remove(c.ticker)
+      onRemove(c.ticker)
+    } catch {
+      setRemoving(false)
+    }
+  }
+
+  return (
+    <div
+      className="card border-l-4 border-l-[var(--color-border)] cursor-pointer hover:shadow-brand-sm transition-all duration-200"
+      onClick={() => onNavigate(c.ticker)}
+    >
+      <div className="flex items-start justify-between mb-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-lg text-[var(--color-fg)]" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
+              {c.ticker}
+            </span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]">
+              <Minus className="w-3 h-3" />
+              WATCHING
+            </span>
+          </div>
+          <div className="text-[var(--color-fg-muted)] text-sm mt-0.5">{fmtPrice(c.current_price)}</div>
+        </div>
+        <div className="flex items-start gap-2">
+          <div className="text-right">
+            <div className="text-xs text-[var(--color-fg-muted)]">{relativeTime(c.computed_at)}</div>
+          </div>
+          <button
+            onClick={handleRemove}
+            disabled={removing}
+            className="p-1 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors flex-shrink-0"
+            title="Remove from watchlist"
+          >
+            {removing ? <LoadingSpinner size="sm" /> : <Trash2 className="w-3.5 h-3.5" />}
+          </button>
+        </div>
+      </div>
+
+      <div className="space-y-2 mb-3">
+        <IndicatorBar label="RSI-14" value={c.rsi_14} min={0} max={100} danger="high" />
+        <IndicatorBar
+          label="Stoch RSI"
+          value={c.stoch_rsi != null ? c.stoch_rsi * 100 : undefined}
+          min={0} max={100} danger="high"
+          format={(v) => `${v.toFixed(0)}%`}
+        />
+        <IndicatorBar
+          label="BB Position"
+          value={c.bb_pct != null ? c.bb_pct * 100 : undefined}
+          min={0} max={100} danger="high"
+          format={(v) => `${v.toFixed(0)}%`}
+        />
+      </div>
+
+      <div className="flex items-center gap-1 mt-3 text-xs text-brand-500 font-medium">
+        View full analysis <ArrowRight className="w-3 h-3" />
+      </div>
+    </div>
+  )
+}
+
+function PendingCard({ ticker, onNavigate, onRemove }: { ticker: string; onNavigate: (t: string) => void; onRemove: (t: string) => void }) {
+  const [removing, setRemoving] = useState(false)
+
+  const handleRemove = async (e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (removing) return
+    setRemoving(true)
+    try {
+      await watchlistApi.remove(ticker)
+      onRemove(ticker)
+    } catch {
+      setRemoving(false)
+    }
+  }
+
+  return (
+    <div
+      className="card border-l-4 border-l-[var(--color-border)] flex items-center justify-between cursor-pointer hover:shadow-brand-sm transition-all duration-200"
+      onClick={() => onNavigate(ticker)}
+    >
+      <div className="flex items-center gap-3">
+        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-[var(--color-border)]/60">
+          <Clock className="w-4 h-4 text-[var(--color-fg-muted)]" />
+        </div>
+        <div>
+          <div className="font-bold text-[var(--color-fg)]" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
+            {ticker}
+          </div>
+          <div className="text-xs text-[var(--color-fg-muted)]">Awaiting data</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleRemove}
+          disabled={removing}
+          className="p-1 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors"
+          title="Remove from watchlist"
+        >
+          {removing ? <LoadingSpinner size="sm" /> : <Trash2 className="w-3.5 h-3.5" />}
+        </button>
+        <ArrowRight className="w-4 h-4 text-[var(--color-fg-muted)]" />
+      </div>
+    </div>
+  )
+}
+
 // ── Add ticker form ───────────────────────────────────────────────────────────
 
 interface AddTickerFormProps {
@@ -446,6 +565,8 @@ export default function AlphaRadarPage() {
       ...scan,
       entry_candidates: scan.entry_candidates.filter((c) => c.ticker !== ticker),
       exit_alerts: scan.exit_alerts.filter((c) => c.ticker !== ticker),
+      neutral_tickers: scan.neutral_tickers.filter((c) => c.ticker !== ticker),
+      unanalyzed_tickers: scan.unanalyzed_tickers.filter((t) => t !== ticker),
       scanned: scan.scanned - 1,
     })
   }
@@ -492,12 +613,12 @@ export default function AlphaRadarPage() {
 
         {/* ── Stats strip ── */}
         {scan && (
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-4 gap-3">
             <div className="card text-center">
               <div className="text-2xl font-bold text-[var(--color-fg)]" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
-                {scan.scanned}
+                {scan.scanned + scan.unanalyzed_tickers.length}
               </div>
-              <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">Tickers scanned</div>
+              <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">Watching</div>
             </div>
             <div className="card text-center">
               <div className="text-2xl font-bold text-green-500" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
@@ -510,6 +631,12 @@ export default function AlphaRadarPage() {
                 {scan.exit_alerts.length}
               </div>
               <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">Exit alerts</div>
+            </div>
+            <div className="card text-center">
+              <div className="text-2xl font-bold text-[var(--color-fg-muted)]" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
+                {scan.neutral_tickers.length}
+              </div>
+              <div className="text-xs text-[var(--color-fg-muted)] mt-0.5">Neutral</div>
             </div>
           </div>
         )}
@@ -618,6 +745,50 @@ export default function AlphaRadarPage() {
                 </div>
               )}
             </section>
+
+            {/* Neutral / Watching */}
+            {scan.neutral_tickers.length > 0 && (
+              <section>
+                <div className="flex items-center gap-2 mb-3">
+                  <h2 className="font-semibold text-[var(--color-fg)]" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
+                    Watching
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]">
+                    {scan.neutral_tickers.length}
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-fg-muted)] mb-3">
+                  These tickers have data but don't currently meet entry or exit thresholds.
+                </p>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  {scan.neutral_tickers.map(c => (
+                    <NeutralCard key={c.ticker} c={c} onNavigate={(t) => navigate(`/ticker/${t}`)} onRemove={handleRemove} />
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Unanalyzed / Pending */}
+            {scan.unanalyzed_tickers.length > 0 && (
+              <section>
+                <div className="flex items-center gap-2 mb-3">
+                  <h2 className="font-semibold text-[var(--color-fg)]" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
+                    Pending Analysis
+                  </h2>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]">
+                    {scan.unanalyzed_tickers.length}
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-fg-muted)] mb-3">
+                  No feature data yet — analysis is still running in the background.
+                </p>
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {scan.unanalyzed_tickers.map(ticker => (
+                    <PendingCard key={ticker} ticker={ticker} onNavigate={(t) => navigate(`/ticker/${t}`)} onRemove={handleRemove} />
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         )}
       </div>

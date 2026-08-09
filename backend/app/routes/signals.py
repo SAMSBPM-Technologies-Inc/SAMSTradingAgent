@@ -112,6 +112,9 @@ async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuy
 
     entries: list[DipBuyCandidate] = []
     exits: list[DipBuyCandidate] = []
+    neutrals: list[DipBuyCandidate] = []
+
+    analyzed_tickers: set[str] = set()
 
     for doc in docs:
         rsi       = doc.get("rsi_14")
@@ -123,10 +126,12 @@ async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuy
         if isinstance(computed, datetime) and computed.tzinfo is None:
             computed = computed.replace(tzinfo=timezone.utc)
 
+        ticker = doc["ticker"]
+        analyzed_tickers.add(ticker)
         pct_from_ma20 = round((price - ma20) / ma20 * 100, 2) if ma20 else None
 
         candidate_base = dict(
-            ticker=doc["ticker"],
+            ticker=ticker,
             current_price=price,
             rsi_14=rsi,
             stoch_rsi=stoch,
@@ -146,6 +151,7 @@ async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuy
         )
         if is_entry:
             entries.append(DipBuyCandidate(**candidate_base, trigger="ENTRY"))
+            continue
 
         # Exit alert: either condition fires
         is_exit = (
@@ -154,13 +160,31 @@ async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuy
         )
         if is_exit:
             exits.append(DipBuyCandidate(**candidate_base, trigger="EXIT_ALERT"))
+            continue
+
+        # Neutral — has data but doesn't meet entry or exit criteria
+        neutrals.append(DipBuyCandidate(**candidate_base, trigger="NEUTRAL"))
+
+    # Tickers in watchlist but with no feature document yet
+    unanalyzed = [t for t in tickers if t not in analyzed_tickers]
 
     # Most oversold first for entries; most overbought first for exits
     entries.sort(key=lambda c: (c.stoch_rsi or 1.0))
     exits.sort(key=lambda c: (c.rsi_14 or 0.0), reverse=True)
+    neutrals.sort(key=lambda c: c.ticker)
 
-    logger.info("dip_buy_scan_complete", scanned=len(docs), entries=len(entries), exits=len(exits))
-    return DipBuyScanResponse(entry_candidates=entries, exit_alerts=exits, scanned=len(docs))
+    logger.info(
+        "dip_buy_scan_complete",
+        scanned=len(docs), entries=len(entries), exits=len(exits),
+        neutral=len(neutrals), unanalyzed=len(unanalyzed),
+    )
+    return DipBuyScanResponse(
+        entry_candidates=entries,
+        exit_alerts=exits,
+        neutral_tickers=neutrals,
+        unanalyzed_tickers=unanalyzed,
+        scanned=len(docs),
+    )
 
 
 def _doc_to_response(doc: dict) -> AnalyzeResponse:

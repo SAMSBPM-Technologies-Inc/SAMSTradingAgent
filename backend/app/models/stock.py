@@ -228,4 +228,6 @@ class DipBuyScanResponse(BaseModel):
     """Response from GET /signals/dip-buy."""
     entry_candidates: list[DipBuyCandidate]  # ranked by stoch_rsi asc (most oversold first)
     exit_alerts: list[DipBuyCandidate]       # positions to consider taking profit on
+    neutral_tickers: list[DipBuyCandidate] = []   # watched tickers with data but no signal
+    unanalyzed_tickers: list[str] = []            # watched tickers with no feature data yet
     scanned: int                             # total watched tickers evaluated
