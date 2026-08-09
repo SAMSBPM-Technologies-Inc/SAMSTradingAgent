@@ -1,3 +1,4 @@
+import { jsPDF } from 'jspdf'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -354,6 +355,146 @@ function emailReport(data: AnalyzeResponse) {
   window.location.href = `mailto:?subject=${subject}&body=${body}`
 }
 
+function downloadPdf(data: AnalyzeResponse) {
+  const doc = new jsPDF({ unit: 'pt', format: 'letter' })
+  const margin = 48
+  const pageW = doc.internal.pageSize.getWidth()
+  const contentW = pageW - margin * 2
+  let y = margin
+
+  const brand = [242, 96, 12] as const  // #f2600c
+
+  const addPage = () => {
+    doc.addPage()
+    y = margin
+  }
+
+  const checkY = (needed = 20) => {
+    if (y + needed > doc.internal.pageSize.getHeight() - margin) addPage()
+  }
+
+  const heading = (text: string, size = 10) => {
+    checkY(20)
+    doc.setFontSize(size)
+    doc.setTextColor(...brand)
+    doc.setFont('helvetica', 'bold')
+    doc.text(text.toUpperCase(), margin, y)
+    y += size + 4
+    doc.setTextColor(30, 30, 30)
+  }
+
+  const body = (text: string, size = 9) => {
+    doc.setFontSize(size)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(60, 60, 60)
+    const lines = doc.splitTextToSize(text, contentW) as string[]
+    lines.forEach((line: string) => {
+      checkY(size + 3)
+      doc.text(line, margin, y)
+      y += size + 3
+    })
+  }
+
+  const divider = () => {
+    checkY(12)
+    doc.setDrawColor(220, 220, 220)
+    doc.line(margin, y, pageW - margin, y)
+    y += 10
+  }
+
+  const gap = (n = 12) => { y += n }
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  doc.setFontSize(28)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(...brand)
+  doc.text(data.ticker, margin, y)
+
+  if (data.current_price != null) {
+    doc.setFontSize(14)
+    doc.setTextColor(30, 30, 30)
+    const priceStr = `$${data.current_price.toFixed(2)}${data.day_change_pct != null ? `  ${data.day_change_pct >= 0 ? '+' : ''}${data.day_change_pct.toFixed(2)}%` : ''}`
+    doc.text(priceStr, margin, y + 22)
+  }
+
+  // Signal pill (right-aligned)
+  const signalColor: Record<string, [number, number, number]> = {
+    BUY: [34, 197, 94], SELL: [239, 68, 68], HOLD: [234, 179, 8],
+  }
+  const sc = signalColor[data.signal] ?? ([100, 100, 100] as [number, number, number])
+  doc.setFillColor(...sc)
+  doc.roundedRect(pageW - margin - 56, y - 16, 56, 22, 4, 4, 'F')
+  doc.setFontSize(11)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(255, 255, 255)
+  doc.text(data.signal, pageW - margin - 28, y - 1, { align: 'center' })
+
+  y += 40
+  divider()
+
+  // ── Key metrics ───────────────────────────────────────────────────────────
+  const score = Math.round(data.score * 100)
+  const conf  = Math.round(data.confidence * 100)
+  const metrics = [
+    ['Score', `${score}/100`],
+    ['Confidence', `${conf}%`],
+    data.conviction ? ['Conviction', data.conviction] : null,
+    data.price_target ? ['Price Target', `$${data.price_target.toFixed(2)}`] : null,
+    data.stop_loss    ? ['Stop Loss',    `$${data.stop_loss.toFixed(2)}`]    : null,
+    data.time_horizon ? ['Time Horizon', data.time_horizon]                  : null,
+  ].filter(Boolean) as [string, string][]
+
+  const colW = contentW / 3
+  metrics.forEach(([label, value], i) => {
+    const col = i % 3
+    const row = Math.floor(i / 3)
+    const cx = margin + col * colW
+    const cy = y + row * 36
+    doc.setFontSize(7)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(120, 120, 120)
+    doc.text(label.toUpperCase(), cx, cy)
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(30, 30, 30)
+    doc.text(value, cx, cy + 13)
+  })
+
+  y += Math.ceil(metrics.length / 3) * 36 + 4
+  divider()
+
+  // ── Sections ──────────────────────────────────────────────────────────────
+  const section = (label: string, text?: string | null, items?: string[] | null) => {
+    if (!text && !items?.length) return
+    heading(label)
+    if (text) body(text)
+    if (items?.length) items.forEach((s) => body(`• ${s}`))
+    gap(10)
+  }
+
+  section('Investment Thesis', data.thesis)
+  section('Analyst Note', data.analyst_note)
+  section('Bull Case', data.bull_case)
+  section('Bear Case', data.bear_case)
+  section('Catalysts', null, data.catalysts)
+  section('Key Risks', null, data.key_risks)
+  section('Entry', data.entry_suggestion)
+  section('Exit', data.exit_suggestion)
+  section('Explanation', data.explanation)
+
+  // ── Footer ────────────────────────────────────────────────────────────────
+  divider()
+  doc.setFontSize(7)
+  doc.setFont('helvetica', 'italic')
+  doc.setTextColor(160, 160, 160)
+  doc.text(
+    `Generated ${new Date(data.generated_at).toLocaleString()}  ·  SAMSTradingAgent  ·  For informational purposes only, not financial advice.`,
+    margin, y,
+  )
+
+  doc.save(`${data.ticker}-analysis-${new Date().toISOString().slice(0, 10)}.pdf`)
+}
+
 function ExportMenu({ data }: { data: AnalyzeResponse }) {
   const [open, setOpen] = useState(false)
   return (
@@ -370,6 +511,13 @@ function ExportMenu({ data }: { data: AnalyzeResponse }) {
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-1 z-20 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden" style={{ borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
+            <button
+              onClick={() => { downloadPdf(data); setOpen(false) }}
+              className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-[var(--color-fg)] hover:bg-[var(--color-bg)] transition-colors"
+            >
+              <Download className="w-3.5 h-3.5 text-[var(--color-fg-muted)]" />
+              Download PDF
+            </button>
             <button
               onClick={() => { downloadTxt(data); setOpen(false) }}
               className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-[var(--color-fg)] hover:bg-[var(--color-bg)] transition-colors"

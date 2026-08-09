@@ -9,14 +9,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@hookform/resolvers": "^3.9.0",
+    "axios": "^1.7.2",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.427.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.0",
-    "axios": "^1.7.2",
-    "lucide-react": "^0.427.0",
     "react-hook-form": "^7.52.1",
-    "zod": "^3.23.8",
-    "@hookform/resolvers": "^3.9.0"
+    "react-router-dom": "^6.26.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",
