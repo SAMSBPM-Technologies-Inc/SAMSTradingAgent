@@ -23,6 +23,9 @@ jobs:
             cd /opt/trading-agent
             git pull origin main
             cd backend
-            docker compose -f docker-compose.prod.yml --env-file .env.production build
+            DOCKER_BUILDKIT=1 docker compose -f docker-compose.prod.yml --env-file .env.production build --no-cache
             docker compose -f docker-compose.prod.yml --env-file .env.production down --remove-orphans || true
             docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+            sleep 15
+            docker compose -f docker-compose.prod.yml --env-file .env.production ps
+            docker compose -f docker-compose.prod.yml --env-file .env.production logs --tail=20 api
