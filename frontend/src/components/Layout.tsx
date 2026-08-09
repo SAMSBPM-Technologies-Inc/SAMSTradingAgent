@@ -183,6 +183,23 @@ export default function Layout({ children }: LayoutProps) {
         {children}
       </main>
 
+      {/* Footer */}
+      <footer className="hidden md:block border-t border-[var(--color-border)] bg-[var(--color-surface)] transition-colors duration-200">
+        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+          <p className="text-xs text-[var(--color-fg-muted)]">
+            © {new Date().getFullYear()} SAMSBPM Technologies Inc. All rights reserved.
+          </p>
+          <a
+            href="https://samsbpmtechnologies.ca"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-[var(--color-fg-muted)] hover:text-brand-500 transition-colors"
+          >
+            Built by SAMSBPM Technologies Inc
+          </a>
+        </div>
+      </footer>
+
       <MobileBottomBar />
     </div>
   )
