@@ -48,3 +48,8 @@ docker-compose.override.yml
 htmlcov/
 frontend/node_modules
 frontend/dist
+
+# Developer docs & planning — not needed for the live application
+docs/
+PLAN.md
+logo-assets/

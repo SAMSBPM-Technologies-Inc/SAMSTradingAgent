@@ -1,4 +1,3 @@
-import { jsPDF } from 'jspdf'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -355,7 +354,8 @@ function emailReport(data: AnalyzeResponse) {
   window.location.href = `mailto:?subject=${subject}&body=${body}`
 }
 
-function downloadPdf(data: AnalyzeResponse) {
+async function downloadPdf(data: AnalyzeResponse) {
+  const { jsPDF } = await import('jspdf')
   const doc = new jsPDF({ unit: 'pt', format: 'letter' })
   const margin = 48
   const pageW = doc.internal.pageSize.getWidth()

@@ -1,10 +1,39 @@
-.env
+# Git
+.git/
+.gitignore
+
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 *.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+*.env
+
+# Tests & coverage
 .pytest_cache/
 .mypy_cache/
-.git/
+.coverage
+htmlcov/
+tests/
+
+# Training scripts — not needed at runtime
+scripts/
+
+# Docs & planning
 *.md
+
+# macOS
+.DS_Store
+
+# Leftover artefacts
 model/.gitkeep
