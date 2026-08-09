@@ -27,6 +27,9 @@ logger = get_logger(__name__)
 
 _ib = None          # ib_insync.IB instance (lazy-loaded)
 _connected = False
+_last_host: str = "127.0.0.1"
+_last_port: int = 4002
+_last_client_id: int = 1
 
 
 def _get_ib():
@@ -42,21 +45,40 @@ def _get_ib():
     return _ib
 
 
-async def connect(host: str = "127.0.0.1", port: int = 7497, client_id: int = 1) -> bool:
+async def _ensure_connected() -> bool:
     """
-    Connect to IB Gateway / TWS. Returns True on success.
-    Port 7497 = paper trading, 7496 = live trading.
-    Safe to call multiple times — no-op if already connected.
+    Verify the connection is alive; attempt reconnect using last known address
+    if disconnected. This handles IB Gateway restarts gracefully.
     """
     global _connected
     ib = _get_ib()
     if ib is None:
         return False
     if ib.isConnected():
+        return True
+    # Gateway may have restarted — try reconnecting transparently
+    logger.info("ibkr_reconnecting", host=_last_host, port=_last_port)
+    return await connect(_last_host, _last_port, _last_client_id)
+
+
+async def connect(host: str = "127.0.0.1", port: int = 4002, client_id: int = 1) -> bool:
+    """
+    Connect to IB Gateway / TWS. Returns True on success.
+    Port 4002 = paper trading (Docker), 4001 = live (Docker).
+    Port 7497 = paper trading (local TWS), 7496 = live (local TWS).
+    Safe to call multiple times — no-op if already connected.
+    """
+    global _connected, _last_host, _last_port, _last_client_id
+    ib = _get_ib()
+    if ib is None:
+        return False
+    if ib.isConnected():
         _connected = True
         return True
+    # Save for reconnect attempts
+    _last_host, _last_port, _last_client_id = host, port, client_id
     try:
-        await ib.connectAsync(host, port, clientId=client_id, timeout=5)
+        await ib.connectAsync(host, port, clientId=client_id, timeout=10)
         _connected = True
         logger.info("ibkr_connected", host=host, port=port, client_id=client_id)
         return True
@@ -96,11 +118,11 @@ async def place_limit_order(
     NOTE: Only US-listed securities (USD, SMART routing) are supported.
     Canadian-listed securities must not be passed here (CIRO restriction).
     """
-    ib = _get_ib()
-    if ib is None or not ib.isConnected():
+    if not await _ensure_connected():
         logger.error("ibkr_not_connected", ticker=ticker, action=action)
         return None
 
+    ib = _get_ib()
     try:
         from ib_insync import Stock, LimitOrder
         contract = Stock(ticker, exchange, currency)
@@ -147,11 +169,11 @@ async def get_account_summary() -> dict:
     Returns dict with: net_liquidation, total_cash, unrealized_pnl,
                        realized_pnl, buying_power, connected.
     """
-    ib = _get_ib()
-    if ib is None or not ib.isConnected():
+    if not await _ensure_connected():
         return {"connected": False, "net_liquidation": 0.0, "total_cash": 0.0,
                 "unrealized_pnl": 0.0, "realized_pnl": 0.0, "buying_power": 0.0}
 
+    ib = _get_ib()
     try:
         summary = ib.accountSummary()
         values: dict = {}

@@ -1,4 +1,41 @@
 services:
+  # ── Interactive Brokers Gateway (headless) ──────────────────────────────────
+  # Runs IB Gateway in a Docker container using IBC for automatic login.
+  # Paper trading port 4002 is exposed only on the internal network.
+  # Credentials: set IB_USERNAME and IB_PASSWORD in .env.production
+  # IBKR paper credentials are separate from live — log into Client Portal,
+  # go to Settings → Paper Trading → Paper Account credentials.
+  ibgateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: trading_ibgateway
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      - TWS_USERID=${IB_USERNAME}
+      - TWS_PASSWORD=${IB_PASSWORD}
+      - TRADING_MODE=${IB_TRADING_MODE:-paper}
+      - TWS_PORT=${IBKR_PORT:-4002}
+      - VNC_SERVER_PASSWORD=${IB_VNC_PASSWORD:-samsbpm-vnc}
+      - READ_ONLY_API=false
+      - BYPASS_WARNING=true
+    volumes:
+      - ibgateway_settings:/home/ibgateway/Jts    # persists IB Gateway preferences
+      - ibgateway_logs:/home/ibgateway/IBController/Logs
+    # Only expose API port on the internal network — never to the host
+    expose:
+      - "4001"   # live trading API (used when IB_TRADING_MODE=live)
+      - "4002"   # paper trading API (used when IB_TRADING_MODE=paper)
+    healthcheck:
+      # Check the API port is accepting connections (IB Gateway takes ~90s to boot)
+      test: ["CMD-SHELL", "nc -z localhost ${IBKR_PORT:-4002} || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 15
+      start_period: 90s
+    networks:
+      - internal
+
   api:
     build:
       context: .
@@ -13,6 +50,10 @@ services:
     environment:
       - APP_ENV=production
       - LOG_LEVEL=INFO
+      # Point IBKR client to the ibgateway container on the internal network.
+      # These override any values in .env.production for Docker deployments.
+      - IBKR_HOST=ibgateway
+      - IBKR_PORT=${IBKR_PORT:-4002}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -40,4 +81,8 @@ services:
 networks:
   internal:
     driver: bridge
+
+volumes:
+  ibgateway_settings:    # IB Gateway preferences — survives container restarts
+  ibgateway_logs:
 
