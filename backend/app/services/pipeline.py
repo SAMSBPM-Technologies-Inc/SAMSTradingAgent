@@ -7,11 +7,30 @@ When ENABLE_AI_ANALYST=true and ANTHROPIC_API_KEY is set, the AI analyst
 produces the signal. Otherwise (or on failure) falls back to the rule-based
 signal_generator.
 
+AI Analyst Caching
+──────────────────
+Claude is expensive (~$0.10-0.15 per call with Opus + extended thinking).
+Running it every 5-minute cycle for every ticker is unnecessary — market
+conditions meaningful enough to change a signal don't shift that fast.
+
+Claude is re-called only when one of these triggers fires:
+  1. No existing AI signal for this ticker yet
+  2. Last analysis is older than ANALYST_CACHE_MINUTES (default: 60 min)
+  3. Price has moved >= ANALYST_PRICE_CHANGE_PCT since last analysis (default: 3%)
+  4. Composite score has shifted >= ANALYST_SCORE_CHANGE_THRESHOLD (default: 0.12)
+  5. VIX >= ANALYST_VIX_SPIKE_THRESHOLD (default: 30) — re-evaluate all tickers in fear regime
+
+Otherwise the existing signal is kept and only the live price fields are refreshed.
+This reduces Claude calls by ~90% at steady state (60-ticker watchlist → 1 call/hr
+per ticker vs 12 calls/hr = ~$180/day vs ~$2,160/day).
+
 Every pipeline run upserts a record to stocks_signal_history keyed on
 (ticker, hour_bucket) to prevent duplicates within the same hour.
 """
+from datetime import datetime, timezone
+
 from app.config import get_settings
-from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
+from app.db import COLL_FEATURES, COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
 from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
@@ -49,6 +68,26 @@ async def run_pipeline(ticker: str) -> dict:
 
     if settings.enable_ai_analyst and settings.anthropic_api_key:
         from app.services.analyst import run_analysis
+
+        # Check whether market conditions warrant a fresh Claude call or if
+        # the cached signal is still valid.
+        feat_doc = await db[COLL_FEATURES].find_one({"ticker": ticker}) or {}
+        needs_refresh, cache_reason = await _needs_analyst_refresh(ticker, raw_doc, feat_doc)
+
+        if not needs_refresh:
+            # Serve cached signal — just refresh live price on the existing doc.
+            existing = await db[COLL_SIGNALS].find_one({"ticker": ticker})
+            if existing:
+                await db[COLL_SIGNALS].update_one(
+                    {"ticker": ticker},
+                    {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
+                )
+                existing["current_price"] = current_price
+                existing["day_change_pct"] = day_change_pct
+                logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst_cached",
+                            signal=existing.get("signal"), cache_reason=cache_reason)
+                return existing
+
         try:
             signal = await run_analysis(ticker)
             if signal:
@@ -62,7 +101,8 @@ async def run_pipeline(ticker: str) -> dict:
                     {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
                 )
                 await _append_history(signal, raw_doc)
-                logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst", signal=signal.get("signal"))
+                logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst",
+                            signal=signal.get("signal"), cache_reason=cache_reason)
                 await _fire_alerts(ticker, prev_signal, signal)
                 await _execute_trades(ticker, signal)
                 return signal
@@ -100,6 +140,67 @@ async def run_pipeline_all(tickers: list[str]) -> dict[str, str]:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _needs_analyst_refresh(ticker: str, raw_doc: dict, feat_doc: dict) -> tuple[bool, str]:
+    """
+    Decide whether to call Claude or serve the cached signal.
+    Returns (should_refresh, reason_string).
+
+    Triggers a refresh when ANY of:
+      1. No existing AI-analyst signal
+      2. Signal older than analyst_cache_minutes
+      3. Price moved >= analyst_price_change_pct since last analysis
+      4. Composite score shifted >= analyst_score_change_threshold
+      5. VIX >= analyst_vix_spike_threshold (fear regime — re-evaluate everything)
+    """
+    settings = get_settings()
+    db = await get_db()
+
+    existing = await db[COLL_SIGNALS].find_one(
+        {"ticker": ticker},
+        {"generated_at": 1, "current_price": 1, "score": 1, "analyst_used": 1},
+    )
+
+    # Trigger 1 — no existing signal or not from AI analyst
+    if not existing or not existing.get("analyst_used"):
+        return True, "no_ai_signal"
+
+    last_ts = existing.get("generated_at")
+    if not last_ts:
+        return True, "no_timestamp"
+
+    # Normalise timezone
+    if isinstance(last_ts, datetime) and last_ts.tzinfo is None:
+        last_ts = last_ts.replace(tzinfo=timezone.utc)
+
+    age_minutes = (utcnow() - last_ts).total_seconds() / 60
+
+    # Trigger 2 — signal is stale
+    if age_minutes >= settings.analyst_cache_minutes:
+        return True, f"stale_{age_minutes:.0f}min"
+
+    # Trigger 3 — significant price move since last analysis
+    last_price = existing.get("current_price") or 0.0
+    current_price = raw_doc.get("current_price") or 0.0
+    if last_price > 0 and current_price > 0:
+        price_move = abs(current_price - last_price) / last_price
+        if price_move >= settings.analyst_price_change_pct:
+            return True, f"price_move_{price_move:.1%}"
+
+    # Trigger 4 — composite score has shifted materially
+    last_score = existing.get("score") or 0.5
+    current_score = feat_doc.get("composite_score") or 0.5
+    score_shift = abs(current_score - last_score)
+    if score_shift >= settings.analyst_score_change_threshold:
+        return True, f"score_shift_{score_shift:.2f}"
+
+    # Trigger 5 — VIX spike (fear regime)
+    vix = (raw_doc.get("macro") or {}).get("vix") or 0.0
+    if vix >= settings.analyst_vix_spike_threshold:
+        return True, f"vix_spike_{vix:.1f}"
+
+    return False, f"cached_{age_minutes:.0f}min_old"
+
 
 def _build_data_sources(raw_doc: dict) -> dict:
     """Extract provenance from raw_doc — indicates which sources were real vs. fallback."""

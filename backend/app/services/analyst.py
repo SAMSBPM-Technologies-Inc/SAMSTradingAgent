@@ -36,8 +36,13 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_MODEL = "claude-sonnet-4-6"
-_MAX_TOKENS = 1500
+# ── Model config ───────────────────────────────────────────────────────────────
+# claude-opus-4-6: 23-pt improvement on Anthropic's Real-World Finance benchmark
+# vs Sonnet 4.5; use Opus for highest signal quality, Sonnet for lower cost.
+_MODEL = "claude-opus-4-6"
+_MAX_TOKENS = 16000          # must be high when extended thinking is on
+_THINKING_BUDGET = 8000      # tokens Claude uses to reason before answering
+_ANSWER_TOKENS = 2000        # tokens reserved for the final JSON answer
 
 _SYSTEM_PROMPT = """\
 You are a senior equity research analyst with 20 years of experience across multiple market cycles.
@@ -52,6 +57,7 @@ Rules:
 - key_risks and catalysts: 2-4 items each, specific to this ticker and the current data
 - Signal must be exactly one of: BUY, SELL, HOLD
 - Conviction must be exactly one of: HIGH, MEDIUM, LOW
+- When technicals and fundamentals conflict, reason through the dominant driver before deciding
 """
 
 _RESPONSE_SCHEMA = """\
@@ -94,7 +100,12 @@ async def run_analysis(ticker: str) -> Optional[dict]:
     context = _build_context(ticker, feat, raw, risk)
 
     try:
-        analyst_output = await _call_claude(context, settings.anthropic_api_key)
+        analyst_output = await _call_claude(
+            context,
+            settings.anthropic_api_key,
+            model=settings.analyst_model,
+            extended_thinking=settings.analyst_extended_thinking,
+        )
     except Exception as exc:
         logger.warning("analyst_claude_failed", ticker=ticker, error=str(exc))
         return None
@@ -259,18 +270,51 @@ Respond with this exact JSON schema (no markdown, no extra text):
 
 # ── Claude API call ────────────────────────────────────────────────────────────
 
-async def _call_claude(context: str, api_key: str) -> dict:
+async def _call_claude(
+    context: str,
+    api_key: str,
+    model: str = _MODEL,
+    extended_thinking: bool = True,
+) -> dict:
     import anthropic
 
     client = anthropic.AsyncAnthropic(api_key=api_key)
-    message = await client.messages.create(
-        model=_MODEL,
-        max_tokens=_MAX_TOKENS,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": context}],
-    )
 
-    raw_text = message.content[0].text.strip()
+    # Prompt caching: system prompt is marked ephemeral — subsequent calls within
+    # the 5-minute cache window cost ~10% of normal input token price.
+    system = [
+        {
+            "type": "text",
+            "text": _SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    kwargs: dict = {
+        "model": model,
+        "system": system,
+        "messages": [{"role": "user", "content": context}],
+    }
+
+    if extended_thinking:
+        # Extended thinking: Claude reasons through conflicting signals before answering.
+        # Requires max_tokens > thinking budget. Temperature must be 1 (default).
+        kwargs["max_tokens"] = _THINKING_BUDGET + _ANSWER_TOKENS
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": _THINKING_BUDGET}
+    else:
+        kwargs["max_tokens"] = _ANSWER_TOKENS
+
+    message = await client.messages.create(**kwargs)
+
+    # Extended thinking returns multiple content blocks; extract the text block
+    raw_text = ""
+    for block in message.content:
+        if block.type == "text":
+            raw_text = block.text.strip()
+            break
+
+    if not raw_text:
+        raise ValueError("No text block in Claude response")
 
     # Strip markdown fences if model adds them despite instructions
     raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
@@ -290,6 +334,16 @@ async def _call_claude(context: str, api_key: str) -> dict:
         parsed["signal"] = "HOLD"
     if parsed["conviction"] not in ("HIGH", "MEDIUM", "LOW"):
         parsed["conviction"] = "LOW"
+
+    # Log cache and thinking usage for cost monitoring
+    usage = message.usage
+    logger.info(
+        "analyst_claude_usage",
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read=getattr(usage, "cache_read_input_tokens", 0),
+        cache_created=getattr(usage, "cache_creation_input_tokens", 0),
+    )
 
     return parsed
 

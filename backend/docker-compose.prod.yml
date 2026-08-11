@@ -1,10 +1,8 @@
 services:
   # ── Interactive Brokers Gateway (headless) ──────────────────────────────────
   # Runs IB Gateway in a Docker container using IBC for automatic login.
-  # Paper trading port 4002 is exposed only on the internal network.
-  # Credentials: set IB_USERNAME and IB_PASSWORD in .env.production
-  # IBKR paper credentials are separate from live — log into Client Portal,
-  # go to Settings → Paper Trading → Paper Account credentials.
+  # Live trading port 4001 is exposed only on the internal network.
+  # Credentials: set TWS_USERID, TWS_PASSWORD, TRADING_MODE in .env.production
   ibgateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     container_name: trading_ibgateway
@@ -12,11 +10,6 @@ services:
     env_file:
       - .env.production
     environment:
-      - TWS_USERID=${IB_USERNAME}
-      - TWS_PASSWORD=${IB_PASSWORD}
-      - TRADING_MODE=${IB_TRADING_MODE:-paper}
-      - TWS_PORT=${IBKR_PORT:-4002}
-      - VNC_SERVER_PASSWORD=${IB_VNC_PASSWORD:-samsbpm-vnc}
       - READ_ONLY_API=false
       - BYPASS_WARNING=true
     volumes:

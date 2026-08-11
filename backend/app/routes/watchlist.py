@@ -3,6 +3,7 @@ GET    /watchlist       — current user's tickers ranked by conviction → scor
 POST   /ticker          — add ticker to the user's watch list
 DELETE /ticker/{ticker} — remove ticker from the user's watch list
 """
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -33,13 +34,14 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
     if not tickers:
         return WatchlistResponse(count=0, items=[])
 
-    docs = await db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000)
-
-    # Build price lookup from stocks_raw (always current, independent of signal cache age)
-    raw_docs = await db[COLL_RAW].find(
-        {"ticker": {"$in": tickers}},
-        {"ticker": 1, "current_price": 1, "day_change_pct": 1},
-    ).to_list(length=2000)
+    # Run signals + raw price queries in parallel — both depend only on tickers list
+    docs, raw_docs = await asyncio.gather(
+        db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
+        db[COLL_RAW].find(
+            {"ticker": {"$in": tickers}},
+            {"ticker": 1, "current_price": 1, "day_change_pct": 1},
+        ).to_list(length=2000),
+    )
     raw_by_ticker = {r["ticker"]: r for r in raw_docs}
 
     items = []

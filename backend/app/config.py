@@ -70,6 +70,21 @@ class Settings(BaseSettings):
     enable_ml_model: bool = Field(default=False)
     enable_backtesting: bool = Field(default=False)
     enable_ai_analyst: bool = Field(default=False, description="Use Claude AI analyst instead of rule-based signal")
+    # Claude model for AI analyst. Opus 4.6 scores 23pts higher on Anthropic's
+    # Real-World Finance benchmark; Sonnet 4.6 is ~5x cheaper per token.
+    analyst_model: str = Field(default="claude-opus-4-6", description="Claude model for AI analyst")
+    # Extended thinking lets Claude reason through conflicting signals before answering.
+    # Adds ~3-8s per analysis but produces better calibrated signals.
+    analyst_extended_thinking: bool = Field(default=True, description="Enable Claude extended thinking for AI analyst")
+    # Analysis caching — Claude is only re-called when one of these triggers fires:
+    #   1. Last analysis is older than analyst_cache_minutes
+    #   2. Price has moved >= analyst_price_change_pct since last analysis
+    #   3. Composite score has shifted >= analyst_score_change_threshold
+    #   4. VIX is >= analyst_vix_spike_threshold (fear spike → re-evaluate everything)
+    analyst_cache_minutes: int = Field(default=60, description="Minutes before Claude re-analyzes a ticker unconditionally")
+    analyst_price_change_pct: float = Field(default=0.03, description="Price move threshold (fraction) that triggers re-analysis")
+    analyst_score_change_threshold: float = Field(default=0.12, description="Composite score shift that triggers re-analysis")
+    analyst_vix_spike_threshold: float = Field(default=30.0, description="VIX level that forces re-analysis of all tickers")
 
     # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────
     weight_technical:    float = Field(default=0.25)
