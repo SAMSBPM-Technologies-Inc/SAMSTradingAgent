@@ -12,84 +12,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # ── Step 1: Write .env.production from GitHub Secrets + Variables ──────
-      # Secrets (sensitive)  → Settings → Secrets and variables → Secrets
-      # Variables (config)   → Settings → Secrets and variables → Variables
-      - name: Write .env.production on server
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.HETZNER_HOST }}
-          username: ${{ secrets.HETZNER_USER }}
-          key: ${{ secrets.HETZNER_SSH_KEY }}
-          command_timeout: 5m
-          script: |
-            mkdir -p /opt/trading-agent/backend
-            cat > /opt/trading-agent/backend/.env.production << 'ENVEOF'
-            # ── MongoDB ──────────────────────────────────────────────────────
-            MONGODB_URL=${{ secrets.MONGODB_URL }}
-            MONGODB_DB_NAME=${{ vars.MONGODB_DB_NAME }}
-
-            # ── Cloudflare Tunnel ─────────────────────────────────────────────
-            CLOUDFLARE_TUNNEL_TOKEN=${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
-
-            # ── API Keys ──────────────────────────────────────────────────────
-            FINNHUB_API_KEY=${{ secrets.FINNHUB_API_KEY }}
-            FRED_API_KEY=${{ secrets.FRED_API_KEY }}
-            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
-
-            # ── Auth ──────────────────────────────────────────────────────────
-            JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
-
-            # ── App ───────────────────────────────────────────────────────────
-            APP_ENV=${{ vars.APP_ENV }}
-            LOG_LEVEL=${{ vars.LOG_LEVEL }}
-            INGESTION_INTERVAL_MINUTES=${{ vars.INGESTION_INTERVAL_MINUTES }}
-
-            # ── Tickers ───────────────────────────────────────────────────────
-            DEFAULT_TICKERS=${{ vars.DEFAULT_TICKERS }}
-
-            # ── CORS ──────────────────────────────────────────────────────────
-            CORS_ORIGINS=${{ vars.CORS_ORIGINS }}
-
-            # ── IB Gateway ───────────────────────────────────────────────────
-            TWS_USERID=${{ secrets.TWS_USERID }}
-            TWS_PASSWORD=${{ secrets.TWS_PASSWORD }}
-            TRADING_MODE=${{ vars.TRADING_MODE }}
-            TWS_PORT=${{ vars.TWS_PORT }}
-            IBKR_PORT=${{ vars.IBKR_PORT }}
-            VNC_SERVER_PASSWORD=${{ secrets.VNC_SERVER_PASSWORD }}
-
-            # ── Automated Trading ─────────────────────────────────────────────
-            AUTO_TRADE_ENABLED=${{ vars.AUTO_TRADE_ENABLED }}
-            AUTO_TRADE_LIVE_ALLOWED=${{ vars.AUTO_TRADE_LIVE_ALLOWED }}
-
-            # ── Feature flags ─────────────────────────────────────────────────
-            ENABLE_AI_ANALYST=${{ vars.ENABLE_AI_ANALYST }}
-            ENABLE_ML_MODEL=${{ vars.ENABLE_ML_MODEL }}
-            ENABLE_BACKTESTING=${{ vars.ENABLE_BACKTESTING }}
-
-            # ── AI Analyst — model + extended thinking ────────────────────────
-            ANALYST_MODEL=${{ vars.ANALYST_MODEL }}
-            ANALYST_EXTENDED_THINKING=${{ vars.ANALYST_EXTENDED_THINKING }}
-
-            # ── AI Analyst — caching thresholds ──────────────────────────────
-            ANALYST_CACHE_MINUTES=${{ vars.ANALYST_CACHE_MINUTES }}
-            ANALYST_PRICE_CHANGE_PCT=${{ vars.ANALYST_PRICE_CHANGE_PCT }}
-            ANALYST_SCORE_CHANGE_THRESHOLD=${{ vars.ANALYST_SCORE_CHANGE_THRESHOLD }}
-            ANALYST_VIX_SPIKE_THRESHOLD=${{ vars.ANALYST_VIX_SPIKE_THRESHOLD }}
-
-            # ── Scoring weights ───────────────────────────────────────────────
-            WEIGHT_TECHNICAL=${{ vars.WEIGHT_TECHNICAL }}
-            WEIGHT_FUNDAMENTAL=${{ vars.WEIGHT_FUNDAMENTAL }}
-            WEIGHT_SENTIMENT=${{ vars.WEIGHT_SENTIMENT }}
-            WEIGHT_MACRO=${{ vars.WEIGHT_MACRO }}
-            WEIGHT_VOLATILITY=${{ vars.WEIGHT_VOLATILITY }}
-            WEIGHT_CATALYST=${{ vars.WEIGHT_CATALYST }}
-            ENVEOF
-            chmod 600 /opt/trading-agent/backend/.env.production
-
-      # ── Step 2: Pull latest code and restart containers ───────────────────
-      - name: Deploy containers
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.HETZNER_HOST }}
@@ -101,6 +24,23 @@ jobs:
             cd /opt/trading-agent
             git pull origin main
             cd backend
+
+            # Append any new env vars that don't exist yet in .env.production.
+            # Safe to run on every deploy — grep -q skips lines already present.
+            ENV=/opt/trading-agent/backend/.env.production
+            append_if_missing() {
+              local key="$1" value="$2"
+              grep -q "^${key}=" "$ENV" || echo "${key}=${value}" >> "$ENV"
+            }
+            append_if_missing ANALYST_MODEL            claude-opus-4-6
+            append_if_missing ANALYST_EXTENDED_THINKING true
+            append_if_missing ANALYST_CACHE_MINUTES     60
+            append_if_missing ANALYST_PRICE_CHANGE_PCT  0.03
+            append_if_missing ANALYST_SCORE_CHANGE_THRESHOLD 0.12
+            append_if_missing ANALYST_VIX_SPIKE_THRESHOLD    30.0
+            append_if_missing AUTO_TRADE_ENABLED         false
+            append_if_missing AUTO_TRADE_LIVE_ALLOWED    false
+
             docker compose -f docker-compose.prod.yml --env-file .env.production build api
             docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api cloudflared
             sleep 15
