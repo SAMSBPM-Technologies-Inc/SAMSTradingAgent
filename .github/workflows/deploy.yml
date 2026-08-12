@@ -42,7 +42,19 @@ jobs:
             append_if_missing AUTO_TRADE_LIVE_ALLOWED    false
 
             docker compose -f docker-compose.prod.yml --env-file .env.production build api
-            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api cloudflared
-            sleep 15
+
+            # Start api alone first so we can capture its logs if it crashes
+            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api
+            sleep 25
+
+            # Always show api logs before checking health (helps diagnose crashes)
+            echo "=== api logs ==="
+            docker compose -f docker-compose.prod.yml --env-file .env.production logs --tail=50 api
+
+            # Verify api is running before starting cloudflared
+            docker compose -f docker-compose.prod.yml --env-file .env.production ps api
+            docker inspect --format='{{.State.Status}} {{.State.Health.Status}}' trading_agent_api
+
+            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps cloudflared
+            sleep 5
             docker compose -f docker-compose.prod.yml --env-file .env.production ps
-            docker compose -f docker-compose.prod.yml --env-file .env.production logs --tail=30 api
