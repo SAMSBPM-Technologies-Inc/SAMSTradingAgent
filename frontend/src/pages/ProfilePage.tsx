@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, User, Wifi, WifiOff, X } from 'lucide-react'
-import { alertsApi, authApi, tradingApi } from '../lib/api'
+import { AlertTriangle, Bell, Bot, Check, ExternalLink, Eye, EyeOff, Key, LogOut, Pencil, User, Wifi, WifiOff, X } from 'lucide-react'
+import { alertsApi, authApi, ibkrApi, tradingApi } from '../lib/api'
 import type { AlertSettings, AutoTradeSettings } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
@@ -197,6 +197,170 @@ function AlertSettingsCard() {
 
         {error && <p className="text-xs text-red-500">{error}</p>}
       </div>
+    </div>
+  )
+}
+
+// ── IBKR Credentials section ──────────────────────────────────────────────────
+
+function IbkrCredentialsCard() {
+  const [status, setStatus] = useState<{ has_credentials: boolean; ibkr_username: string | null }>({
+    has_credentials: false,
+    ibkr_username: null,
+  })
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isSaving, setIsSaving] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [savedOk, setSavedOk] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [isEditing, setIsEditing] = useState(false)
+
+  useEffect(() => {
+    ibkrApi.getStatus()
+      .then((res) => setStatus(res.data))
+      .catch(() => {})
+      .finally(() => setIsLoading(false))
+  }, [])
+
+  const save = async () => {
+    if (!username.trim() || !password.trim()) {
+      setError('Username and password are required.')
+      return
+    }
+    setIsSaving(true)
+    setError(null)
+    try {
+      const res = await ibkrApi.saveCredentials(username.trim(), password)
+      setStatus(res.data)
+      setIsEditing(false)
+      setPassword('')
+      setSavedOk(true)
+      setTimeout(() => setSavedOk(false), 2500)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? 'Failed to save credentials.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const remove = async () => {
+    if (!confirm('Remove stored IBKR credentials? Auto-trading will stop working until you re-enter them.')) return
+    setIsDeleting(true)
+    setError(null)
+    try {
+      await ibkrApi.deleteCredentials()
+      setStatus({ has_credentials: false, ibkr_username: null })
+      setUsername('')
+      setPassword('')
+    } catch {
+      setError('Failed to remove credentials.')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  if (isLoading) return (
+    <div className="card p-5 flex items-center justify-center h-32">
+      <LoadingSpinner size="sm" />
+    </div>
+  )
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-medium text-[var(--color-fg-muted)] mb-4 uppercase tracking-wide flex items-center gap-2">
+        <Key className="w-3.5 h-3.5" />
+        IBKR Credentials
+      </h3>
+
+      <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 text-blue-700 dark:text-blue-400 text-xs mb-4">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+        <span>
+          Encrypted at rest using AES-128 (Fernet). Never logged, never returned by the API.
+          Required for automated trade execution via IB Gateway.
+        </span>
+      </div>
+
+      {status.has_credentials && !isEditing ? (
+        <div className="flex flex-col gap-3">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-[var(--color-fg-muted)]">Username</span>
+            <span className="text-sm font-medium text-[var(--color-fg)]">{status.ibkr_username}</span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-[var(--color-fg-muted)]">Password</span>
+            <span className="text-sm font-medium text-[var(--color-fg)] tracking-widest">••••••••</span>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => { setUsername(status.ibkr_username ?? ''); setIsEditing(true) }}
+              className="btn-secondary flex-1 text-sm"
+            >
+              Update
+            </button>
+            <button
+              onClick={remove}
+              disabled={isDeleting}
+              className="btn-secondary flex-1 text-sm text-red-500 border-red-500/20 hover:bg-red-500/10"
+            >
+              {isDeleting ? <LoadingSpinner size="sm" /> : 'Remove'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-[var(--color-fg)]">IBKR Username</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Your IBKR login username"
+              className="input text-sm"
+              autoComplete="username"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-[var(--color-fg)]">IBKR Password</label>
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && save()}
+                placeholder="Your IBKR account password"
+                className="input text-sm pr-10"
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={save} disabled={isSaving} className="btn-primary flex-1">
+              {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
+              {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save'}
+            </button>
+            {isEditing && (
+              <button onClick={() => { setIsEditing(false); setPassword('') }} className="btn-secondary px-4">
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+      {savedOk && !error && <p className="text-xs text-green-500 mt-2">Credentials saved securely.</p>}
     </div>
   )
 }
@@ -584,6 +748,9 @@ export default function ProfilePage() {
 
         {/* Alert settings */}
         <AlertSettingsCard />
+
+        {/* IBKR credentials */}
+        <IbkrCredentialsCard />
 
         {/* Auto trading */}
         <AutoTradingCard />

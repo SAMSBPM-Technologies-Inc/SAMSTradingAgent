@@ -92,6 +92,15 @@ export const alertsApi = {
   sendTest: () => api.post<{ status: string; channels: string[] }>('/alerts/test'),
 }
 
+export const ibkrApi = {
+  getStatus: () =>
+    api.get<import('../types').IbkrStatusResponse>('/auth/me/ibkr/status'),
+  saveCredentials: (ibkr_username: string, ibkr_password: string) =>
+    api.put<import('../types').IbkrStatusResponse>('/auth/me/ibkr', { ibkr_username, ibkr_password }),
+  deleteCredentials: () =>
+    api.delete<{ status: string }>('/auth/me/ibkr'),
+}
+
 export const tradingApi = {
   getSettings: () => api.get<import('../types').AutoTradeSettingsResponse>('/trading/settings'),
   updateSettings: (data: import('../types').AutoTradeSettings) =>

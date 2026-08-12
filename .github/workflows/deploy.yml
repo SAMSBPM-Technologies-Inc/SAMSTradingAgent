@@ -16,11 +16,12 @@ jobs:
         uses: appleboy/ssh-action@v1.0.3
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY
           command_timeout: 30m
           script: |
             set -e
@@ -50,6 +51,7 @@ jobs:
               fi
             }
             inject_secret CLOUDFLARE_TUNNEL_TOKEN "$CLOUDFLARE_TUNNEL_TOKEN"
+            inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             set_if_missing_or_empty CORS_ORIGINS                   https://sta.samsbpm.com

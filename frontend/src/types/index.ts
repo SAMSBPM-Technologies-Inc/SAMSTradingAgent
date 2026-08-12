@@ -171,6 +171,11 @@ export interface AuthResponse {
   token_type: string
 }
 
+export interface IbkrStatusResponse {
+  has_credentials: boolean
+  ibkr_username: string | null
+}
+
 export interface DipBuyCandidate {
   ticker: string
   current_price: number

@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     def ticker_list(self) -> List[str]:
         return [t.strip().upper() for t in self.default_tickers.split(",") if t.strip()]
 
+    # ── Encryption ────────────────────────────────────────────────────────────
+    # Fernet symmetric key for encrypting IBKR credentials at rest.
+    # Generate with: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # NEVER rotate without first re-encrypting all existing ibkr_password_enc values.
+    encryption_key: str = Field(default="", description="Base64-encoded Fernet key for IBKR credential encryption")
+
     # ── Auth / JWT ────────────────────────────────────────────────────────────
     jwt_secret_key: str = Field(
         default="change-me-in-production",
