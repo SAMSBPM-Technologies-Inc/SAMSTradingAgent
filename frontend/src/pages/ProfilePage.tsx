@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Bell, Bot, Check, ExternalLink, Eye, EyeOff, Key, LogOut, Pencil, User, Wifi, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, Bell, Bot, Check, ExternalLink, Key, LogOut, Pencil, Server, User, Wifi, WifiOff, X } from 'lucide-react'
 import { alertsApi, authApi, ibkrApi, tradingApi } from '../lib/api'
 import type { AlertSettings, AutoTradeSettings } from '../types'
 import { useAuth } from '../lib/auth-context'
@@ -201,18 +201,18 @@ function AlertSettingsCard() {
   )
 }
 
-// ── IBKR Credentials section ──────────────────────────────────────────────────
+// ── IB Gateway Connection section ─────────────────────────────────────────────
 
 function IbkrCredentialsCard() {
-  const [status, setStatus] = useState<{ has_credentials: boolean; ibkr_username: string | null; ibkr_account_id: string | null }>({
+  const [status, setStatus] = useState<{ has_credentials: boolean; ibkr_host: string | null; ibkr_port: number | null; ibkr_account_id: string | null }>({
     has_credentials: false,
-    ibkr_username: null,
+    ibkr_host: null,
+    ibkr_port: null,
     ibkr_account_id: null,
   })
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
+  const [host, setHost] = useState('')
+  const [port, setPort] = useState('4003')
   const [accountId, setAccountId] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -228,40 +228,43 @@ function IbkrCredentialsCard() {
   }, [])
 
   const save = async () => {
-    if (!username.trim() || !password.trim()) {
-      setError('Username and password are required.')
+    if (!host.trim()) {
+      setError('IB Gateway host is required.')
+      return
+    }
+    const portNum = parseInt(port)
+    if (!portNum || portNum < 1 || portNum > 65535) {
+      setError('Port must be a number between 1 and 65535.')
       return
     }
     setIsSaving(true)
     setError(null)
     try {
-      const res = await ibkrApi.saveCredentials(username.trim(), password, accountId.trim())
+      const res = await ibkrApi.saveCredentials(host.trim(), portNum, accountId.trim() || undefined)
       setStatus(res.data)
       setIsEditing(false)
-      setPassword('')
-      setAccountId('')
       setSavedOk(true)
       setTimeout(() => setSavedOk(false), 2500)
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to save credentials.')
+      setError(msg ?? 'Failed to save connection details.')
     } finally {
       setIsSaving(false)
     }
   }
 
   const remove = async () => {
-    if (!confirm('Remove stored IBKR credentials? Auto-trading will stop working until you re-enter them.')) return
+    if (!confirm('Remove stored IB Gateway connection? Auto-trading will stop working until you re-enter the details.')) return
     setIsDeleting(true)
     setError(null)
     try {
       await ibkrApi.deleteCredentials()
-      setStatus({ has_credentials: false, ibkr_username: null, ibkr_account_id: null })
-      setUsername('')
-      setPassword('')
+      setStatus({ has_credentials: false, ibkr_host: null, ibkr_port: null, ibkr_account_id: null })
+      setHost('')
+      setPort('4003')
       setAccountId('')
     } catch {
-      setError('Failed to remove credentials.')
+      setError('Failed to remove connection details.')
     } finally {
       setIsDeleting(false)
     }
@@ -277,26 +280,27 @@ function IbkrCredentialsCard() {
     <div className="card p-5">
       <h3 className="text-sm font-medium text-[var(--color-fg-muted)] mb-4 uppercase tracking-wide flex items-center gap-2">
         <Key className="w-3.5 h-3.5" />
-        IBKR Credentials
+        IB Gateway Connection
       </h3>
 
       <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 text-blue-700 dark:text-blue-400 text-xs mb-4">
-        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+        <Server className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
         <span>
-          Encrypted at rest using AES-128 (Fernet). Never logged, never returned by the API.
-          Required for automated trade execution via IB Gateway.
+          Enter the host and port of your IB Gateway instance. IB Gateway must be running on a machine
+          accessible from this server. Default ports: <strong>4003</strong> (paper) · <strong>4001</strong> (live).{' '}
+          See the <strong>Guide</strong> page for setup instructions.
         </span>
       </div>
 
       {status.has_credentials && !isEditing ? (
         <div className="flex flex-col gap-3">
           <div className="flex justify-between items-center">
-            <span className="text-sm text-[var(--color-fg-muted)]">Username</span>
-            <span className="text-sm font-medium text-[var(--color-fg)]">{status.ibkr_username}</span>
+            <span className="text-sm text-[var(--color-fg-muted)]">Host</span>
+            <span className="text-sm font-medium text-[var(--color-fg)] font-mono">{status.ibkr_host}</span>
           </div>
           <div className="flex justify-between items-center">
-            <span className="text-sm text-[var(--color-fg-muted)]">Password</span>
-            <span className="text-sm font-medium text-[var(--color-fg)] tracking-widest">••••••••</span>
+            <span className="text-sm text-[var(--color-fg-muted)]">Port</span>
+            <span className="text-sm font-medium text-[var(--color-fg)] font-mono">{status.ibkr_port}</span>
           </div>
           <div className="flex justify-between items-center">
             <span className="text-sm text-[var(--color-fg-muted)]">Account ID</span>
@@ -306,7 +310,12 @@ function IbkrCredentialsCard() {
           </div>
           <div className="flex gap-2 pt-1">
             <button
-              onClick={() => { setUsername(status.ibkr_username ?? ''); setAccountId(status.ibkr_account_id ?? ''); setIsEditing(true) }}
+              onClick={() => {
+                setHost(status.ibkr_host ?? '')
+                setPort(String(status.ibkr_port ?? 4003))
+                setAccountId(status.ibkr_account_id ?? '')
+                setIsEditing(true)
+              }}
               className="btn-secondary flex-1 text-sm"
             >
               Update
@@ -323,15 +332,27 @@ function IbkrCredentialsCard() {
       ) : (
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-[var(--color-fg)]">IBKR Username</label>
+            <label className="text-sm font-medium text-[var(--color-fg)]">IB Gateway Host</label>
             <input
               type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="Your IBKR login username"
-              className="input text-sm"
-              autoComplete="username"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+              placeholder="e.g. 127.0.0.1 or your-server-ip"
+              className="input text-sm font-mono"
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-[var(--color-fg)]">Port</label>
+            <input
+              type="number"
+              value={port}
+              onChange={(e) => setPort(e.target.value)}
+              placeholder="4003"
+              className="input text-sm font-mono"
+              min={1}
+              max={65535}
+            />
+            <p className="text-xs text-[var(--color-fg-muted)]">4003 = paper trading · 4001 = live trading</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium text-[var(--color-fg)]">Account ID <span className="text-[var(--color-fg-muted)] font-normal">(optional)</span></label>
@@ -344,35 +365,13 @@ function IbkrCredentialsCard() {
             />
             <p className="text-xs text-[var(--color-fg-muted)]">Required if you have multiple IBKR sub-accounts. Find it in Client Portal → Account Settings.</p>
           </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-[var(--color-fg)]">IBKR Password</label>
-            <div className="relative">
-              <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && save()}
-                placeholder="Your IBKR account password"
-                className="input text-sm pr-10"
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
-            </div>
-          </div>
           <div className="flex gap-2">
             <button onClick={save} disabled={isSaving} className="btn-primary flex-1">
               {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
               {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save'}
             </button>
             {isEditing && (
-              <button onClick={() => { setIsEditing(false); setPassword('') }} className="btn-secondary px-4">
+              <button onClick={() => setIsEditing(false)} className="btn-secondary px-4">
                 Cancel
               </button>
             )}
@@ -381,7 +380,7 @@ function IbkrCredentialsCard() {
       )}
 
       {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
-      {savedOk && !error && <p className="text-xs text-green-500 mt-2">Credentials saved securely.</p>}
+      {savedOk && !error && <p className="text-xs text-green-500 mt-2">IB Gateway connection saved.</p>}
     </div>
   )
 }

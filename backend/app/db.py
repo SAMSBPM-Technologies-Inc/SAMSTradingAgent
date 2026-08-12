@@ -55,7 +55,7 @@ async def _ensure_indexes() -> None:
         [("user_id", 1), ("ticker", 1)], unique=True, background=True
     )
     await db[COLL_USERS].create_index("email", unique=True, background=True)
-    await db[COLL_USERS].create_index("ibkr_username", sparse=True, background=True)
+    await db[COLL_USERS].create_index("ibkr_host", sparse=True, background=True)
     # trades: index by user + ticker for fast position lookups
     await db[COLL_TRADES].create_index([("user_id", 1), ("ticker", 1)], background=True)
     await db[COLL_TRADES].create_index("opened_at", background=True)

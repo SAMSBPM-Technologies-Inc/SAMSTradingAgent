@@ -13,7 +13,6 @@ from pydantic import BaseModel, EmailStr
 from app.db import COLL_USERS, get_db
 from app.dependencies import get_current_user, require_tier
 from app.services.auth import create_access_token, hash_password, verify_password
-from app.services.encryption import decrypt, encrypt
 from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -35,13 +34,14 @@ class UpdateMeRequest(BaseModel):
     display_name: str
 
 class IbkrCredentialsRequest(BaseModel):
-    ibkr_username: str
-    ibkr_password: str
-    ibkr_account_id: str = ""   # optional — leave blank to use IB Gateway default account
+    ibkr_host: str                  # hostname or IP of the machine running IB Gateway
+    ibkr_port: int = 4003           # 4001=live, 4003=paper (IB Gateway defaults)
+    ibkr_account_id: str = ""       # optional — leave blank to use IB Gateway default account
 
 class IbkrStatusResponse(BaseModel):
     has_credentials: bool
-    ibkr_username: str | None = None
+    ibkr_host: str | None = None
+    ibkr_port: int | None = None
     ibkr_account_id: str | None = None
 
 class TokenResponse(BaseModel):
@@ -101,28 +101,28 @@ async def save_ibkr_credentials(
     body: IbkrCredentialsRequest,
     current_user: dict = Depends(require_tier(3)),
 ) -> IbkrStatusResponse:
-    """Encrypt and store IBKR credentials for the current user."""
-    if not body.ibkr_username.strip() or not body.ibkr_password.strip():
-        raise HTTPException(status_code=422, detail="Username and password must not be blank")
-    try:
-        password_enc = encrypt(body.ibkr_password)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    """Store IB Gateway host and port for the current user."""
+    host = body.ibkr_host.strip()
+    if not host:
+        raise HTTPException(status_code=422, detail="IB Gateway host must not be blank")
+    if not (1 <= body.ibkr_port <= 65535):
+        raise HTTPException(status_code=422, detail="Port must be between 1 and 65535")
 
     db = await get_db()
     account_id = body.ibkr_account_id.strip()
     await db[COLL_USERS].update_one(
         {"_id": current_user["_id"]},
         {"$set": {
-            "ibkr_username": body.ibkr_username.strip(),
-            "ibkr_password_enc": password_enc,
+            "ibkr_host": host,
+            "ibkr_port": body.ibkr_port,
             "ibkr_account_id": account_id,
         }},
     )
-    logger.info("ibkr_credentials_saved", user_id=str(current_user["_id"]))
+    logger.info("ibkr_gateway_saved", user_id=str(current_user["_id"]))
     return IbkrStatusResponse(
         has_credentials=True,
-        ibkr_username=body.ibkr_username.strip(),
+        ibkr_host=host,
+        ibkr_port=body.ibkr_port,
         ibkr_account_id=account_id or None,
     )
 
@@ -131,13 +131,15 @@ async def save_ibkr_credentials(
 async def get_ibkr_status(
     current_user: dict = Depends(require_tier(3)),
 ) -> IbkrStatusResponse:
-    """Return whether IBKR credentials are stored. Never returns the password."""
-    username = current_user.get("ibkr_username")
-    has_creds = bool(username and current_user.get("ibkr_password_enc"))
+    """Return stored IB Gateway configuration for the current user."""
+    host = current_user.get("ibkr_host")
+    port = current_user.get("ibkr_port")
+    has_creds = bool(host and port)
     account_id = current_user.get("ibkr_account_id") or None
     return IbkrStatusResponse(
         has_credentials=has_creds,
-        ibkr_username=username if has_creds else None,
+        ibkr_host=host if has_creds else None,
+        ibkr_port=port if has_creds else None,
         ibkr_account_id=account_id if has_creds else None,
     )
 
@@ -146,13 +148,13 @@ async def get_ibkr_status(
 async def delete_ibkr_credentials(
     current_user: dict = Depends(require_tier(3)),
 ) -> dict:
-    """Remove stored IBKR credentials for the current user."""
+    """Remove stored IB Gateway configuration for the current user."""
     db = await get_db()
     await db[COLL_USERS].update_one(
         {"_id": current_user["_id"]},
-        {"$unset": {"ibkr_username": "", "ibkr_password_enc": ""}},
+        {"$unset": {"ibkr_host": "", "ibkr_port": "", "ibkr_account_id": ""}},
     )
-    logger.info("ibkr_credentials_deleted", user_id=str(current_user["_id"]))
+    logger.info("ibkr_gateway_deleted", user_id=str(current_user["_id"]))
     return {"status": "deleted"}
 
 

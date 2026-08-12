@@ -30,6 +30,17 @@ router = APIRouter(prefix="/trading", tags=["trading"])
 logger = get_logger(__name__)
 
 
+async def _get_user_ibkr(user_id: str) -> tuple[str, int, str]:
+    """Return (ibkr_host, ibkr_port, ibkr_account_id) for this user."""
+    db = await get_db()
+    user = await db[COLL_USERS].find_one(
+        {"_id": user_id},
+        {"ibkr_host": 1, "ibkr_port": 1, "ibkr_account_id": 1},
+    )
+    u = user or {}
+    return (u.get("ibkr_host") or "", u.get("ibkr_port") or 0, u.get("ibkr_account_id") or "")
+
+
 def _trade_to_response(doc: dict) -> TradeResponse:
     return TradeResponse(
         id=str(doc["_id"]),
@@ -54,13 +65,14 @@ def _trade_to_response(doc: dict) -> TradeResponse:
 
 @router.get("/settings", response_model=AutoTradeSettingsResponse, summary="Get auto-trade settings")
 async def get_settings(current_user: dict = Depends(require_tier(3))) -> AutoTradeSettingsResponse:
+    user_id = str(current_user["_id"])
     db = await get_db()
     user = await db[COLL_USERS].find_one(
         {"_id": current_user["_id"]}, {"auto_trade_settings": 1}
     )
     raw = (user or {}).get("auto_trade_settings") or {}
     settings = AutoTradeSettings(**raw)
-    return AutoTradeSettingsResponse(**settings.model_dump(), connected=ibkr.is_connected())
+    return AutoTradeSettingsResponse(**settings.model_dump(), connected=ibkr.is_user_connected(user_id))
 
 
 @router.put("/settings", response_model=AutoTradeSettingsResponse, summary="Update auto-trade settings")
@@ -89,12 +101,14 @@ async def update_settings(
         enabled=body.enabled,
         paper=body.paper_trading,
     )
-    return AutoTradeSettingsResponse(**body.model_dump(), connected=ibkr.is_connected())
+    return AutoTradeSettingsResponse(**body.model_dump(), connected=ibkr.is_user_connected(str(current_user["_id"])))
 
 
 @router.get("/account", response_model=AccountSummaryResponse, summary="Live IBKR account summary")
 async def get_account(current_user: dict = Depends(require_tier(3))) -> AccountSummaryResponse:
-    summary = await ibkr.get_account_summary()
+    user_id = str(current_user["_id"])
+    host, port, account_id = await _get_user_ibkr(user_id)
+    summary = await ibkr.get_account_summary(user_id, host, port, account_id=account_id)
     return AccountSummaryResponse(**summary)
 
 
@@ -142,7 +156,8 @@ async def close_position(
         raise HTTPException(status_code=404, detail=f"No open position found for {ticker.upper()}")
 
     # Get current price from IBKR positions (approximate)
-    ibkr_positions = await ibkr.get_positions()
+    host, port, _ = await _get_user_ibkr(user_id)
+    ibkr_positions = await ibkr.get_positions(user_id, host, port)
     current_price = None
     for pos in ibkr_positions:
         if pos["ticker"].upper() == ticker.upper():

@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronUp,
   DollarSign,
+  Server,
   ShieldAlert,
   TrendingDown,
   TrendingUp,
@@ -97,33 +98,194 @@ function Checklist({ items }: { items: string[] }) {
 
 // ── View toggle ───────────────────────────────────────────────────────────────
 
-type View = 'buyer' | 'seller'
+// ── Numbered step ─────────────────────────────────────────────────────────────
+
+function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
+  return (
+    <div className="flex gap-3">
+      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-brand-500 text-white text-xs font-bold flex items-center justify-center mt-0.5">
+        {n}
+      </div>
+      <div className="flex-1">
+        <p className="font-semibold text-[var(--color-fg)] mb-1">{title}</p>
+        <div className="text-[var(--color-fg-muted)] flex flex-col gap-1.5">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+function Code({ children }: { children: React.ReactNode }) {
+  return (
+    <code className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded px-1.5 py-0.5 text-xs font-mono text-brand-500">
+      {children}
+    </code>
+  )
+}
+
+// ── IB Gateway Setup Guide ────────────────────────────────────────────────────
+
+function IbGatewayGuide() {
+  return (
+    <>
+      <Section title="What is IB Gateway?" icon={Server} defaultOpen>
+        <p>
+          IB Gateway is a lightweight application provided by Interactive Brokers that exposes
+          a local API on your machine. SAMS Trading Agent connects to this API to place and
+          monitor orders in your IBKR account.
+        </p>
+        <p>
+          You install IB Gateway on a machine you control (your PC, Mac, or a VPS). SAMS connects
+          to it using the IP address and port you configure in your Profile page. No IBKR credentials
+          are stored on SAMS servers.
+        </p>
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            <strong>CIRO note:</strong> Automated API-based order submission is only permitted for
+            US-listed securities. Canadian-exchange tickers (.TO, .V, .CN) cannot be traded via this integration.
+          </span>
+        </div>
+      </Section>
+
+      <Section title="Step 1 — Download and install IB Gateway" icon={Server}>
+        <div className="flex flex-col gap-4">
+          <Step n={1} title="Download IB Gateway">
+            <p>
+              Go to the Interactive Brokers website → <strong>Trading → IBKR APIs → IB Gateway</strong>.
+              Download the installer for your platform (Windows, macOS, or Linux).
+            </p>
+            <p className="text-xs">
+              Direct path: <strong>ibkr.com → Technology → Trading Tools → IB Gateway</strong>.
+              Do not download TWS — IB Gateway is the headless version designed for API use.
+            </p>
+          </Step>
+          <Step n={2} title="Run the installer">
+            <p>Run the downloaded installer and follow the on-screen steps. No special configuration is needed during installation.</p>
+          </Step>
+          <Step n={3} title="Launch IB Gateway">
+            <p>Open IB Gateway. You will see a login screen — enter your IBKR username and password.</p>
+            <p>At the top-left, select <strong>IB API</strong> (not Proprietary Trading Firm). Choose either <strong>Paper Trading</strong> or <strong>Live Trading</strong> depending on your intent.</p>
+          </Step>
+        </div>
+      </Section>
+
+      <Section title="Step 2 — Enable the API" icon={Server}>
+        <div className="flex flex-col gap-4">
+          <Step n={1} title="Open the API settings">
+            <p>Inside IB Gateway, go to <strong>Configure → Settings</strong> (or the gear icon).</p>
+            <p>Navigate to <strong>API → Settings</strong>.</p>
+          </Step>
+          <Step n={2} title="Enable socket connections">
+            <p>Check <strong>Enable ActiveX and Socket Clients</strong>.</p>
+            <p>Uncheck <strong>Read-Only API</strong> — this is required for order submission. Without this, SAMS can read your account but cannot place orders.</p>
+          </Step>
+          <Step n={3} title="Confirm the port">
+            <p>The default ports are:</p>
+            <div className="flex flex-col gap-1 mt-1">
+              <p><Code>4001</Code> — Live Trading</p>
+              <p><Code>4003</Code> — Paper Trading</p>
+            </div>
+            <p className="mt-1">Note the port you see here — you will enter it in your SAMS Profile.</p>
+          </Step>
+          <Step n={4} title="(Optional) Trusted IPs">
+            <p>
+              If SAMS is hosted on a server with a known IP, you can add that IP to the
+              <strong> Trusted IPs</strong> list for additional security. If left blank, any local
+              or network connection can reach the API.
+            </p>
+          </Step>
+        </div>
+      </Section>
+
+      <Section title="Step 3 — Configure your SAMS Profile" icon={Server}>
+        <div className="flex flex-col gap-4">
+          <Step n={1} title="Find your machine's IP address">
+            <p>
+              If IB Gateway is running on the <strong>same machine as SAMS</strong> (e.g. a VPS),
+              use <Code>127.0.0.1</Code> as the host.
+            </p>
+            <p>
+              If IB Gateway is on a <strong>different machine</strong> (e.g. your home PC, SAMS on cloud),
+              use the external IP of that machine. Ensure port <Code>4003</Code> or <Code>4001</Code> is
+              open in your firewall/router.
+            </p>
+          </Step>
+          <Step n={2} title="Enter connection details in SAMS">
+            <p>Go to <strong>Profile → IB Gateway Connection</strong>.</p>
+            <p>Enter the <strong>Host</strong> (IP address) and <strong>Port</strong> you noted above.</p>
+            <p>If you have multiple IBKR sub-accounts, enter your <strong>Account ID</strong> (e.g. <Code>U1234567</Code>) — found in IBKR Client Portal under Account Settings. Leave blank to use the default account.</p>
+          </Step>
+          <Step n={3} title="Save and verify">
+            <p>Click <strong>Save</strong>. Then navigate to <strong>Profile → Auto Trading</strong> to check the connection status indicator.</p>
+            <p>If the status shows <strong>IB Gateway offline</strong>, double-check that IB Gateway is running and the host/port is correct.</p>
+          </Step>
+        </div>
+      </Section>
+
+      <Section title="Keeping IB Gateway running" icon={AlertTriangle}>
+        <p>
+          IB Gateway must be running at all times for automated trading to work. If it stops
+          (e.g. session timeout, reboot), SAMS will skip trades and log a "not connected" reason.
+        </p>
+        <p>
+          <strong>Session timeout:</strong> IB Gateway sessions expire after 24 hours by default.
+          To extend this, in IB Gateway go to <strong>Configure → Settings → Lock and Exit</strong>
+          and set Auto Logoff Time to a late hour (e.g. 11:59 PM) or disable it.
+        </p>
+        <p>
+          <strong>Auto-start on reboot:</strong> On Windows, add IB Gateway to your Startup folder.
+          On Linux/macOS, set it up as a systemd service or launchd agent. Interactive Brokers also
+          offers <strong>IBC</strong> (a free open-source tool) to manage automated startup and login.
+        </p>
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 text-blue-400 text-xs">
+          <Server className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            <strong>Tip:</strong> For reliable unattended operation, run IB Gateway on a VPS (cloud server)
+            rather than your home PC. A VPS is always on, has a stable IP, and won't go to sleep.
+          </span>
+        </div>
+      </Section>
+
+      <Section title="Ports and firewall reference" icon={ShieldAlert}>
+        <div className="flex flex-col gap-2">
+          <Row label={<Code>4001</Code>}>IB Gateway — Live Trading API (default)</Row>
+          <Row label={<Code>4003</Code>}>IB Gateway — Paper Trading API (default)</Row>
+          <Row label={<Code>7496</Code>}>TWS — Live Trading (if using Trader Workstation instead)</Row>
+          <Row label={<Code>7497</Code>}>TWS — Paper Trading (if using Trader Workstation instead)</Row>
+        </div>
+        <p className="text-xs text-[var(--color-fg-muted)] mt-2">
+          Only open these ports to trusted IPs. If SAMS and IB Gateway are on the same machine,
+          no firewall changes are needed — use <Code>127.0.0.1</Code> as the host.
+        </p>
+      </Section>
+    </>
+  )
+}
+
+type View = 'buyer' | 'seller' | 'setup'
 
 function ViewToggle({ view, onChange }: { view: View; onChange: (v: View) => void }) {
+  const tabs: { key: View; label: string; icon: React.FC<{ className?: string }> }[] = [
+    { key: 'buyer', label: 'I want to buy', icon: DollarSign },
+    { key: 'seller', label: 'I hold stocks', icon: TrendingDown },
+    { key: 'setup', label: 'IB Gateway setup', icon: Server },
+  ]
   return (
-    <div className="flex rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface)] p-1 gap-1">
-      <button
-        onClick={() => onChange('buyer')}
-        className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200
-          ${view === 'buyer'
-            ? 'bg-brand-500 text-white shadow-sm'
-            : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
-          }`}
-      >
-        <DollarSign className="w-4 h-4" />
-        I want to buy
-      </button>
-      <button
-        onClick={() => onChange('seller')}
-        className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200
-          ${view === 'seller'
-            ? 'bg-brand-500 text-white shadow-sm'
-            : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
-          }`}
-      >
-        <TrendingDown className="w-4 h-4" />
-        I hold stocks
-      </button>
+    <div className="flex rounded-xl border border-[var(--color-border)] overflow-hidden bg-[var(--color-surface)] p-1 gap-1 flex-wrap sm:flex-nowrap">
+      {tabs.map(({ key, label, icon: Icon }) => (
+        <button
+          key={key}
+          onClick={() => onChange(key)}
+          className={`flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 whitespace-nowrap
+            ${view === key
+              ? 'bg-brand-500 text-white shadow-sm'
+              : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
+            }`}
+        >
+          <Icon className="w-4 h-4" />
+          {label}
+        </button>
+      ))}
     </div>
   )
 }
@@ -387,19 +549,21 @@ export default function GuidePage() {
       </div>
 
       {/* Context pill */}
-      <div className={`mb-4 px-4 py-3 rounded-xl text-xs leading-relaxed
-        ${view === 'buyer'
-          ? 'bg-green-500/8 border border-green-500/20 text-green-700 dark:text-green-400'
-          : 'bg-orange-500/8 border border-orange-500/20 text-orange-700 dark:text-orange-400'
-        }`}>
-        {view === 'buyer'
-          ? 'You have capital to deploy and are looking for the right moment to enter a position.'
-          : 'You already hold a stock and are deciding whether to hold on, take profit, or cut your losses.'
-        }
-      </div>
+      {view !== 'setup' && (
+        <div className={`mb-4 px-4 py-3 rounded-xl text-xs leading-relaxed
+          ${view === 'buyer'
+            ? 'bg-green-500/8 border border-green-500/20 text-green-700 dark:text-green-400'
+            : 'bg-orange-500/8 border border-orange-500/20 text-orange-700 dark:text-orange-400'
+          }`}>
+          {view === 'buyer'
+            ? 'You have capital to deploy and are looking for the right moment to enter a position.'
+            : 'You already hold a stock and are deciding whether to hold on, take profit, or cut your losses.'
+          }
+        </div>
+      )}
 
       <div className="flex flex-col gap-3">
-        {view === 'buyer' ? <BuyerGuide /> : <SellerGuide />}
+        {view === 'buyer' ? <BuyerGuide /> : view === 'seller' ? <SellerGuide /> : <IbGatewayGuide />}
 
         {/* Disclaimer */}
         <div className="px-5 py-4 rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg)]
