@@ -25,21 +25,36 @@ jobs:
             git pull origin main
             cd backend
 
-            # Append any new env vars that don't exist yet in .env.production.
-            # Safe to run on every deploy — grep -q skips lines already present.
+            # Ensure env vars exist and are non-empty in .env.production.
+            # Appends if the key is absent; overwrites if the key exists with an empty value.
+            # This prevents pydantic from receiving "" and failing to parse bool/int/float.
             ENV=/opt/trading-agent/backend/.env.production
-            append_if_missing() {
+            set_if_missing_or_empty() {
               local key="$1" value="$2"
-              grep -q "^${key}=" "$ENV" || echo "${key}=${value}" >> "$ENV"
+              if grep -q "^${key}=$" "$ENV" 2>/dev/null; then
+                sed -i "s|^${key}=$|${key}=${value}|" "$ENV"
+              elif ! grep -q "^${key}=" "$ENV" 2>/dev/null; then
+                echo "${key}=${value}" >> "$ENV"
+              fi
             }
-            append_if_missing ANALYST_MODEL            claude-opus-4-6
-            append_if_missing ANALYST_EXTENDED_THINKING true
-            append_if_missing ANALYST_CACHE_MINUTES     60
-            append_if_missing ANALYST_PRICE_CHANGE_PCT  0.03
-            append_if_missing ANALYST_SCORE_CHANGE_THRESHOLD 0.12
-            append_if_missing ANALYST_VIX_SPIKE_THRESHOLD    30.0
-            append_if_missing AUTO_TRADE_ENABLED         false
-            append_if_missing AUTO_TRADE_LIVE_ALLOWED    false
+            set_if_missing_or_empty ANALYST_MODEL                  claude-opus-4-6
+            set_if_missing_or_empty ANALYST_EXTENDED_THINKING      true
+            set_if_missing_or_empty ANALYST_CACHE_MINUTES          60
+            set_if_missing_or_empty ANALYST_PRICE_CHANGE_PCT       0.03
+            set_if_missing_or_empty ANALYST_SCORE_CHANGE_THRESHOLD 0.12
+            set_if_missing_or_empty ANALYST_VIX_SPIKE_THRESHOLD    30.0
+            set_if_missing_or_empty AUTO_TRADE_ENABLED             false
+            set_if_missing_or_empty AUTO_TRADE_LIVE_ALLOWED        false
+            set_if_missing_or_empty ENABLE_ML_MODEL                false
+            set_if_missing_or_empty ENABLE_BACKTESTING             false
+            set_if_missing_or_empty ENABLE_AI_ANALYST              true
+            set_if_missing_or_empty INGESTION_INTERVAL_MINUTES     5
+            set_if_missing_or_empty WEIGHT_TECHNICAL               0.25
+            set_if_missing_or_empty WEIGHT_FUNDAMENTAL             0.15
+            set_if_missing_or_empty WEIGHT_SENTIMENT               0.20
+            set_if_missing_or_empty WEIGHT_MACRO                   0.15
+            set_if_missing_or_empty WEIGHT_VOLATILITY              0.10
+            set_if_missing_or_empty WEIGHT_CATALYST                0.15
 
             docker compose -f docker-compose.prod.yml --env-file .env.production build api
 
