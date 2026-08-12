@@ -151,20 +151,24 @@ function IbGatewayGuide() {
         <div className="flex flex-col gap-4">
           <Step n={1} title="Download IB Gateway">
             <p>
-              Go to the Interactive Brokers website → <strong>Trading → IBKR APIs → IB Gateway</strong>.
-              Download the installer for your platform (Windows, macOS, or Linux).
+              Go to <strong>interactivebrokers.com</strong> and search for <strong>IB Gateway</strong>,
+              or navigate directly to the download page. There are two release channels:
             </p>
-            <p className="text-xs">
-              Direct path: <strong>ibkr.com → Technology → Trading Tools → IB Gateway</strong>.
-              Do not download TWS — IB Gateway is the headless version designed for API use.
+            <div className="flex flex-col gap-1 mt-1">
+              <p><strong>Latest</strong> — most recent version (recommended)</p>
+              <p><strong>Stable</strong> — less frequent updates, more conservative</p>
+            </div>
+            <p className="mt-1">
+              Download the installer for your platform (Windows, macOS, or Linux).
+              Do <strong>not</strong> download TWS — IB Gateway is the lightweight, headless version built for API use.
             </p>
           </Step>
           <Step n={2} title="Run the installer">
             <p>Run the downloaded installer and follow the on-screen steps. No special configuration is needed during installation.</p>
           </Step>
-          <Step n={3} title="Launch IB Gateway">
-            <p>Open IB Gateway. You will see a login screen — enter your IBKR username and password.</p>
-            <p>At the top-left, select <strong>IB API</strong> (not Proprietary Trading Firm). Choose either <strong>Paper Trading</strong> or <strong>Live Trading</strong> depending on your intent.</p>
+          <Step n={3} title="Launch IB Gateway and log in">
+            <p>Open IB Gateway. You will see a simple login screen — enter your IBKR username and password.</p>
+            <p>Select the trading mode: <strong>Live Trading</strong> or <strong>Paper Trading</strong>. Use Paper Trading while testing SAMS.</p>
           </Step>
         </div>
       </Section>
@@ -172,27 +176,30 @@ function IbGatewayGuide() {
       <Section title="Step 2 — Enable the API" icon={Server}>
         <div className="flex flex-col gap-4">
           <Step n={1} title="Open the API settings">
-            <p>Inside IB Gateway, go to <strong>Configure → Settings</strong> (or the gear icon).</p>
-            <p>Navigate to <strong>API → Settings</strong>.</p>
+            <p>Inside IB Gateway, click <strong>Configure</strong> in the menu bar, then <strong>Settings</strong>.</p>
+            <p>In the left panel, navigate to <strong>API → Settings</strong>.</p>
           </Step>
           <Step n={2} title="Enable socket connections">
-            <p>Check <strong>Enable ActiveX and Socket Clients</strong>.</p>
-            <p>Uncheck <strong>Read-Only API</strong> — this is required for order submission. Without this, SAMS can read your account but cannot place orders.</p>
+            <p>Check <strong>Enable ActiveX and Socket Clients</strong> — this is the main switch that allows external programs like SAMS to connect.</p>
+            <p>Uncheck <strong>Read-Only API</strong> — required for order submission. If left checked, SAMS can read your account but cannot place orders.</p>
           </Step>
-          <Step n={3} title="Confirm the port">
-            <p>The default ports are:</p>
+          <Step n={3} title="Note the socket port">
+            <p>The IB Gateway default ports are:</p>
             <div className="flex flex-col gap-1 mt-1">
-              <p><Code>4001</Code> — Live Trading</p>
-              <p><Code>4003</Code> — Paper Trading</p>
+              <p><Code>4001</Code> — Live Trading (default)</p>
+              <p><Code>4002</Code> — Paper Trading (default)</p>
             </div>
-            <p className="mt-1">Note the port you see here — you will enter it in your SAMS Profile.</p>
+            <p className="mt-1">Note the exact port shown in the Socket Port field — you will enter this in your SAMS Profile. You can change it if needed, but the defaults above work out of the box.</p>
           </Step>
           <Step n={4} title="(Optional) Trusted IPs">
             <p>
               If SAMS is hosted on a server with a known IP, you can add that IP to the
-              <strong> Trusted IPs</strong> list for additional security. If left blank, any local
-              or network connection can reach the API.
+              <strong> Trusted IPs</strong> list for additional security. If left blank, any
+              connection that can reach the machine will have access to the API.
             </p>
+          </Step>
+          <Step n={5} title="Click OK / Apply">
+            <p>Save the settings. IB Gateway will confirm that the API is now listening on the configured port.</p>
           </Step>
         </div>
       </Section>
@@ -205,9 +212,9 @@ function IbGatewayGuide() {
               use <Code>127.0.0.1</Code> as the host.
             </p>
             <p>
-              If IB Gateway is on a <strong>different machine</strong> (e.g. your home PC, SAMS on cloud),
-              use the external IP of that machine. Ensure port <Code>4003</Code> or <Code>4001</Code> is
-              open in your firewall/router.
+              If IB Gateway is on a <strong>different machine</strong> (e.g. your home PC, SAMS on a cloud server),
+              use the external IP of that machine. Ensure port <Code>4001</Code> or <Code>4002</Code> is
+              open in your firewall/router for the SAMS server's IP.
             </p>
           </Step>
           <Step n={2} title="Enter connection details in SAMS">
@@ -249,7 +256,7 @@ function IbGatewayGuide() {
       <Section title="Ports and firewall reference" icon={ShieldAlert}>
         <div className="flex flex-col gap-2">
           <Row label={<Code>4001</Code>}>IB Gateway — Live Trading API (default)</Row>
-          <Row label={<Code>4003</Code>}>IB Gateway — Paper Trading API (default)</Row>
+          <Row label={<Code>4002</Code>}>IB Gateway — Paper Trading API (default)</Row>
           <Row label={<Code>7496</Code>}>TWS — Live Trading (if using Trader Workstation instead)</Row>
           <Row label={<Code>7497</Code>}>TWS — Paper Trading (if using Trader Workstation instead)</Row>
         </div>

@@ -35,7 +35,7 @@ class UpdateMeRequest(BaseModel):
 
 class IbkrCredentialsRequest(BaseModel):
     ibkr_host: str                  # hostname or IP of the machine running IB Gateway
-    ibkr_port: int = 4003           # 4001=live, 4003=paper (IB Gateway defaults)
+    ibkr_port: int = 4002           # 4001=live, 4002=paper (IB Gateway defaults)
     ibkr_account_id: str = ""       # optional — leave blank to use IB Gateway default account
 
 class IbkrStatusResponse(BaseModel):

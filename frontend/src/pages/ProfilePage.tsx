@@ -211,7 +211,7 @@ function IbkrCredentialsCard() {
     ibkr_account_id: null,
   })
   const [host, setHost] = useState('')
-  const [port, setPort] = useState('4003')
+  const [port, setPort] = useState('4002')
   const [accountId, setAccountId] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -261,7 +261,7 @@ function IbkrCredentialsCard() {
       await ibkrApi.deleteCredentials()
       setStatus({ has_credentials: false, ibkr_host: null, ibkr_port: null, ibkr_account_id: null })
       setHost('')
-      setPort('4003')
+      setPort('4002')
       setAccountId('')
     } catch {
       setError('Failed to remove connection details.')
@@ -287,7 +287,7 @@ function IbkrCredentialsCard() {
         <Server className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
         <span>
           Enter the host and port of your IB Gateway instance. IB Gateway must be running on a machine
-          accessible from this server. Default ports: <strong>4003</strong> (paper) · <strong>4001</strong> (live).{' '}
+          accessible from this server. Default ports: <strong>4002</strong> (paper) · <strong>4001</strong> (live).{' '}
           See the <strong>Guide</strong> page for setup instructions.
         </span>
       </div>
@@ -312,7 +312,7 @@ function IbkrCredentialsCard() {
             <button
               onClick={() => {
                 setHost(status.ibkr_host ?? '')
-                setPort(String(status.ibkr_port ?? 4003))
+                setPort(String(status.ibkr_port ?? 4002))
                 setAccountId(status.ibkr_account_id ?? '')
                 setIsEditing(true)
               }}
@@ -347,12 +347,12 @@ function IbkrCredentialsCard() {
               type="number"
               value={port}
               onChange={(e) => setPort(e.target.value)}
-              placeholder="4003"
+              placeholder="4002"
               className="input text-sm font-mono"
               min={1}
               max={65535}
             />
-            <p className="text-xs text-[var(--color-fg-muted)]">4003 = paper trading · 4001 = live trading</p>
+            <p className="text-xs text-[var(--color-fg-muted)]">4002 = paper trading · 4001 = live trading</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium text-[var(--color-fg)]">Account ID <span className="text-[var(--color-fg-muted)] font-normal">(optional)</span></label>
