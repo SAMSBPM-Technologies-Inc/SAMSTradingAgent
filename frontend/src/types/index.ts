@@ -174,6 +174,7 @@ export interface AuthResponse {
 export interface IbkrStatusResponse {
   has_credentials: boolean
   ibkr_username: string | null
+  ibkr_account_id: string | null
 }
 
 export interface DipBuyCandidate {

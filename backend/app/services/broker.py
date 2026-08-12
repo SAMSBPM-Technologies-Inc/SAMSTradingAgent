@@ -111,6 +111,7 @@ async def place_limit_order(
     limit_price: float,
     exchange: str = "SMART",
     currency: str = "USD",
+    account_id: str = "",
 ) -> Optional[int]:
     """
     Place a limit order. Returns the IBKR order ID or None on failure.
@@ -133,12 +134,15 @@ async def place_limit_order(
             return None
 
         order = LimitOrder(action, qty, round(limit_price, 2))
+        if account_id:
+            order.account = account_id
         trade = ib.placeOrder(qualified[0], order)
         order_id = trade.order.orderId
         logger.info(
             "ibkr_order_placed",
             ticker=ticker, action=action, qty=qty,
             limit_price=limit_price, order_id=order_id,
+            account_id=account_id or "default",
         )
         return order_id
     except Exception as exc:
@@ -163,7 +167,7 @@ async def cancel_order(order_id: int) -> bool:
         return False
 
 
-async def get_account_summary() -> dict:
+async def get_account_summary(account_id: str = "") -> dict:
     """
     Fetch account summary from IBKR.
     Returns dict with: net_liquidation, total_cash, unrealized_pnl,
@@ -175,7 +179,7 @@ async def get_account_summary() -> dict:
 
     ib = _get_ib()
     try:
-        summary = ib.accountSummary()
+        summary = ib.accountSummary(account=account_id) if account_id else ib.accountSummary()
         values: dict = {}
         for item in summary:
             values[item.tag] = float(item.value) if item.value else 0.0

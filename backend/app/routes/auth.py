@@ -37,10 +37,12 @@ class UpdateMeRequest(BaseModel):
 class IbkrCredentialsRequest(BaseModel):
     ibkr_username: str
     ibkr_password: str
+    ibkr_account_id: str = ""   # optional — leave blank to use IB Gateway default account
 
 class IbkrStatusResponse(BaseModel):
     has_credentials: bool
     ibkr_username: str | None = None
+    ibkr_account_id: str | None = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -104,12 +106,21 @@ async def save_ibkr_credentials(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     db = await get_db()
+    account_id = body.ibkr_account_id.strip()
     await db[COLL_USERS].update_one(
         {"_id": current_user["_id"]},
-        {"$set": {"ibkr_username": body.ibkr_username.strip(), "ibkr_password_enc": password_enc}},
+        {"$set": {
+            "ibkr_username": body.ibkr_username.strip(),
+            "ibkr_password_enc": password_enc,
+            "ibkr_account_id": account_id,
+        }},
     )
     logger.info("ibkr_credentials_saved", user_id=str(current_user["_id"]))
-    return IbkrStatusResponse(has_credentials=True, ibkr_username=body.ibkr_username.strip())
+    return IbkrStatusResponse(
+        has_credentials=True,
+        ibkr_username=body.ibkr_username.strip(),
+        ibkr_account_id=account_id or None,
+    )
 
 
 @router.get("/me/ibkr/status", response_model=IbkrStatusResponse)
@@ -119,7 +130,12 @@ async def get_ibkr_status(
     """Return whether IBKR credentials are stored. Never returns the password."""
     username = current_user.get("ibkr_username")
     has_creds = bool(username and current_user.get("ibkr_password_enc"))
-    return IbkrStatusResponse(has_credentials=has_creds, ibkr_username=username if has_creds else None)
+    account_id = current_user.get("ibkr_account_id") or None
+    return IbkrStatusResponse(
+        has_credentials=has_creds,
+        ibkr_username=username if has_creds else None,
+        ibkr_account_id=account_id if has_creds else None,
+    )
 
 
 @router.delete("/me/ibkr", status_code=200)

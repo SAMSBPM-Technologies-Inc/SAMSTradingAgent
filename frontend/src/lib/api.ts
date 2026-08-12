@@ -95,8 +95,8 @@ export const alertsApi = {
 export const ibkrApi = {
   getStatus: () =>
     api.get<import('../types').IbkrStatusResponse>('/auth/me/ibkr/status'),
-  saveCredentials: (ibkr_username: string, ibkr_password: string) =>
-    api.put<import('../types').IbkrStatusResponse>('/auth/me/ibkr', { ibkr_username, ibkr_password }),
+  saveCredentials: (ibkr_username: string, ibkr_password: string, ibkr_account_id?: string) =>
+    api.put<import('../types').IbkrStatusResponse>('/auth/me/ibkr', { ibkr_username, ibkr_password, ibkr_account_id }),
   deleteCredentials: () =>
     api.delete<{ status: string }>('/auth/me/ibkr'),
 }

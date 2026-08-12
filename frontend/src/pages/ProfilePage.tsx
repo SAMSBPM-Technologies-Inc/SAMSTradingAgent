@@ -204,12 +204,14 @@ function AlertSettingsCard() {
 // ── IBKR Credentials section ──────────────────────────────────────────────────
 
 function IbkrCredentialsCard() {
-  const [status, setStatus] = useState<{ has_credentials: boolean; ibkr_username: string | null }>({
+  const [status, setStatus] = useState<{ has_credentials: boolean; ibkr_username: string | null; ibkr_account_id: string | null }>({
     has_credentials: false,
     ibkr_username: null,
+    ibkr_account_id: null,
   })
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [accountId, setAccountId] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -233,10 +235,11 @@ function IbkrCredentialsCard() {
     setIsSaving(true)
     setError(null)
     try {
-      const res = await ibkrApi.saveCredentials(username.trim(), password)
+      const res = await ibkrApi.saveCredentials(username.trim(), password, accountId.trim())
       setStatus(res.data)
       setIsEditing(false)
       setPassword('')
+      setAccountId('')
       setSavedOk(true)
       setTimeout(() => setSavedOk(false), 2500)
     } catch (err: unknown) {
@@ -253,9 +256,10 @@ function IbkrCredentialsCard() {
     setError(null)
     try {
       await ibkrApi.deleteCredentials()
-      setStatus({ has_credentials: false, ibkr_username: null })
+      setStatus({ has_credentials: false, ibkr_username: null, ibkr_account_id: null })
       setUsername('')
       setPassword('')
+      setAccountId('')
     } catch {
       setError('Failed to remove credentials.')
     } finally {
@@ -294,9 +298,15 @@ function IbkrCredentialsCard() {
             <span className="text-sm text-[var(--color-fg-muted)]">Password</span>
             <span className="text-sm font-medium text-[var(--color-fg)] tracking-widest">••••••••</span>
           </div>
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-[var(--color-fg-muted)]">Account ID</span>
+            <span className="text-sm font-medium text-[var(--color-fg)]">
+              {status.ibkr_account_id || <span className="text-[var(--color-fg-muted)] italic">default</span>}
+            </span>
+          </div>
           <div className="flex gap-2 pt-1">
             <button
-              onClick={() => { setUsername(status.ibkr_username ?? ''); setIsEditing(true) }}
+              onClick={() => { setUsername(status.ibkr_username ?? ''); setAccountId(status.ibkr_account_id ?? ''); setIsEditing(true) }}
               className="btn-secondary flex-1 text-sm"
             >
               Update
@@ -322,6 +332,17 @@ function IbkrCredentialsCard() {
               className="input text-sm"
               autoComplete="username"
             />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-sm font-medium text-[var(--color-fg)]">Account ID <span className="text-[var(--color-fg-muted)] font-normal">(optional)</span></label>
+            <input
+              type="text"
+              value={accountId}
+              onChange={(e) => setAccountId(e.target.value.toUpperCase())}
+              placeholder="e.g. U1234567 — leave blank for default"
+              className="input text-sm"
+            />
+            <p className="text-xs text-[var(--color-fg-muted)]">Required if you have multiple IBKR sub-accounts. Find it in Client Portal → Account Settings.</p>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium text-[var(--color-fg)]">IBKR Password</label>

@@ -49,6 +49,13 @@ async def _get_user_settings(user_id: str) -> AutoTradeSettings | None:
     return AutoTradeSettings(**raw)
 
 
+async def _get_user_account_id(user_id: str) -> str:
+    """Return the user's IBKR account ID, or empty string to use IB Gateway default."""
+    db = await get_db()
+    user = await db[COLL_USERS].find_one({"_id": user_id}, {"ibkr_account_id": 1})
+    return (user or {}).get("ibkr_account_id", "") or ""
+
+
 async def _open_position_exists(user_id: str, ticker: str) -> bool:
     """Return True if there's already an open (PENDING or FILLED BUY) trade for this ticker."""
     db = await get_db()
@@ -160,8 +167,10 @@ async def execute_entry(
             await _skip("IB Gateway not connected")
             return
 
+        account_id = await _get_user_account_id(user_id)
+
         # ── Guard: daily loss limit ───────────────────────────────────────────
-        acct = await ibkr.get_account_summary()
+        acct = await ibkr.get_account_summary(account_id=account_id)
         equity = acct.get("net_liquidation", 0.0)
         if equity <= 0:
             await _skip("Could not read account equity from IBKR")
@@ -200,7 +209,7 @@ async def execute_entry(
         })
 
         # ── Place order ───────────────────────────────────────────────────────
-        order_id = await ibkr.place_limit_order(ticker, "BUY", qty, limit_price)
+        order_id = await ibkr.place_limit_order(ticker, "BUY", qty, limit_price, account_id=account_id)
         if order_id is not None:
             await _update_trade(trade_id, {"order_id": order_id})
             logger.info(
@@ -255,7 +264,8 @@ async def execute_exit(
             return
 
         limit_price = round(price, 2)
-        order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price)
+        account_id = await _get_user_account_id(user_id)
+        order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)
 
         from bson import ObjectId
         update: dict = {
