@@ -151,17 +151,24 @@ function IbGatewayGuide() {
         <div className="flex flex-col gap-4">
           <Step n={1} title="Download IB Gateway">
             <p>
-              Go to <strong>interactivebrokers.com</strong> and search for <strong>IB Gateway</strong>,
-              or navigate directly to the download page. There are two release channels:
+              Go to the official IBKR download page:{' '}
+              <a
+                href="https://www.interactivebrokers.com/docs/tws-api/doc/download-tws-or-ib-gateway/download-tws-or-ib-gateway"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand-500 underline break-all"
+              >
+                interactivebrokers.com → Docs → Download TWS or IB Gateway
+              </a>
+            </p>
+            <p className="mt-1">
+              On that page, select <strong>IB Gateway</strong> (not TWS). Choose your platform (Windows, macOS, or Linux)
+              and pick a release channel:
             </p>
             <div className="flex flex-col gap-1 mt-1">
               <p><strong>Latest</strong> — most recent version (recommended)</p>
               <p><strong>Stable</strong> — less frequent updates, more conservative</p>
             </div>
-            <p className="mt-1">
-              Download the installer for your platform (Windows, macOS, or Linux).
-              Do <strong>not</strong> download TWS — IB Gateway is the lightweight, headless version built for API use.
-            </p>
           </Step>
           <Step n={2} title="Run the installer">
             <p>Run the downloaded installer and follow the on-screen steps. No special configuration is needed during installation.</p>
