@@ -28,3 +28,27 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
+
+
+def require_tier(min_tier: int):
+    """
+    Dependency factory — raises 403 if the user's tier is below min_tier.
+    Usage: current_user: dict = Depends(require_tier(2))
+    """
+    async def _check(current_user: dict = Depends(get_current_user)) -> dict:
+        if current_user.get("tier", 1) < min_tier:
+            tier_names = {1: "Starter", 2: "Pro", 3: "Elite"}
+            required = tier_names.get(min_tier, f"Tier {min_tier}")
+            raise HTTPException(
+                status_code=403,
+                detail=f"{required} plan required to access this feature. Contact your administrator to upgrade.",
+            )
+        return current_user
+    return _check
+
+
+async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
+    """Raises 403 if the user is not an admin."""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user

@@ -7,10 +7,18 @@ import {
   Home,
   LogOut,
   Search,
+  Shield,
   User,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth-context'
 import ThemeToggle from './ThemeToggle'
+
+const TIER_LABELS: Record<number, string> = { 1: 'Starter', 2: 'Pro', 3: 'Elite' }
+const TIER_COLORS: Record<number, string> = {
+  1: 'bg-gray-500/15 text-gray-500',
+  2: 'bg-blue-500/15 text-blue-500',
+  3: 'bg-brand-500/15 text-brand-500',
+}
 
 // Icon mark SVG (inlined so it renders at any size with no extra request)
 const IconMark = ({ size = 32 }: { size?: number }) => (
@@ -90,6 +98,20 @@ function DesktopNav() {
       <div className="flex items-center gap-2 flex-shrink-0">
         <ThemeToggle />
 
+        {/* Admin link */}
+        {user?.role === 'admin' && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) =>
+              `flex items-center gap-1.5 text-[13px] font-medium px-2 py-1 rounded-lg transition-colors
+               ${isActive ? 'text-amber-500 bg-amber-500/10' : 'text-[var(--color-fg-muted)] hover:text-amber-500'}`
+            }
+          >
+            <Shield className="w-3.5 h-3.5" />
+            Admin
+          </NavLink>
+        )}
+
         {/* User info + logout */}
         <div className="flex items-center gap-2 pl-2 border-l border-[var(--color-border)]">
           <Link
@@ -101,9 +123,16 @@ function DesktopNav() {
                 {(user?.display_name ?? user?.email ?? 'U')[0].toUpperCase()}
               </span>
             </div>
-            <span className="text-sm text-[var(--color-fg-muted)] max-w-[10rem] truncate">
-              {user?.display_name ?? user?.email ?? 'Account'}
-            </span>
+            <div className="flex flex-col">
+              <span className="text-sm text-[var(--color-fg-muted)] max-w-[10rem] truncate leading-tight">
+                {user?.display_name ?? user?.email ?? 'Account'}
+              </span>
+              {user?.tier && (
+                <span className={`text-[0.6rem] font-semibold px-1.5 rounded-full self-start mt-0.5 ${TIER_COLORS[user.tier]}`}>
+                  {TIER_LABELS[user.tier]}
+                </span>
+              )}
+            </div>
           </Link>
           <button
             onClick={logout}

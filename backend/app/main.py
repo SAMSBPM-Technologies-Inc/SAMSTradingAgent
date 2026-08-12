@@ -16,13 +16,31 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.db import close_db, connect_db
+from app.db import COLL_USERS, close_db, connect_db, get_db
 from app.jobs.scheduler import start_scheduler, stop_scheduler
-from app.routes import alerts, analysis, auth, health, performance, report, signals, trading, watchlist
+from app.routes import admin, alerts, analysis, auth, health, performance, report, signals, trading, watchlist
 from app.utils.logger import get_logger, setup_logging
 
 setup_logging()
 logger = get_logger(__name__)
+
+
+_BOOTSTRAP_ADMIN_EMAIL = "sudheer.samudrala@samsbpm.com"
+
+
+async def _bootstrap_admin() -> None:
+    """Ensure the designated admin account has role=admin and tier=3.
+    Runs on every startup — safe to call repeatedly (upsert semantics).
+    """
+    db = await get_db()
+    result = await db[COLL_USERS].update_one(
+        {"email": _BOOTSTRAP_ADMIN_EMAIL},
+        {"$set": {"role": "admin", "tier": 3}},
+    )
+    if result.matched_count:
+        logger.info("admin_bootstrapped", email=_BOOTSTRAP_ADMIN_EMAIL)
+    else:
+        logger.info("admin_bootstrap_skipped", email=_BOOTSTRAP_ADMIN_EMAIL, reason="user not registered yet")
 
 
 @asynccontextmanager
@@ -31,6 +49,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Startup ───────────────────────────────────────────────────────────────
     logger.info("app_starting")
     await connect_db()
+    await _bootstrap_admin()
     start_scheduler()
 
     # Connect to IB Gateway if auto-trading is enabled
@@ -100,6 +119,7 @@ def create_app() -> FastAPI:
     # ── Routes ────────────────────────────────────────────────────────────────
     app.include_router(health.router)
     app.include_router(auth.router)
+    app.include_router(admin.router)
     app.include_router(analysis.router)
     app.include_router(signals.router)
     app.include_router(report.router)

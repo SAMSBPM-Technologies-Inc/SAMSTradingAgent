@@ -14,7 +14,7 @@ from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import COLL_TRADES, COLL_USERS, get_db
-from app.dependencies import get_current_user
+from app.dependencies import require_tier
 from app.models.trade import (
     AccountSummaryResponse,
     AutoTradeSettings,
@@ -53,7 +53,7 @@ def _trade_to_response(doc: dict) -> TradeResponse:
 
 
 @router.get("/settings", response_model=AutoTradeSettingsResponse, summary="Get auto-trade settings")
-async def get_settings(current_user: dict = Depends(get_current_user)) -> AutoTradeSettingsResponse:
+async def get_settings(current_user: dict = Depends(require_tier(3))) -> AutoTradeSettingsResponse:
     db = await get_db()
     user = await db[COLL_USERS].find_one(
         {"_id": current_user["_id"]}, {"auto_trade_settings": 1}
@@ -66,7 +66,7 @@ async def get_settings(current_user: dict = Depends(get_current_user)) -> AutoTr
 @router.put("/settings", response_model=AutoTradeSettingsResponse, summary="Update auto-trade settings")
 async def update_settings(
     body: AutoTradeSettings,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tier(3)),
 ) -> AutoTradeSettingsResponse:
     # Safety: enforce paper=True if user tries to enable live trading
     # (live trading requires an explicit separate flag in env — see AUTO_TRADE_LIVE_ALLOWED)
@@ -93,13 +93,13 @@ async def update_settings(
 
 
 @router.get("/account", response_model=AccountSummaryResponse, summary="Live IBKR account summary")
-async def get_account(current_user: dict = Depends(get_current_user)) -> AccountSummaryResponse:
+async def get_account(current_user: dict = Depends(require_tier(3))) -> AccountSummaryResponse:
     summary = await ibkr.get_account_summary()
     return AccountSummaryResponse(**summary)
 
 
 @router.get("/positions", response_model=list[TradeResponse], summary="Open positions tracked locally")
-async def get_positions(current_user: dict = Depends(get_current_user)) -> list[TradeResponse]:
+async def get_positions(current_user: dict = Depends(require_tier(3))) -> list[TradeResponse]:
     """Returns trades that are open (BUY without a closed_at)."""
     db = await get_db()
     user_id = str(current_user["_id"])
@@ -113,7 +113,7 @@ async def get_positions(current_user: dict = Depends(get_current_user)) -> list[
 
 
 @router.get("/orders", response_model=list[TradeResponse], summary="Full trade history")
-async def get_orders(current_user: dict = Depends(get_current_user)) -> list[TradeResponse]:
+async def get_orders(current_user: dict = Depends(require_tier(3))) -> list[TradeResponse]:
     db = await get_db()
     user_id = str(current_user["_id"])
     docs = await db[COLL_TRADES].find(
@@ -125,7 +125,7 @@ async def get_orders(current_user: dict = Depends(get_current_user)) -> list[Tra
 @router.post("/close/{ticker}", summary="Manually close an open position")
 async def close_position(
     ticker: str,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tier(3)),
 ):
     user_id = str(current_user["_id"])
     db = await get_db()

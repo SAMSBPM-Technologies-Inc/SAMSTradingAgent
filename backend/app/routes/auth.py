@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 
 from app.db import COLL_USERS, get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_tier
 from app.services.auth import create_access_token, hash_password, verify_password
 from app.services.encryption import decrypt, encrypt
 from app.utils.logger import get_logger
@@ -63,6 +63,8 @@ async def register(body: RegisterRequest) -> TokenResponse:
         "password_hash": hash_password(body.password),
         "display_name": body.display_name or body.email.split("@")[0],
         "created_at": datetime.now(tz=timezone.utc),
+        "tier": 1,
+        "role": "user",
     }
     result = await db[COLL_USERS].insert_one(user)
     logger.info("user_registered", email=body.email)
@@ -89,13 +91,15 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
         "email": current_user["email"],
         "display_name": current_user.get("display_name", ""),
         "created_at": current_user.get("created_at"),
+        "tier": current_user.get("tier", 1),
+        "role": current_user.get("role", "user"),
     }
 
 
 @router.put("/me/ibkr", response_model=IbkrStatusResponse)
 async def save_ibkr_credentials(
     body: IbkrCredentialsRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tier(3)),
 ) -> IbkrStatusResponse:
     """Encrypt and store IBKR credentials for the current user."""
     if not body.ibkr_username.strip() or not body.ibkr_password.strip():
@@ -125,7 +129,7 @@ async def save_ibkr_credentials(
 
 @router.get("/me/ibkr/status", response_model=IbkrStatusResponse)
 async def get_ibkr_status(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tier(3)),
 ) -> IbkrStatusResponse:
     """Return whether IBKR credentials are stored. Never returns the password."""
     username = current_user.get("ibkr_username")
@@ -140,7 +144,7 @@ async def get_ibkr_status(
 
 @router.delete("/me/ibkr", status_code=200)
 async def delete_ibkr_credentials(
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_tier(3)),
 ) -> dict:
     """Remove stored IBKR credentials for the current user."""
     db = await get_db()

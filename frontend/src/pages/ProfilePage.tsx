@@ -767,14 +767,31 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Alert settings */}
+        {/* Alert settings — Tier 1+ */}
         <AlertSettingsCard />
 
-        {/* IBKR credentials */}
-        <IbkrCredentialsCard />
-
-        {/* Auto trading */}
-        <AutoTradingCard />
+        {/* Tier 3 only features */}
+        {user && user.tier >= 3 ? (
+          <>
+            <IbkrCredentialsCard />
+            <AutoTradingCard />
+          </>
+        ) : (
+          <div className="card p-5 border-dashed border-[var(--color-border)]">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-xl bg-brand-500/10 flex items-center justify-center flex-shrink-0">
+                <span className="text-brand-500 text-sm font-bold">3</span>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-[var(--color-fg)]">Elite Plan required</p>
+                <p className="text-xs text-[var(--color-fg-muted)] mt-0.5">
+                  IBKR credentials and automated trading are available on the Elite (Tier 3) plan.
+                  Contact your administrator to upgrade.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Danger zone */}
         <div className="card p-5 border-red-500/20">

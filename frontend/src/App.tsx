@@ -9,6 +9,7 @@ import PerformancePage from './pages/PerformancePage'
 import ProfilePage from './pages/ProfilePage'
 import GuidePage from './pages/GuidePage'
 import AlphaRadarPage from './pages/AlphaRadarPage'
+import AdminPage from './pages/AdminPage'
 import LoadingSpinner from './components/LoadingSpinner'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -25,6 +26,23 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   if (!token) {
     return <Navigate to="/auth" replace />
   }
+
+  return <>{children}</>
+}
+
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, isLoading } = useAuth()
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-dvh">
+        <LoadingSpinner size="lg" />
+      </div>
+    )
+  }
+
+  if (!user) return <Navigate to="/auth" replace />
+  if (user.role !== 'admin') return <Navigate to="/" replace />
 
   return <>{children}</>
 }
@@ -79,6 +97,14 @@ function AppRoutes() {
           <ProtectedRoute>
             <AlphaRadarPage />
           </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <AdminRoute>
+            <AdminPage />
+          </AdminRoute>
         }
       />
       <Route path="*" element={<Navigate to="/" replace />} />

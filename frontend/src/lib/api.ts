@@ -92,6 +92,12 @@ export const alertsApi = {
   sendTest: () => api.post<{ status: string; channels: string[] }>('/alerts/test'),
 }
 
+export const adminApi = {
+  listUsers: () => api.get<import('../types').AdminUser[]>('/admin/users'),
+  setTier: (userId: string, tier: number) => api.put(`/admin/users/${userId}/tier`, { tier }),
+  setRole: (userId: string, role: string) => api.put(`/admin/users/${userId}/role`, { role }),
+}
+
 export const ibkrApi = {
   getStatus: () =>
     api.get<import('../types').IbkrStatusResponse>('/auth/me/ibkr/status'),

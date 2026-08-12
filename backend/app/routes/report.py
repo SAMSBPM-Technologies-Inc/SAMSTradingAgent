@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import COLL_SIGNALS, get_db
-from app.dependencies import get_current_user
+from app.dependencies import require_tier
 from app.models.stock import AnalystReport
 from app.utils.logger import get_logger
 
@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 
 
 @router.get("/report/{ticker}", response_model=AnalystReport, summary="Full AI analyst report for a ticker")
-async def get_report(ticker: str, current_user: dict = Depends(get_current_user)) -> AnalystReport:
+async def get_report(ticker: str, current_user: dict = Depends(require_tier(2))) -> AnalystReport:
     ticker = ticker.upper().strip()
     db = await get_db()
 
