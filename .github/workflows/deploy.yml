@@ -14,10 +14,13 @@ jobs:
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
+        env:
+          CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
+          envs: CLOUDFLARE_TUNNEL_TOKEN
           command_timeout: 30m
           script: |
             set -e
@@ -37,6 +40,18 @@ jobs:
                 echo "${key}=${value}" >> "$ENV"
               fi
             }
+            # Always overwrite secrets from GitHub Secrets (never leave stale/empty values)
+            inject_secret() {
+              local key="$1" value="$2"
+              if grep -q "^${key}=" "$ENV" 2>/dev/null; then
+                sed -i "s|^${key}=.*|${key}=${value}|" "$ENV"
+              else
+                echo "${key}=${value}" >> "$ENV"
+              fi
+            }
+            inject_secret CLOUDFLARE_TUNNEL_TOKEN "$CLOUDFLARE_TUNNEL_TOKEN"
+
+            set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             set_if_missing_or_empty ANALYST_MODEL                  claude-opus-4-6
             set_if_missing_or_empty ANALYST_EXTENDED_THINKING      true
             set_if_missing_or_empty ANALYST_CACHE_MINUTES          60
