@@ -127,17 +127,48 @@ function Code({ children }: { children: React.ReactNode }) {
 function IbGatewayGuide() {
   return (
     <>
-      <Section title="What is IB Gateway?" icon={Server} defaultOpen>
+      <Section title="What is IB Gateway? — Read this first" icon={Server} defaultOpen>
         <p>
-          IB Gateway is a lightweight application provided by Interactive Brokers that exposes
-          a local API on your machine. SAMS Trading Agent connects to this API to place and
-          monitor orders in your IBKR account.
+          IB Gateway is a lightweight application from Interactive Brokers that exposes a local API
+          so that programs like SAMS can place and monitor orders in your IBKR account.
         </p>
-        <p>
-          You install IB Gateway on a machine you control (your PC, Mac, or a VPS). SAMS connects
-          to it using the IP address and port you configure in your Profile page. No IBKR credentials
-          are stored on SAMS servers.
-        </p>
+
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-red-500/10 text-red-700 dark:text-red-400 text-xs">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <div className="flex flex-col gap-1">
+            <p><strong>Important networking requirement:</strong></p>
+            <p>
+              SAMS runs on a cloud server. For it to connect to your IB Gateway, your IB Gateway machine
+              must be <strong>reachable from the internet</strong> on the configured port.
+            </p>
+            <p>
+              If IB Gateway is on your <strong>home Mac or PC</strong>, your home router blocks inbound
+              connections by default — SAMS cannot reach it without additional setup (port forwarding).
+            </p>
+            <p>
+              <strong>The recommended setup is to run IB Gateway on a VPS</strong> (a small cloud
+              server with a public IP). This is always on, always reachable, and avoids home network issues.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 text-xs">
+          <p className="font-semibold text-[var(--color-fg)]">Which setup applies to you?</p>
+          <div className="flex flex-col gap-1.5">
+            <p>✅ <strong>IB Gateway on a VPS</strong> — works out of the box. Use the VPS public IP and port.</p>
+            <p>⚠️ <strong>IB Gateway on your home Mac/PC with port forwarding</strong> — works, but requires router configuration and your home IP must be static or use a dynamic DNS service.</p>
+            <p>❌ <strong>IB Gateway on your home Mac/PC, no port forwarding</strong> — will not work. SAMS cannot reach it.</p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 text-blue-700 dark:text-blue-400 text-xs">
+          <Server className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            <strong>Coming soon — OAuth integration:</strong> A future update will let you connect your IBKR
+            account via OAuth (no IB Gateway required). This will be the recommended method for most users.
+          </span>
+        </div>
+
         <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
           <span>
@@ -218,25 +249,29 @@ function IbGatewayGuide() {
 
       <Section title="Step 3 — Configure your SAMS Profile" icon={Server}>
         <div className="flex flex-col gap-4">
-          <Step n={1} title="Find your machine's IP address">
+          <Step n={1} title="Determine your host address">
+            <p><strong>Option A — IB Gateway on a VPS (recommended):</strong></p>
+            <p>Use the VPS's public IP address as the host. The port is whichever you saw in the API Settings screen (<Code>4001</Code> for live, <Code>4002</Code> for paper).</p>
+            <p className="mt-1"><strong>Option B — IB Gateway on your home Mac/PC with port forwarding:</strong></p>
             <p>
-              If IB Gateway is running on the <strong>same machine as SAMS</strong> (e.g. a VPS),
-              use <Code>127.0.0.1</Code> as the host.
+              Find your router's public IP at{' '}
+              <a href="https://whatismyip.com" target="_blank" rel="noopener noreferrer" className="text-brand-500 underline">whatismyip.com</a>.
+              Set up port forwarding on your router: forward external port <Code>4001</Code> (or <Code>4002</Code>) to your Mac's local IP on the same port.
+              Then add the SAMS server IP (<Code>204.168.166.162</Code>) to the Trusted IPs field in IB Gateway API Settings for security.
             </p>
-            <p>
-              If IB Gateway is on a <strong>different machine</strong> (e.g. your home PC, SAMS on a cloud server),
-              use the external IP of that machine. Ensure port <Code>4001</Code> or <Code>4002</Code> is
-              open in your firewall/router for the SAMS server's IP.
+            <p className="mt-1 text-red-500">
+              ⚠️ Home IPs often change. If your connection breaks, your ISP may have assigned you a new IP.
+              Consider a dynamic DNS service (e.g. No-IP, DuckDNS) to keep a stable hostname.
             </p>
           </Step>
           <Step n={2} title="Enter connection details in SAMS">
             <p>Go to <strong>Profile → IB Gateway Connection</strong>.</p>
-            <p>Enter the <strong>Host</strong> (IP address) and <strong>Port</strong> you noted above.</p>
+            <p>Enter the <strong>Host</strong> (IP or hostname) and <strong>Port</strong> from above.</p>
             <p>If you have multiple IBKR sub-accounts, enter your <strong>Account ID</strong> (e.g. <Code>U1234567</Code>) — found in IBKR Client Portal under Account Settings. Leave blank to use the default account.</p>
           </Step>
           <Step n={3} title="Save and verify">
             <p>Click <strong>Save</strong>. Then navigate to <strong>Profile → Auto Trading</strong> to check the connection status indicator.</p>
-            <p>If the status shows <strong>IB Gateway offline</strong>, double-check that IB Gateway is running and the host/port is correct.</p>
+            <p>If the status shows <strong>IB Gateway offline</strong>, the most common causes are: IB Gateway is not running, the port is blocked by a firewall, or the host IP is incorrect.</p>
           </Step>
         </div>
       </Section>

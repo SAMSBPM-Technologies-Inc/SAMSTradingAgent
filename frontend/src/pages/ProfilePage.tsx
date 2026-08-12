@@ -283,12 +283,13 @@ function IbkrCredentialsCard() {
         IB Gateway Connection
       </h3>
 
-      <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 text-blue-700 dark:text-blue-400 text-xs mb-4">
-        <Server className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+      <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs mb-4">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
         <span>
-          Enter the host and port of your IB Gateway instance. IB Gateway must be running on a machine
-          accessible from this server. Default ports: <strong>4002</strong> (paper) · <strong>4001</strong> (live).{' '}
-          See the <strong>Guide</strong> page for setup instructions.
+          IB Gateway must be running on a machine with a <strong>publicly reachable IP</strong> — a VPS is recommended.
+          A home Mac or PC behind a router will not work without port forwarding.
+          Default ports: <strong>4002</strong> (paper) · <strong>4001</strong> (live).{' '}
+          See the <strong>Guide → IB Gateway setup</strong> tab for details.
         </span>
       </div>
 
