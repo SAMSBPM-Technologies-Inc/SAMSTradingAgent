@@ -186,9 +186,14 @@ function IbGatewayGuide() {
             <p>Inside IB Gateway, click <strong>Configure</strong> in the menu bar, then <strong>Settings</strong>.</p>
             <p>In the left panel, navigate to <strong>API → Settings</strong>.</p>
           </Step>
-          <Step n={2} title="Enable socket connections">
-            <p>Check <strong>Enable ActiveX and Socket Clients</strong> — this is the main switch that allows external programs like SAMS to connect.</p>
-            <p>Uncheck <strong>Read-Only API</strong> — required for order submission. If left checked, SAMS can read your account but cannot place orders.</p>
+          <Step n={2} title="Check Read-Only API is off">
+            <p>
+              In IB Gateway, the API socket is <strong>enabled by default</strong> — there is no "Enable" checkbox to tick.
+            </p>
+            <p>
+              The only thing to verify: make sure <strong>Read-Only API is unchecked</strong>.
+              If it is checked, SAMS can read your account but cannot place orders.
+            </p>
           </Step>
           <Step n={3} title="Note the socket port">
             <p>The IB Gateway default ports are:</p>
