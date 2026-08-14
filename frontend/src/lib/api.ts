@@ -98,15 +98,6 @@ export const adminApi = {
   setRole: (userId: string, role: string) => api.put(`/admin/users/${userId}/role`, { role }),
 }
 
-export const ibkrApi = {
-  getStatus: () =>
-    api.get<import('../types').IbkrStatusResponse>('/auth/me/ibkr/status'),
-  saveCredentials: (ibkr_host: string, ibkr_port: number, ibkr_account_id?: string) =>
-    api.put<import('../types').IbkrStatusResponse>('/auth/me/ibkr', { ibkr_host, ibkr_port, ibkr_account_id }),
-  deleteCredentials: () =>
-    api.delete<{ status: string }>('/auth/me/ibkr'),
-}
-
 export const tradingApi = {
   getSettings: () => api.get<import('../types').AutoTradeSettingsResponse>('/trading/settings'),
   updateSettings: (data: import('../types').AutoTradeSettings) =>

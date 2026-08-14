@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 
 from app.db import COLL_USERS, get_db
-from app.dependencies import get_current_user, require_tier
+from app.dependencies import get_current_user
 from app.services.auth import create_access_token, hash_password, verify_password
 from app.utils.logger import get_logger
 
@@ -32,17 +32,6 @@ class LoginRequest(BaseModel):
 
 class UpdateMeRequest(BaseModel):
     display_name: str
-
-class IbkrCredentialsRequest(BaseModel):
-    ibkr_host: str                  # hostname or IP of the machine running IB Gateway
-    ibkr_port: int = 4002           # 4001=live, 4002=paper (IB Gateway defaults)
-    ibkr_account_id: str = ""       # optional — leave blank to use IB Gateway default account
-
-class IbkrStatusResponse(BaseModel):
-    has_credentials: bool
-    ibkr_host: str | None = None
-    ibkr_port: int | None = None
-    ibkr_account_id: str | None = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -94,68 +83,6 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
         "tier": current_user.get("tier", 1),
         "role": current_user.get("role", "user"),
     }
-
-
-@router.put("/me/ibkr", response_model=IbkrStatusResponse)
-async def save_ibkr_credentials(
-    body: IbkrCredentialsRequest,
-    current_user: dict = Depends(require_tier(3)),
-) -> IbkrStatusResponse:
-    """Store IB Gateway host and port for the current user."""
-    host = body.ibkr_host.strip()
-    if not host:
-        raise HTTPException(status_code=422, detail="IB Gateway host must not be blank")
-    if not (1 <= body.ibkr_port <= 65535):
-        raise HTTPException(status_code=422, detail="Port must be between 1 and 65535")
-
-    db = await get_db()
-    account_id = body.ibkr_account_id.strip()
-    await db[COLL_USERS].update_one(
-        {"_id": current_user["_id"]},
-        {"$set": {
-            "ibkr_host": host,
-            "ibkr_port": body.ibkr_port,
-            "ibkr_account_id": account_id,
-        }},
-    )
-    logger.info("ibkr_gateway_saved", user_id=str(current_user["_id"]))
-    return IbkrStatusResponse(
-        has_credentials=True,
-        ibkr_host=host,
-        ibkr_port=body.ibkr_port,
-        ibkr_account_id=account_id or None,
-    )
-
-
-@router.get("/me/ibkr/status", response_model=IbkrStatusResponse)
-async def get_ibkr_status(
-    current_user: dict = Depends(require_tier(3)),
-) -> IbkrStatusResponse:
-    """Return stored IB Gateway configuration for the current user."""
-    host = current_user.get("ibkr_host")
-    port = current_user.get("ibkr_port")
-    has_creds = bool(host and port)
-    account_id = current_user.get("ibkr_account_id") or None
-    return IbkrStatusResponse(
-        has_credentials=has_creds,
-        ibkr_host=host if has_creds else None,
-        ibkr_port=port if has_creds else None,
-        ibkr_account_id=account_id if has_creds else None,
-    )
-
-
-@router.delete("/me/ibkr", status_code=200)
-async def delete_ibkr_credentials(
-    current_user: dict = Depends(require_tier(3)),
-) -> dict:
-    """Remove stored IB Gateway configuration for the current user."""
-    db = await get_db()
-    await db[COLL_USERS].update_one(
-        {"_id": current_user["_id"]},
-        {"$unset": {"ibkr_host": "", "ibkr_port": "", "ibkr_account_id": ""}},
-    )
-    logger.info("ibkr_gateway_deleted", user_id=str(current_user["_id"]))
-    return {"status": "deleted"}
 
 
 @router.put("/me")

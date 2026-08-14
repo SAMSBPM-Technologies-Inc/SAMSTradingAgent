@@ -49,15 +49,10 @@ async def _get_user_settings(user_id: str) -> AutoTradeSettings | None:
     return AutoTradeSettings(**raw)
 
 
-async def _get_user_ibkr_params(user_id: str) -> tuple[str, int, str]:
-    """Return (ibkr_host, ibkr_port, ibkr_account_id) for this user."""
-    db = await get_db()
-    user = await db[COLL_USERS].find_one(
-        {"_id": user_id},
-        {"ibkr_host": 1, "ibkr_port": 1, "ibkr_account_id": 1},
-    )
-    u = user or {}
-    return (u.get("ibkr_host") or "", u.get("ibkr_port") or 0, u.get("ibkr_account_id") or "")
+async def _get_user_account_id(user_id: str) -> str:
+    """Return the server IBKR account ID from config (same for all users)."""
+    from app.config import get_settings
+    return get_settings().ibkr_account_id
 
 
 async def _open_position_exists(user_id: str, ticker: str) -> bool:
@@ -166,18 +161,15 @@ async def execute_entry(
             await _skip(f"Max open positions reached ({settings.max_open_positions})")
             return
 
-        # ── Guard: IBKR configuration ─────────────────────────────────────────
-        host, port, account_id = await _get_user_ibkr_params(user_id)
-        if not host or not port:
-            await _skip("IB Gateway host/port not configured in profile")
-            return
-
-        if not ibkr.is_user_connected(user_id):
+        # ── Guard: IBKR connectivity ──────────────────────────────────────────
+        if not ibkr.is_connected():
             await _skip("IB Gateway not connected")
             return
 
+        account_id = await _get_user_account_id(user_id)
+
         # ── Guard: daily loss limit ───────────────────────────────────────────
-        acct = await ibkr.get_account_summary(user_id, host, port, account_id=account_id)
+        acct = await ibkr.get_account_summary(account_id=account_id)
         equity = acct.get("net_liquidation", 0.0)
         if equity <= 0:
             await _skip("Could not read account equity from IBKR")
@@ -216,7 +208,7 @@ async def execute_entry(
         })
 
         # ── Place order ───────────────────────────────────────────────────────
-        order_id = await ibkr.place_limit_order(user_id, host, port, ticker, "BUY", qty, limit_price, account_id=account_id)
+        order_id = await ibkr.place_limit_order(ticker, "BUY", qty, limit_price, account_id=account_id)
         if order_id is not None:
             await _update_trade(trade_id, {"order_id": order_id})
             logger.info(
@@ -258,8 +250,7 @@ async def execute_exit(
         if not open_trade:
             return
 
-        host, port, account_id = await _get_user_ibkr_params(user_id)
-        if not host or not port or not ibkr.is_user_connected(user_id):
+        if not ibkr.is_connected():
             logger.warning("exit_skipped_not_connected", user_id=user_id, ticker=ticker)
             return
 
@@ -272,7 +263,8 @@ async def execute_exit(
             return
 
         limit_price = round(price, 2)
-        order_id = await ibkr.place_limit_order(user_id, host, port, ticker, "SELL", qty, limit_price, account_id=account_id)
+        account_id = await _get_user_account_id(user_id)
+        order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)
 
         from bson import ObjectId
         update: dict = {

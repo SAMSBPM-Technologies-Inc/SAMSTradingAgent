@@ -63,6 +63,9 @@ jobs:
             set_if_missing_or_empty ANALYST_VIX_SPIKE_THRESHOLD    30.0
             set_if_missing_or_empty AUTO_TRADE_ENABLED             false
             set_if_missing_or_empty AUTO_TRADE_LIVE_ALLOWED        false
+            set_if_missing_or_empty IBKR_HOST                      127.0.0.1
+            set_if_missing_or_empty IBKR_PORT                      4002
+            set_if_missing_or_empty IBKR_CLIENT_ID                 1
             set_if_missing_or_empty ENABLE_ML_MODEL                false
             set_if_missing_or_empty ENABLE_BACKTESTING             false
             set_if_missing_or_empty ENABLE_AI_ANALYST              true

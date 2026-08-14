@@ -247,31 +247,34 @@ function IbGatewayGuide() {
         </div>
       </Section>
 
-      <Section title="Step 3 — Configure your SAMS Profile" icon={Server}>
+      <Section title="Step 3 — Configure the server environment" icon={Server}>
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-blue-500/10 text-blue-700 dark:text-blue-400 text-xs mb-2">
+          <Server className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            <strong>Admin only.</strong> IB Gateway connection is configured server-side via environment variables.
+            Individual users do not enter connection details — the server connects to one shared IB Gateway instance.
+          </span>
+        </div>
         <div className="flex flex-col gap-4">
-          <Step n={1} title="Determine your host address">
-            <p><strong>Option A — IB Gateway on a VPS (recommended):</strong></p>
-            <p>Use the VPS's public IP address as the host. The port is whichever you saw in the API Settings screen (<Code>4001</Code> for live, <Code>4002</Code> for paper).</p>
-            <p className="mt-1"><strong>Option B — IB Gateway on your home Mac/PC with port forwarding:</strong></p>
+          <Step n={1} title="Set environment variables on the server">
+            <p>In the server's <Code>.env.production</Code> file (or deployment secrets), set:</p>
+            <div className="flex flex-col gap-1 mt-1 font-mono text-xs bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-3">
+              <p><span className="text-brand-500">IBKR_HOST</span>=&lt;host-or-ip&gt;</p>
+              <p><span className="text-brand-500">IBKR_PORT</span>=4002  <span className="text-[var(--color-fg-muted)]"># 4002=paper, 4001=live</span></p>
+              <p><span className="text-brand-500">IBKR_CLIENT_ID</span>=1</p>
+              <p><span className="text-brand-500">IBKR_ACCOUNT_ID</span>=U1234567  <span className="text-[var(--color-fg-muted)]"># leave blank for default account</span></p>
+              <p><span className="text-brand-500">AUTO_TRADE_ENABLED</span>=true</p>
+            </div>
+          </Step>
+          <Step n={2} title="Add the SAMS server IP to IB Gateway Trusted IPs">
             <p>
-              Find your router's public IP at{' '}
-              <a href="https://whatismyip.com" target="_blank" rel="noopener noreferrer" className="text-brand-500 underline">whatismyip.com</a>.
-              Set up port forwarding on your router: forward external port <Code>4001</Code> (or <Code>4002</Code>) to your Mac's local IP on the same port.
-              Then add the SAMS server IP (<Code>204.168.166.162</Code>) to the Trusted IPs field in IB Gateway API Settings for security.
-            </p>
-            <p className="mt-1 text-red-500">
-              ⚠️ Home IPs often change. If your connection breaks, your ISP may have assigned you a new IP.
-              Consider a dynamic DNS service (e.g. No-IP, DuckDNS) to keep a stable hostname.
+              In IB Gateway → Configure → Settings → API → Trusted IPs, add the SAMS server's public IP.
+              This restricts API access to the server only.
             </p>
           </Step>
-          <Step n={2} title="Enter connection details in SAMS">
-            <p>Go to <strong>Profile → IB Gateway Connection</strong>.</p>
-            <p>Enter the <strong>Host</strong> (IP or hostname) and <strong>Port</strong> from above.</p>
-            <p>If you have multiple IBKR sub-accounts, enter your <strong>Account ID</strong> (e.g. <Code>U1234567</Code>) — found in IBKR Client Portal under Account Settings. Leave blank to use the default account.</p>
-          </Step>
-          <Step n={3} title="Save and verify">
-            <p>Click <strong>Save</strong>. Then navigate to <strong>Profile → Auto Trading</strong> to check the connection status indicator.</p>
-            <p>If the status shows <strong>IB Gateway offline</strong>, the most common causes are: IB Gateway is not running, the port is blocked by a firewall, or the host IP is incorrect.</p>
+          <Step n={3} title="Restart the API and verify">
+            <p>After setting env vars, redeploy or restart the API container. On startup, the server automatically connects to IB Gateway.</p>
+            <p>Users with Tier 3 can check the connection status on the <strong>Profile → Auto Trading</strong> card — the indicator shows <strong>IB Gateway connected</strong> when the server has an active session.</p>
           </Step>
         </div>
       </Section>

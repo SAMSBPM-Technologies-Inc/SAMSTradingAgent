@@ -186,13 +186,6 @@ export interface AuthResponse {
   token_type: string
 }
 
-export interface IbkrStatusResponse {
-  has_credentials: boolean
-  ibkr_host: string | null
-  ibkr_port: number | null
-  ibkr_account_id: string | null
-}
-
 export interface DipBuyCandidate {
   ticker: string
   current_price: number

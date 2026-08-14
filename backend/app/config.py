@@ -62,11 +62,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", description="Anthropic API key for AI analyst (Claude)")
 
     # ── IBKR / Automated Trading ──────────────────────────────────────────────
-    # IB Gateway or TWS must be running on the configured host:port with API enabled.
-    # Port 7497 = paper trading (default), 7496 = live trading.
+    # IB Gateway must be running on the configured host:port with API enabled.
+    # IB Gateway default ports: 4002=paper, 4001=live.
+    # TWS default ports (if using TWS instead): 7497=paper, 7496=live.
     # CIRO NOTE: API-based automated trading is only permitted for US-listed securities.
     ibkr_host: str = Field(default="127.0.0.1")
-    ibkr_port: int = Field(default=7497)          # 7497=paper, 7496=live
+    ibkr_port: int = Field(default=4002)          # 4002=IB Gateway paper, 4001=IB Gateway live
     ibkr_client_id: int = Field(default=1)
     ibkr_account_id: str = Field(default="")     # optional; leave empty for default account
     auto_trade_enabled: bool = Field(default=False, description="Global kill-switch for automated trading")

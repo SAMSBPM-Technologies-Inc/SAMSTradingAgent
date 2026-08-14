@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Bell, Bot, Check, ExternalLink, Key, LogOut, Pencil, Server, User, Wifi, WifiOff, X } from 'lucide-react'
-import { alertsApi, authApi, ibkrApi, tradingApi } from '../lib/api'
+import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, User, Wifi, WifiOff, X } from 'lucide-react'
+import { alertsApi, authApi, tradingApi } from '../lib/api'
 import type { AlertSettings, AutoTradeSettings } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
@@ -197,191 +197,6 @@ function AlertSettingsCard() {
 
         {error && <p className="text-xs text-red-500">{error}</p>}
       </div>
-    </div>
-  )
-}
-
-// ── IB Gateway Connection section ─────────────────────────────────────────────
-
-function IbkrCredentialsCard() {
-  const [status, setStatus] = useState<{ has_credentials: boolean; ibkr_host: string | null; ibkr_port: number | null; ibkr_account_id: string | null }>({
-    has_credentials: false,
-    ibkr_host: null,
-    ibkr_port: null,
-    ibkr_account_id: null,
-  })
-  const [host, setHost] = useState('')
-  const [port, setPort] = useState('4002')
-  const [accountId, setAccountId] = useState('')
-  const [isLoading, setIsLoading] = useState(true)
-  const [isSaving, setIsSaving] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [savedOk, setSavedOk] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [isEditing, setIsEditing] = useState(false)
-
-  useEffect(() => {
-    ibkrApi.getStatus()
-      .then((res) => setStatus(res.data))
-      .catch(() => {})
-      .finally(() => setIsLoading(false))
-  }, [])
-
-  const save = async () => {
-    if (!host.trim()) {
-      setError('IB Gateway host is required.')
-      return
-    }
-    const portNum = parseInt(port)
-    if (!portNum || portNum < 1 || portNum > 65535) {
-      setError('Port must be a number between 1 and 65535.')
-      return
-    }
-    setIsSaving(true)
-    setError(null)
-    try {
-      const res = await ibkrApi.saveCredentials(host.trim(), portNum, accountId.trim() || undefined)
-      setStatus(res.data)
-      setIsEditing(false)
-      setSavedOk(true)
-      setTimeout(() => setSavedOk(false), 2500)
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to save connection details.')
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  const remove = async () => {
-    if (!confirm('Remove stored IB Gateway connection? Auto-trading will stop working until you re-enter the details.')) return
-    setIsDeleting(true)
-    setError(null)
-    try {
-      await ibkrApi.deleteCredentials()
-      setStatus({ has_credentials: false, ibkr_host: null, ibkr_port: null, ibkr_account_id: null })
-      setHost('')
-      setPort('4002')
-      setAccountId('')
-    } catch {
-      setError('Failed to remove connection details.')
-    } finally {
-      setIsDeleting(false)
-    }
-  }
-
-  if (isLoading) return (
-    <div className="card p-5 flex items-center justify-center h-32">
-      <LoadingSpinner size="sm" />
-    </div>
-  )
-
-  return (
-    <div className="card p-5">
-      <h3 className="text-sm font-medium text-[var(--color-fg-muted)] mb-4 uppercase tracking-wide flex items-center gap-2">
-        <Key className="w-3.5 h-3.5" />
-        IB Gateway Connection
-      </h3>
-
-      <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-500/10 text-amber-700 dark:text-amber-400 text-xs mb-4">
-        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-        <span>
-          IB Gateway must be running on a machine with a <strong>publicly reachable IP</strong> — a VPS is recommended.
-          A home Mac or PC behind a router will not work without port forwarding.
-          Default ports: <strong>4002</strong> (paper) · <strong>4001</strong> (live).{' '}
-          See the <strong>Guide → IB Gateway setup</strong> tab for details.
-        </span>
-      </div>
-
-      {status.has_credentials && !isEditing ? (
-        <div className="flex flex-col gap-3">
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-[var(--color-fg-muted)]">Host</span>
-            <span className="text-sm font-medium text-[var(--color-fg)] font-mono">{status.ibkr_host}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-[var(--color-fg-muted)]">Port</span>
-            <span className="text-sm font-medium text-[var(--color-fg)] font-mono">{status.ibkr_port}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-sm text-[var(--color-fg-muted)]">Account ID</span>
-            <span className="text-sm font-medium text-[var(--color-fg)]">
-              {status.ibkr_account_id || <span className="text-[var(--color-fg-muted)] italic">default</span>}
-            </span>
-          </div>
-          <div className="flex gap-2 pt-1">
-            <button
-              onClick={() => {
-                setHost(status.ibkr_host ?? '')
-                setPort(String(status.ibkr_port ?? 4002))
-                setAccountId(status.ibkr_account_id ?? '')
-                setIsEditing(true)
-              }}
-              className="btn-secondary flex-1 text-sm"
-            >
-              Update
-            </button>
-            <button
-              onClick={remove}
-              disabled={isDeleting}
-              className="btn-secondary flex-1 text-sm text-red-500 border-red-500/20 hover:bg-red-500/10"
-            >
-              {isDeleting ? <LoadingSpinner size="sm" /> : 'Remove'}
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-[var(--color-fg)]">IB Gateway Host</label>
-            <input
-              type="text"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="e.g. 127.0.0.1 or your-server-ip"
-              className="input text-sm font-mono"
-            />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-[var(--color-fg)]">Port</label>
-            <input
-              type="number"
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              placeholder="4002"
-              className="input text-sm font-mono"
-              min={1}
-              max={65535}
-            />
-            <p className="text-xs text-[var(--color-fg-muted)]">4002 = paper trading · 4001 = live trading</p>
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-[var(--color-fg)]">Account ID <span className="text-[var(--color-fg-muted)] font-normal">(optional)</span></label>
-            <input
-              type="text"
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value.toUpperCase())}
-              placeholder="e.g. U1234567 — leave blank for default"
-              className="input text-sm"
-            />
-            <p className="text-xs text-[var(--color-fg-muted)]">Required if you have multiple IBKR sub-accounts. Find it in Client Portal → Account Settings.</p>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={save} disabled={isSaving} className="btn-primary flex-1">
-              {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
-              {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save'}
-            </button>
-            {isEditing && (
-              <button onClick={() => setIsEditing(false)} className="btn-secondary px-4">
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-      )}
-
-      {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
-      {savedOk && !error && <p className="text-xs text-green-500 mt-2">IB Gateway connection saved.</p>}
     </div>
   )
 }
@@ -772,10 +587,7 @@ export default function ProfilePage() {
 
         {/* Tier 3 only features */}
         {user && user.tier >= 3 ? (
-          <>
-            <IbkrCredentialsCard />
-            <AutoTradingCard />
-          </>
+          <AutoTradingCard />
         ) : (
           <div className="card p-5 border-dashed border-[var(--color-border)]">
             <div className="flex items-start gap-3">
@@ -785,7 +597,7 @@ export default function ProfilePage() {
               <div>
                 <p className="text-sm font-medium text-[var(--color-fg)]">Elite Plan required</p>
                 <p className="text-xs text-[var(--color-fg-muted)] mt-0.5">
-                  IBKR credentials and automated trading are available on the Elite (Tier 3) plan.
+                  Automated trading is available on the Elite (Tier 3) plan.
                   Contact your administrator to upgrade.
                 </p>
               </div>
