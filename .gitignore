@@ -48,6 +48,8 @@ docker-compose.override.yml
 htmlcov/
 frontend/node_modules
 frontend/dist
+mobile/node_modules
+mobile/.expo
 
 # Developer docs & planning — not needed for the live application
 docs/
