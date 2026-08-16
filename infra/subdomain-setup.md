@@ -1,6 +1,6 @@
 # Onboarding a New User — Subdomain Setup
 
-Each user gets their own subdomain (e.g., `sudheer.samsbpm.com`) pointing to the shared frontend,
+Each user gets their own subdomain (e.g., `samtrades.samsbpm.com`) pointing to the shared frontend,
 backed by the shared API at `api.samsbpm.com`. The process takes about 5 minutes.
 
 ---
@@ -54,7 +54,7 @@ If you add a new subdomain, make sure it's included in the backend's `CORS_ORIGI
 on the Hetzner VPS (set in `.env.production` and the GitHub Actions deploy workflow):
 
 ```
-CORS_ORIGINS=https://sta.samsbpm.com,https://sudheer.samsbpm.com,https://alice.samsbpm.com
+CORS_ORIGINS=https://sta.samsbpm.com,https://samtrades.samsbpm.com,https://alice.samsbpm.com
 ```
 
 After editing, redeploy:

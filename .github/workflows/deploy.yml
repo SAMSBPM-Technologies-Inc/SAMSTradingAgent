@@ -54,7 +54,7 @@ jobs:
             inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
-            set_if_missing_or_empty CORS_ORIGINS                   https://sta.samsbpm.com
+            set_if_missing_or_empty CORS_ORIGINS                   https://sta.samsbpm.com,https://samtrades.samsbpm.com
             set_if_missing_or_empty ANALYST_MODEL                  claude-opus-4-6
             set_if_missing_or_empty ANALYST_EXTENDED_THINKING      true
             set_if_missing_or_empty ANALYST_CACHE_MINUTES          60
