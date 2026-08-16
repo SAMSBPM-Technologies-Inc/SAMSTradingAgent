@@ -11,7 +11,6 @@ services:
       - .env.production
     environment:
       - READ_ONLY_API=false
-      - BYPASS_WARNING=true
     volumes:
       - ibgateway_settings:/home/ibgateway/Jts    # persists IB Gateway preferences
       - ibgateway_logs:/home/ibgateway/IBController/Logs
