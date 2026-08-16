@@ -11,6 +11,7 @@ services:
       - .env.production
     environment:
       - READ_ONLY_API=false
+      - EXISTING_SESSION_DETECTED_ACTION=primary
     volumes:
       - ibgateway_settings:/home/ibgateway/Jts    # persists IB Gateway preferences
       - ibgateway_logs:/home/ibgateway/IBController/Logs
