@@ -12,6 +12,8 @@ services:
     environment:
       - READ_ONLY_API=false
       - EXISTING_SESSION_DETECTED_ACTION=primary
+      - ACCEPT_INCOMING_CONNECTION_ACTION=accept
+      - DISMISS_PASSWORD_EXPIRY_WARNING=yes
     volumes:
       - ibgateway_settings:/home/ibgateway/Jts    # persists IB Gateway preferences
       - ibgateway_logs:/home/ibgateway/IBController/Logs

@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             port=_settings.ibkr_port,
             client_id=_settings.ibkr_client_id,
         )
+        ibkr.start_reconnect_loop()
 
     logger.info("app_ready")
 
@@ -63,6 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("app_stopping")
     stop_scheduler()
     from app.services import broker as ibkr
+    ibkr.stop_reconnect_loop()
     ibkr.disconnect()
     await close_db()
     logger.info("app_stopped")

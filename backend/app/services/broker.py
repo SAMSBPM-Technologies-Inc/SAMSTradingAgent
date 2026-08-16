@@ -18,6 +18,8 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 _ib: Optional[object] = None
+_reconnect_task: Optional[object] = None
+_connect_params: dict = {}
 
 
 def _make_ib():
@@ -32,7 +34,8 @@ def _make_ib():
 
 async def connect(host: str = "127.0.0.1", port: int = 4002, client_id: int = 1) -> bool:
     """Connect to IB Gateway. Called on app startup. Returns True on success."""
-    global _ib
+    global _ib, _connect_params
+    _connect_params = {"host": host, "port": port, "client_id": client_id}
     ib = _make_ib()
     if ib is None:
         return False
@@ -44,6 +47,31 @@ async def connect(host: str = "127.0.0.1", port: int = 4002, client_id: int = 1)
     except Exception as exc:
         logger.warning("ibkr_connect_failed", host=host, port=port, error=str(exc))
         return False
+
+
+async def _reconnect_loop() -> None:
+    """Background task: retry connection every 30s while disconnected."""
+    import asyncio
+    while True:
+        await asyncio.sleep(30)
+        if not is_connected() and _connect_params:
+            logger.info("ibkr_reconnect_attempt", **_connect_params)
+            await connect(**_connect_params)
+
+
+def start_reconnect_loop() -> None:
+    """Start the background reconnect loop. Called once after app startup."""
+    import asyncio
+    global _reconnect_task
+    _reconnect_task = asyncio.create_task(_reconnect_loop())
+
+
+def stop_reconnect_loop() -> None:
+    """Cancel the background reconnect loop. Called on app shutdown."""
+    global _reconnect_task
+    if _reconnect_task:
+        _reconnect_task.cancel()
+        _reconnect_task = None
 
 
 def disconnect() -> None:
