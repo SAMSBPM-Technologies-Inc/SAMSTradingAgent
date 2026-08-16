@@ -26,8 +26,6 @@ env/
 htmlcov/
 tests/
 
-# Training scripts — not needed at runtime
-scripts/
 
 # Docs & planning
 *.md
