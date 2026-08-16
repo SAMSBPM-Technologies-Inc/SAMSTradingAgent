@@ -34,8 +34,9 @@ RUN addgroup --system appgroup \
 # Copy only installed packages from builder
 COPY --from=builder /install /usr/local
 
-# Copy application source and model artefacts
+# Copy application source, scripts, and model artefacts
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 COPY model/ ./model/
 
 RUN chown -R appuser:appgroup /app
