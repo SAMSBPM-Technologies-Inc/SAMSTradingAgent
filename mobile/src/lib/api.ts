@@ -57,17 +57,10 @@ export const authApi = {
   loginJson: (email: string, password: string) =>
     api.post<{ access_token: string; token_type: string }>('/auth/login', { email, password }),
 
-  register: (email: string, password: string, display_name: string) =>
-    api.post<{ access_token: string; token_type: string }>('/auth/register', {
-      email,
-      password,
-      display_name,
-    }),
+  me: () => api.get<{ id: string; email: string; display_name: string; scoring_weights?: Record<string, number> | null }>('/auth/me'),
 
-  me: () => api.get<{ id: string; email: string; display_name: string }>('/auth/me'),
-
-  updateProfile: (display_name: string) =>
-    api.patch<{ id: string; email: string; display_name: string }>('/auth/me', { display_name }),
+  updateProfile: (data: { display_name?: string; scoring_weights?: Record<string, number> | null }) =>
+    api.put<{ status: string }>('/auth/me', data),
 }
 
 export const watchlistApi = {

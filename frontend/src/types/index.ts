@@ -32,25 +32,21 @@ export interface AlternativeData {
 }
 export type Conviction = 'HIGH' | 'MEDIUM' | 'LOW'
 
-export type UserRole = 'user' | 'admin'
-export type UserTier = 1 | 2 | 3
+export interface ScoringWeights {
+  technical: number
+  fundamental: number
+  sentiment: number
+  macro: number
+  volatility: number
+  catalyst: number
+  alternative_data: number
+}
 
 export interface User {
   id: string
   email: string
   display_name: string
-  tier: UserTier
-  role: UserRole
-}
-
-export interface AdminUser {
-  id: string
-  email: string
-  display_name: string
-  tier: UserTier
-  tier_label: string
-  role: UserRole
-  created_at: string | null
+  scoring_weights?: ScoringWeights | null
 }
 
 export interface WatchlistItem {

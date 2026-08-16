@@ -3,33 +3,22 @@ import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Eye, EyeOff, LogIn, UserPlus } from 'lucide-react'
+import { Eye, EyeOff, LogIn } from 'lucide-react'
 import { authApi } from '../lib/api'
 import { useAuth } from '../lib/auth-context'
 import ThemeToggle from '../components/ThemeToggle'
 import LoadingSpinner from '../components/LoadingSpinner'
 
-// ── Schemas ──────────────────────────────────────────────────────────────────
+// ── Schema ────────────────────────────────────────────────────────────────────
 
 const loginSchema = z.object({
   email: z.string().email('Enter a valid email'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
 })
 
-const registerSchema = z.object({
-  display_name: z.string().min(2, 'Name must be at least 2 characters'),
-  email: z.string().email('Enter a valid email'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
-  confirm_password: z.string(),
-}).refine((d) => d.password === d.confirm_password, {
-  message: "Passwords don't match",
-  path: ['confirm_password'],
-})
-
 type LoginFormData = z.infer<typeof loginSchema>
-type RegisterFormData = z.infer<typeof registerSchema>
 
-// ── Shared field ─────────────────────────────────────────────────────────────
+// ── Password field ────────────────────────────────────────────────────────────
 
 const PasswordField = forwardRef<
   HTMLInputElement,
@@ -122,95 +111,10 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
   )
 }
 
-// ── Register form ─────────────────────────────────────────────────────────────
-
-function RegisterForm({ onSuccess }: { onSuccess: () => void }) {
-  const { login } = useAuth()
-  const [serverError, setServerError] = useState<string | null>(null)
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isSubmitting },
-  } = useForm<RegisterFormData>({ resolver: zodResolver(registerSchema) })
-
-  const onSubmit = async (data: RegisterFormData) => {
-    setServerError(null)
-    try {
-      const res = await authApi.register(data.email, data.password, data.display_name)
-      await login(res.data.access_token)
-      onSuccess()
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })
-        ?.response?.data?.detail
-      setServerError(msg ?? 'Registration failed. Please try again.')
-    }
-  }
-
-  return (
-    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium text-[var(--color-fg)]">Display Name</label>
-        <input
-          {...register('display_name')}
-          type="text"
-          placeholder="Your name"
-          autoComplete="name"
-          className="input"
-        />
-        {errors.display_name && (
-          <p className="text-xs text-red-500">{errors.display_name.message}</p>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium text-[var(--color-fg)]">Email</label>
-        <input
-          {...register('email')}
-          type="email"
-          placeholder="you@example.com"
-          autoComplete="email"
-          className="input"
-        />
-        {errors.email && <p className="text-xs text-red-500">{errors.email.message}</p>}
-      </div>
-
-      <PasswordField
-        label="Password"
-        placeholder="••••••••"
-        autoComplete="new-password"
-        error={errors.password?.message}
-        {...register('password')}
-      />
-
-      <PasswordField
-        label="Confirm Password"
-        placeholder="••••••••"
-        autoComplete="new-password"
-        error={errors.confirm_password?.message}
-        {...register('confirm_password')}
-      />
-
-      {serverError && (
-        <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm">
-          {serverError}
-        </div>
-      )}
-
-      <button type="submit" disabled={isSubmitting} className="btn-primary mt-2">
-        {isSubmitting ? <LoadingSpinner size="sm" /> : <UserPlus className="w-4 h-4" />}
-        {isSubmitting ? 'Creating account…' : 'Create Account'}
-      </button>
-    </form>
-  )
-}
-
 // ── Auth Page ─────────────────────────────────────────────────────────────────
 
 export default function AuthPage() {
-  const [tab, setTab] = useState<'login' | 'register'>('login')
   const navigate = useNavigate()
-
   const onSuccess = () => navigate('/', { replace: true })
 
   return (
@@ -231,58 +135,21 @@ export default function AuthPage() {
       {/* Center card */}
       <div className="flex-1 flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-sm">
-          {/* Branding header */}
           <div className="text-center mb-8">
             <h1
               className="text-3xl font-light text-[var(--color-fg)] mb-1"
               style={{ fontFamily: 'Fraunces, Georgia, serif' }}
             >
-              {tab === 'login' ? 'Welcome back' : 'Get started'}
+              Welcome back
             </h1>
             <p className="text-sm text-[var(--color-fg-muted)]">
-              {tab === 'login'
-                ? 'Sign in to your trading dashboard'
-                : 'Create your SAMSBPM account'}
+              Sign in to your trading dashboard
             </p>
           </div>
 
-          {/* Card */}
           <div className="card p-6">
-            {/* Tabs */}
-            <div className="flex rounded-xl bg-[var(--color-bg)] p-1 mb-6">
-              {(['login', 'register'] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all duration-200
-                    ${tab === t
-                      ? 'bg-[var(--color-surface)] text-[var(--color-fg)] shadow-card'
-                      : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
-                    }`}
-                >
-                  {t === 'login' ? 'Sign In' : 'Register'}
-                </button>
-              ))}
-            </div>
-
-            {/* Form */}
-            {tab === 'login' ? (
-              <LoginForm onSuccess={onSuccess} />
-            ) : (
-              <RegisterForm onSuccess={onSuccess} />
-            )}
+            <LoginForm onSuccess={onSuccess} />
           </div>
-
-          {/* Switch link */}
-          <p className="text-center text-sm text-[var(--color-fg-muted)] mt-4">
-            {tab === 'login' ? "Don't have an account? " : 'Already have an account? '}
-            <button
-              onClick={() => setTab(tab === 'login' ? 'register' : 'login')}
-              className="text-brand-500 hover:text-brand-400 font-medium transition-colors"
-            >
-              {tab === 'login' ? 'Register' : 'Sign in'}
-            </button>
-          </p>
         </div>
       </div>
     </div>

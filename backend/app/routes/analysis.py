@@ -9,10 +9,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import get_settings
-from app.db import COLL_SIGNALS, get_db
+from app.db import COLL_FEATURES, COLL_SIGNALS, get_db
 from app.dependencies import get_current_user
 from app.models.stock import AnalyzeResponse
 from app.services.pipeline import run_pipeline
+from app.services.scoring import compute_personalized_score
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["analysis"])
@@ -68,7 +69,7 @@ async def analyze(
                 age = datetime.now(tz=timezone.utc) - generated_at.replace(tzinfo=timezone.utc)
                 if age < timedelta(minutes=_CACHE_TTL_MINUTES):
                     logger.info("cache_hit", ticker=ticker, age_seconds=age.seconds)
-                    return _doc_to_response(cached)
+                    return await _personalized_response(cached, current_user, db)
 
     try:
         signal_doc = await run_pipeline(ticker)
@@ -78,7 +79,7 @@ async def analyze(
         logger.error("analyze_error", ticker=ticker, error=str(exc))
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
 
-    return _doc_to_response(signal_doc)
+    return await _personalized_response(signal_doc, current_user, db)
 
 
 @router.get("/backtest", summary="Run backtest for a ticker (stub)")
@@ -98,6 +99,18 @@ async def backtest(
 
     from app.services.backtesting import run_backtest
     return run_backtest(ticker, raw_doc.get("bars", []))
+
+
+async def _personalized_response(doc: dict, current_user: dict, db) -> AnalyzeResponse:
+    """Apply per-user weights before converting signal doc to response."""
+    user_weights = current_user.get("scoring_weights")
+    if user_weights:
+        feat = await db[COLL_FEATURES].find_one({"ticker": doc["ticker"]})
+        if feat:
+            feat["risk"] = doc.get("risk", {})
+            score, signal = compute_personalized_score(feat, user_weights)
+            doc = {**doc, "score": score, "signal": signal}
+    return _doc_to_response(doc)
 
 
 def _doc_to_response(doc: dict) -> AnalyzeResponse:

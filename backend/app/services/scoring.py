@@ -29,6 +29,39 @@ _MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "model", "xgb_
 _xgb_model = None  # loaded lazily
 
 
+def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[float, str]:
+    """
+    Apply per-user scoring weights to a feature document and return
+    (personalized_score, personalized_signal) without touching the database.
+
+    Signal thresholds: BUY > 0.70 AND risk < 6, SELL < 0.30, else HOLD.
+    Risk score is expected in feat["risk"]["score"] if available.
+    """
+    if user_weights:
+        class _W:
+            weight_technical        = user_weights.get("technical",        0.25)
+            weight_fundamental      = user_weights.get("fundamental",       0.15)
+            weight_sentiment        = user_weights.get("sentiment",         0.20)
+            weight_macro            = user_weights.get("macro",             0.15)
+            weight_volatility       = user_weights.get("volatility",        0.10)
+            weight_catalyst         = user_weights.get("catalyst",          0.15)
+            weight_alternative_data = user_weights.get("alternative_data",  0.10)
+        score = clamp(_weighted_score(feat, _W()))
+    else:
+        settings = get_settings()
+        score = clamp(_weighted_score(feat, settings))
+
+    risk_score = feat.get("risk", {}).get("score", 5) if isinstance(feat.get("risk"), dict) else 5
+    if score > 0.70 and risk_score < 6:
+        signal = "BUY"
+    elif score < 0.30:
+        signal = "SELL"
+    else:
+        signal = "HOLD"
+
+    return round(score, 4), signal
+
+
 async def score_ticker(ticker: str) -> dict:
     """
     Read feature document for *ticker* and produce a composite score.

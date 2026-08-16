@@ -1,14 +1,14 @@
 """
-POST /auth/register  — create account
 POST /auth/login     — get JWT token
 GET  /auth/me        — current user profile
-PUT  /auth/me        — update display name
+PUT  /auth/me        — update display name and/or scoring weights
 """
 from datetime import datetime, timezone
+from typing import Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, model_validator
 
 from app.db import COLL_USERS, get_db
 from app.dependencies import get_current_user
@@ -21,17 +21,35 @@ logger = get_logger(__name__)
 
 # ── Request / response models ─────────────────────────────────────────────────
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-    display_name: str = ""
+class ScoringWeights(BaseModel):
+    """Per-user scoring weights. The 6 base weights must sum to 1.0.
+    alternative_data is an additive modifier (not part of the sum constraint)."""
+    technical: float = 0.25
+    fundamental: float = 0.15
+    sentiment: float = 0.20
+    macro: float = 0.15
+    volatility: float = 0.10
+    catalyst: float = 0.15
+    alternative_data: float = 0.10
+
+    @model_validator(mode="after")
+    def validate_sum(self) -> "ScoringWeights":
+        total = self.technical + self.fundamental + self.sentiment + self.macro + self.volatility + self.catalyst
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                f"Base scoring weights (technical + fundamental + sentiment + macro + volatility + catalyst) "
+                f"must sum to 1.0, got {total:.4f}"
+            )
+        return self
+
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
 class UpdateMeRequest(BaseModel):
-    display_name: str
+    display_name: Optional[str] = None
+    scoring_weights: Optional[ScoringWeights] = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -39,26 +57,6 @@ class TokenResponse(BaseModel):
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@router.post("/register", response_model=TokenResponse, status_code=201)
-async def register(body: RegisterRequest) -> TokenResponse:
-    """Create a new user account and return an access token."""
-    db = await get_db()
-    if await db[COLL_USERS].find_one({"email": body.email}):
-        raise HTTPException(status_code=409, detail="Email already registered")
-
-    user = {
-        "email": body.email,
-        "password_hash": hash_password(body.password),
-        "display_name": body.display_name or body.email.split("@")[0],
-        "created_at": datetime.now(tz=timezone.utc),
-        "tier": 1,
-        "role": "user",
-    }
-    result = await db[COLL_USERS].insert_one(user)
-    logger.info("user_registered", email=body.email)
-    return TokenResponse(access_token=create_access_token(str(result.inserted_id), body.email))
-
 
 @router.post("/login", response_model=TokenResponse)
 async def login(body: LoginRequest) -> TokenResponse:
@@ -80,8 +78,7 @@ async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
         "email": current_user["email"],
         "display_name": current_user.get("display_name", ""),
         "created_at": current_user.get("created_at"),
-        "tier": current_user.get("tier", 1),
-        "role": current_user.get("role", "user"),
+        "scoring_weights": current_user.get("scoring_weights"),
     }
 
 
@@ -90,10 +87,19 @@ async def update_me(
     body: UpdateMeRequest,
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    """Update the current user's display name."""
+    """Update display name and/or personal scoring weights."""
+    if body.display_name is None and body.scoring_weights is None:
+        raise HTTPException(status_code=400, detail="Provide display_name and/or scoring_weights")
+
+    updates: dict = {}
+    if body.display_name is not None:
+        updates["display_name"] = body.display_name
+    if body.scoring_weights is not None:
+        updates["scoring_weights"] = body.scoring_weights.model_dump()
+
     db = await get_db()
     await db[COLL_USERS].update_one(
         {"_id": current_user["_id"]},
-        {"$set": {"display_name": body.display_name}},
+        {"$set": updates},
     )
-    return {"status": "updated", "display_name": body.display_name}
+    return {"status": "updated", **updates}

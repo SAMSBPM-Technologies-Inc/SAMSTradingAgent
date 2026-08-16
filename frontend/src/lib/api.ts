@@ -51,17 +51,10 @@ export const authApi = {
   loginJson: (email: string, password: string) =>
     api.post<{ access_token: string; token_type: string }>('/auth/login', { email, password }),
 
-  register: (email: string, password: string, display_name: string) =>
-    api.post<{ access_token: string; token_type: string }>('/auth/register', {
-      email,
-      password,
-      display_name,
-    }),
+  me: () => api.get<import('../types').User>('/auth/me'),
 
-  me: () => api.get<{ id: string; email: string; display_name: string }>('/auth/me'),
-
-  updateProfile: (display_name: string) =>
-    api.patch<{ id: string; email: string; display_name: string }>('/auth/me', { display_name }),
+  updateProfile: (data: { display_name?: string; scoring_weights?: import('../types').ScoringWeights | null }) =>
+    api.put<{ status: string }>('/auth/me', data),
 }
 
 export const watchlistApi = {
@@ -90,12 +83,6 @@ export const alertsApi = {
   getSettings: () => api.get<import('../types').AlertSettings>('/alerts/settings'),
   updateSettings: (data: import('../types').AlertSettings) => api.put<import('../types').AlertSettings>('/alerts/settings', data),
   sendTest: () => api.post<{ status: string; channels: string[] }>('/alerts/test'),
-}
-
-export const adminApi = {
-  listUsers: () => api.get<import('../types').AdminUser[]>('/admin/users'),
-  setTier: (userId: string, tier: number) => api.put(`/admin/users/${userId}/tier`, { tier }),
-  setRole: (userId: string, role: string) => api.put(`/admin/users/${userId}/role`, { role }),
 }
 
 export const tradingApi = {

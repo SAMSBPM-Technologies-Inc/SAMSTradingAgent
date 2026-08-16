@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
-from app.db import COLL_RAW, COLL_SIGNALS, COLL_WATCHED, get_db
+from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import (
     TickerAddRequest,
@@ -16,6 +16,7 @@ from app.models.stock import (
     WatchlistItem,
     WatchlistResponse,
 )
+from app.services.scoring import compute_personalized_score
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["watchlist"])
@@ -34,14 +35,29 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
     if not tickers:
         return WatchlistResponse(count=0, items=[])
 
-    # Run signals + raw price queries in parallel — both depend only on tickers list
-    docs, raw_docs = await asyncio.gather(
-        db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
-        db[COLL_RAW].find(
-            {"ticker": {"$in": tickers}},
-            {"ticker": 1, "current_price": 1, "day_change_pct": 1},
-        ).to_list(length=2000),
-    )
+    user_weights = current_user.get("scoring_weights")
+
+    # Fetch signals + raw prices always; features only when user has custom weights
+    if user_weights:
+        docs, raw_docs, feat_docs = await asyncio.gather(
+            db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
+            db[COLL_RAW].find(
+                {"ticker": {"$in": tickers}},
+                {"ticker": 1, "current_price": 1, "day_change_pct": 1},
+            ).to_list(length=2000),
+            db[COLL_FEATURES].find({"ticker": {"$in": tickers}}).to_list(length=2000),
+        )
+        feat_by_ticker = {f["ticker"]: f for f in feat_docs}
+    else:
+        docs, raw_docs = await asyncio.gather(
+            db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
+            db[COLL_RAW].find(
+                {"ticker": {"$in": tickers}},
+                {"ticker": 1, "current_price": 1, "day_change_pct": 1},
+            ).to_list(length=2000),
+        )
+        feat_by_ticker = {}
+
     raw_by_ticker = {r["ticker"]: r for r in raw_docs}
 
     items = []
@@ -51,10 +67,21 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
         if isinstance(generated_at, datetime) and generated_at.tzinfo is None:
             generated_at = generated_at.replace(tzinfo=timezone.utc)
         raw = raw_by_ticker.get(doc["ticker"], {})
+
+        # Apply per-user weights if set, otherwise use stored global score/signal
+        if user_weights and doc["ticker"] in feat_by_ticker:
+            feat = feat_by_ticker[doc["ticker"]]
+            # Merge risk from signal doc into feat for threshold check
+            feat["risk"] = doc.get("risk", {})
+            score, signal = compute_personalized_score(feat, user_weights)
+        else:
+            score = doc.get("score", 0.0)
+            signal = doc.get("signal", "HOLD")
+
         items.append(WatchlistItem(
             ticker=doc["ticker"],
-            signal=doc.get("signal", "HOLD"),
-            score=doc.get("score", 0.0),
+            signal=signal,
+            score=score,
             confidence=doc.get("confidence", 0.0),
             conviction=ao.get("conviction"),
             current_price=raw.get("current_price") or doc.get("current_price"),

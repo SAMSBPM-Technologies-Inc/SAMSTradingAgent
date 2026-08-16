@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import AnalyzeResponse, DipBuyCandidate, DipBuyScanResponse, SignalListResponse, SignalSummary
+from app.services.scoring import compute_personalized_score
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["signals"])
@@ -19,6 +20,26 @@ logger = get_logger(__name__)
 async def _user_tickers(user_id: str, db) -> list[str]:
     watched = await db[COLL_WATCHED].find({"user_id": user_id}, {"ticker": 1}).to_list(length=2000)
     return [d["ticker"] for d in watched]
+
+
+async def _apply_user_weights(docs: list[dict], user_weights: dict | None, db) -> list[AnalyzeResponse]:
+    """Re-score signal docs using the user's personal weights if set."""
+    if not user_weights:
+        return [_doc_to_response(d) for d in docs]
+
+    tickers = [d["ticker"] for d in docs]
+    feat_docs = await db[COLL_FEATURES].find({"ticker": {"$in": tickers}}).to_list(length=2000)
+    feat_by_ticker = {f["ticker"]: f for f in feat_docs}
+
+    responses = []
+    for doc in docs:
+        feat = feat_by_ticker.get(doc["ticker"])
+        if feat:
+            feat["risk"] = doc.get("risk", {})
+            score, signal = compute_personalized_score(feat, user_weights)
+            doc = {**doc, "score": score, "signal": signal}
+        responses.append(_doc_to_response(doc))
+    return responses
 
 
 @router.get("/signals", response_model=SignalListResponse, summary="List latest signals for your watchlist")
@@ -33,14 +54,18 @@ async def list_signals(
     tickers = await _user_tickers(user_id, db)
 
     query: dict = {"ticker": {"$in": tickers}}
-    if signal:
-        query["signal"] = signal
     if min_confidence > 0:
         query["confidence"] = {"$gte": min_confidence}
+    # Note: signal filter applied after re-scoring when user has custom weights
+    if signal and not current_user.get("scoring_weights"):
+        query["signal"] = signal
 
     cursor = db[COLL_SIGNALS].find(query).sort("generated_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
-    responses = [_doc_to_response(d) for d in docs]
+    responses = await _apply_user_weights(docs, current_user.get("scoring_weights"), db)
+
+    if signal:
+        responses = [r for r in responses if r.signal == signal]
     return SignalListResponse(count=len(responses), signals=responses)
 
 
@@ -51,7 +76,7 @@ async def signals_summary(current_user: dict = Depends(get_current_user)) -> Sig
     tickers = await _user_tickers(user_id, db)
 
     docs = await db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000)
-    responses = [_doc_to_response(d) for d in docs]
+    responses = await _apply_user_weights(docs, current_user.get("scoring_weights"), db)
 
     buy  = sum(1 for r in responses if r.signal == "BUY")
     sell = sum(1 for r in responses if r.signal == "SELL")

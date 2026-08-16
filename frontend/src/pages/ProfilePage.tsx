@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, User, Wifi, WifiOff, X } from 'lucide-react'
+import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, Sliders, User, Wifi, WifiOff, X } from 'lucide-react'
 import { alertsApi, authApi, tradingApi } from '../lib/api'
-import type { AlertSettings, AutoTradeSettings } from '../types'
+import type { AlertSettings, AutoTradeSettings, ScoringWeights } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -421,6 +421,131 @@ function AutoTradingCard() {
   )
 }
 
+// ── Scoring Weights section ────────────────────────────────────────────────────
+
+const DEFAULT_WEIGHTS: ScoringWeights = {
+  technical: 0.25,
+  fundamental: 0.15,
+  sentiment: 0.20,
+  macro: 0.15,
+  volatility: 0.10,
+  catalyst: 0.15,
+  alternative_data: 0.10,
+}
+
+const WEIGHT_LABELS: Record<keyof ScoringWeights, string> = {
+  technical: 'Technical',
+  fundamental: 'Fundamental',
+  sentiment: 'Sentiment',
+  macro: 'Macro',
+  volatility: 'Volatility',
+  catalyst: 'Catalyst',
+  alternative_data: 'Alternative Data',
+}
+
+function ScoringWeightsCard() {
+  const { user, fetchUser } = useAuth()
+  const [weights, setWeights] = useState<ScoringWeights>(user?.scoring_weights ?? DEFAULT_WEIGHTS)
+  const [isSaving, setIsSaving] = useState(false)
+  const [savedOk, setSavedOk] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (user?.scoring_weights) setWeights(user.scoring_weights)
+  }, [user?.scoring_weights])
+
+  const baseSum = +(
+    weights.technical + weights.fundamental + weights.sentiment +
+    weights.macro + weights.volatility + weights.catalyst
+  ).toFixed(4)
+  const sumOk = Math.abs(baseSum - 1.0) < 0.01
+
+  const update = (key: keyof ScoringWeights, val: number) =>
+    setWeights((w) => ({ ...w, [key]: Math.round(val * 100) / 100 }))
+
+  const save = async () => {
+    if (!sumOk) return
+    setIsSaving(true)
+    setError(null)
+    try {
+      await authApi.updateProfile({ scoring_weights: weights })
+      await fetchUser()
+      setSavedOk(true)
+      setTimeout(() => setSavedOk(false), 2500)
+    } catch {
+      setError('Failed to save. Please try again.')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const reset = () => setWeights(DEFAULT_WEIGHTS)
+
+  const BASE_KEYS: (keyof ScoringWeights)[] = ['technical', 'fundamental', 'sentiment', 'macro', 'volatility', 'catalyst']
+
+  return (
+    <div className="card p-5">
+      <h3 className="text-sm font-medium text-[var(--color-fg-muted)] mb-1 uppercase tracking-wide flex items-center gap-2">
+        <Sliders className="w-3.5 h-3.5" />
+        Signal Weights
+      </h3>
+      <p className="text-xs text-[var(--color-fg-muted)] mb-4">
+        Personalize how sub-scores are blended into your BUY/SELL/HOLD signal.
+        The 6 base weights must sum to 1.0. Alternative data is an additive modifier.
+      </p>
+
+      <div className="flex flex-col gap-3">
+        {BASE_KEYS.map((key) => (
+          <div key={key} className="flex flex-col gap-1">
+            <div className="flex justify-between text-sm">
+              <label className="text-[var(--color-fg)]">{WEIGHT_LABELS[key]}</label>
+              <span className="font-semibold text-brand-500">{(weights[key] * 100).toFixed(0)}%</span>
+            </div>
+            <input
+              type="range" min={0} max={1} step={0.01}
+              value={weights[key]}
+              onChange={(e) => update(key, parseFloat(e.target.value))}
+              className="w-full accent-brand-500"
+            />
+          </div>
+        ))}
+
+        {/* Alternative data (additive modifier) */}
+        <div className="flex flex-col gap-1 pt-2 border-t border-[var(--color-border)]">
+          <div className="flex justify-between text-sm">
+            <label className="text-[var(--color-fg)]">{WEIGHT_LABELS.alternative_data} <span className="text-[var(--color-fg-muted)] text-xs">(modifier)</span></label>
+            <span className="font-semibold text-brand-500">{(weights.alternative_data * 100).toFixed(0)}%</span>
+          </div>
+          <input
+            type="range" min={0} max={0.5} step={0.01}
+            value={weights.alternative_data}
+            onChange={(e) => update('alternative_data', parseFloat(e.target.value))}
+            className="w-full accent-brand-500"
+          />
+        </div>
+
+        {/* Sum indicator */}
+        <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg ${sumOk ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-500'}`}>
+          {sumOk ? <Check className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+          Base weights sum: <span className="font-semibold">{(baseSum * 100).toFixed(0)}%</span>
+          {!sumOk && ' — must equal 100%'}
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={save} disabled={isSaving || !sumOk} className="btn-primary flex-1">
+            {isSaving ? <LoadingSpinner size="sm" /> : <Check className="w-4 h-4" />}
+            {isSaving ? 'Saving…' : savedOk ? 'Saved!' : 'Save Weights'}
+          </button>
+          <button onClick={reset} className="btn-secondary px-3 text-sm">Reset</button>
+        </div>
+
+        {error && <p className="text-xs text-red-500">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
+
 export default function ProfilePage() {
   const { user, logout } = useAuth()
   const [isEditing, setIsEditing] = useState(false)
@@ -457,7 +582,7 @@ export default function ProfilePage() {
     setIsSaving(true)
     setSaveError(null)
     try {
-      await authApi.updateProfile(trimmed)
+      await authApi.updateProfile({ display_name: trimmed })
       setSavedOk(true)
       setIsEditing(false)
       setTimeout(() => setSavedOk(false), 2500)
@@ -582,28 +707,14 @@ export default function ProfilePage() {
           </div>
         </div>
 
-        {/* Alert settings — Tier 1+ */}
+        {/* Alert settings */}
         <AlertSettingsCard />
 
-        {/* Tier 3 only features */}
-        {user && user.tier >= 3 ? (
-          <AutoTradingCard />
-        ) : (
-          <div className="card p-5 border-dashed border-[var(--color-border)]">
-            <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-xl bg-brand-500/10 flex items-center justify-center flex-shrink-0">
-                <span className="text-brand-500 text-sm font-bold">3</span>
-              </div>
-              <div>
-                <p className="text-sm font-medium text-[var(--color-fg)]">Elite Plan required</p>
-                <p className="text-xs text-[var(--color-fg-muted)] mt-0.5">
-                  Automated trading is available on the Elite (Tier 3) plan.
-                  Contact your administrator to upgrade.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Scoring weights */}
+        <ScoringWeightsCard />
+
+        {/* Auto trading */}
+        <AutoTradingCard />
 
         {/* Danger zone */}
         <div className="card p-5 border-red-500/20">

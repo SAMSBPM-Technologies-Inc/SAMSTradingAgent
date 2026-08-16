@@ -8,6 +8,7 @@ interface AuthContextValue {
   isLoading: boolean
   login: (token: string) => Promise<void>
   logout: () => void
+  fetchUser: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -57,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, logout, fetchUser }}>
       {children}
     </AuthContext.Provider>
   )
