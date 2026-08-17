@@ -32,11 +32,15 @@ jobs:
           # Master kill-switch. Must be "true" or the app never even attempts a
           # broker connection (see main.py lifespan / pipeline._execute_trades).
           AUTO_TRADE_ENABLED: ${{ vars.AUTO_TRADE_ENABLED || 'false' }}
+          # Second, independent gate. Must ALSO be "true" for real-money orders:
+          # without it PUT /trading/settings rejects paper_trading=false with 403.
+          # TRADING_MODE=live alone is not sufficient.
+          AUTO_TRADE_LIVE_ALLOWED: ${{ vars.AUTO_TRADE_LIVE_ALLOWED || 'false' }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED
           command_timeout: 30m
           script: |
             set -e
@@ -84,7 +88,15 @@ jobs:
               IB_USER="$TWS_USERID"
               IB_PASS="$TWS_PASSWORD"
               IB_PORT=4003
+              echo "════════════════════════════════════════════════════════════"
               echo "⚠️  TRADING_MODE=live — orders will hit the REAL account."
+              echo "    AUTO_TRADE_ENABLED     = ${AUTO_TRADE_ENABLED:-false}"
+              echo "    AUTO_TRADE_LIVE_ALLOWED= ${AUTO_TRADE_LIVE_ALLOWED:-false}"
+              echo "    Real orders require BOTH to be true AND each user's"
+              echo "    auto_trade_settings.paper_trading=false."
+              echo "    Live IBKR logins are 2FA-challenged; IBC cannot answer a"
+              echo "    push notification. Watch the ibgateway logs for a stall."
+              echo "════════════════════════════════════════════════════════════"
             else
               IB_USER="$TWS_USERID_PAPER"
               IB_PASS="$TWS_PASSWORD_PAPER"
@@ -110,7 +122,11 @@ jobs:
             # set_if_missing_or_empty only fills blanks, so the old `false` written
             # on the first deploy could never be flipped on by a later deploy.
             # IBKR_HOST is set by docker-compose (=ibgateway) and needs no default here.
-            set_if_missing_or_empty AUTO_TRADE_LIVE_ALLOWED        false
+            # Injected, not set_if_missing: the latter wrote `false` on the first
+            # deploy and could never flip it afterwards, so live trading stayed
+            # blocked at the API layer (403 on paper_trading=false) no matter what
+            # TRADING_MODE said. Same defect that kept AUTO_TRADE_ENABLED pinned off.
+            inject_secret AUTO_TRADE_LIVE_ALLOWED "$AUTO_TRADE_LIVE_ALLOWED"
             set_if_missing_or_empty IBKR_CLIENT_ID                 1
             set_if_missing_or_empty ENABLE_ML_MODEL                false
             set_if_missing_or_empty ENABLE_BACKTESTING             false
