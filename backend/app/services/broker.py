@@ -43,7 +43,10 @@ def _build_from_settings() -> tuple[str, BrokerConfig]:
         port=s.ibkr_port,
         client_id=s.ibkr_client_id,
         account_id=s.ibkr_account_id,
-        paper=not getattr(s, "auto_trade_live_allowed", False),
+        # Reflects which gateway session is actually running (TRADING_MODE), not
+        # whether live trading is permitted (AUTO_TRADE_LIVE_ALLOWED). Deriving
+        # it from the permission flag would log a live session as "paper".
+        paper=not getattr(s, "is_live_trading", False),
         api_key=getattr(s, "alpaca_api_key", ""),
         api_secret=getattr(s, "alpaca_api_secret", ""),
         base_url=getattr(s, "alpaca_base_url", ""),

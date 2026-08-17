@@ -19,9 +19,15 @@ jobs:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
           # IB Gateway login — required for the ibgateway container to authenticate.
           # Without these IBC exits at startup and nothing listens on the API port.
+          # IBKR issues SEPARATE credentials for paper and live; the deploy script
+          # picks the pair matching TRADING_MODE and writes it as TWS_USERID/
+          # TWS_PASSWORD, which are the env var names the gateway image expects.
+          TWS_USERID_PAPER: ${{ secrets.TWS_USERID_PAPER }}
+          TWS_PASSWORD_PAPER: ${{ secrets.TWS_PASSWORD_PAPER }}
           TWS_USERID: ${{ secrets.TWS_USERID }}
           TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
-          # "paper" or "live". Controls which socat relay port the api dials.
+          # "paper" or "live". Selects BOTH the credential pair and the socat
+          # relay port. Defaults to paper — the safe direction to fail.
           TRADING_MODE: ${{ vars.TRADING_MODE || 'paper' }}
           # Master kill-switch. Must be "true" or the app never even attempts a
           # broker connection (see main.py lifespan / pipeline._execute_trades).
@@ -30,7 +36,7 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TRADING_MODE,AUTO_TRADE_ENABLED
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED
           command_timeout: 30m
           script: |
             set -e
@@ -63,22 +69,34 @@ jobs:
             inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 
             # ── IB Gateway credentials + mode ─────────────────────────────────
-            # These were previously never written to .env.production, so the
-            # ibgateway container had no login and IBC exited immediately.
-            inject_secret TWS_USERID   "$TWS_USERID"
-            inject_secret TWS_PASSWORD "$TWS_PASSWORD"
+            # Credentials were previously never written to .env.production, so
+            # the ibgateway container had no login and IBC exited immediately.
+            #
+            # Credential pair AND relay port are chosen in ONE branch so they can
+            # never disagree — pointing live credentials at the paper port (or
+            # vice versa) fails in confusing ways.
+            #   paper -> TWS_USERID_PAPER / TWS_PASSWORD_PAPER, port 4004
+            #   live  -> TWS_USERID       / TWS_PASSWORD,       port 4003
+            # 4003/4004 are the socat relay ports. IB Gateway's own 4001/4002 are
+            # bound to 127.0.0.1 inside the gateway container and are unreachable
+            # from the api container.
+            if [ "$TRADING_MODE" = "live" ]; then
+              IB_USER="$TWS_USERID"
+              IB_PASS="$TWS_PASSWORD"
+              IB_PORT=4003
+              echo "⚠️  TRADING_MODE=live — orders will hit the REAL account."
+            else
+              IB_USER="$TWS_USERID_PAPER"
+              IB_PASS="$TWS_PASSWORD_PAPER"
+              IB_PORT=4004
+              echo "TRADING_MODE=paper — using paper credentials, relay port 4004."
+            fi
+
+            inject_secret TWS_USERID   "$IB_USER"
+            inject_secret TWS_PASSWORD "$IB_PASS"
+            inject_secret IBKR_PORT    "$IB_PORT"
             inject_secret TRADING_MODE "$TRADING_MODE"
             inject_secret AUTO_TRADE_ENABLED "$AUTO_TRADE_ENABLED"
-
-            # IBKR_PORT must match TRADING_MODE and must be a SOCAT RELAY port:
-            #   paper -> 4004, live -> 4003.
-            # IB Gateway's own 4001/4002 are bound to 127.0.0.1 inside the
-            # gateway container and are unreachable from the api container.
-            if [ "$TRADING_MODE" = "live" ]; then
-              inject_secret IBKR_PORT 4003
-            else
-              inject_secret IBKR_PORT 4004
-            fi
 
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             inject_secret           CORS_ORIGINS                   https://sta.samsbpm.com,https://samtrades.samsbpm.com
@@ -113,11 +131,18 @@ jobs:
             # This service was previously NEVER started by this workflow (every
             # `up` used --no-deps and named only api/cloudflared), so unless it
             # had been launched by hand on the box there was no gateway at all.
-            if [ -n "$TWS_USERID" ] && [ -n "$TWS_PASSWORD" ]; then
-              echo "=== starting ibgateway (mode=$TRADING_MODE) ==="
+            # Checks the credentials actually selected for this mode, not the
+            # live pair — otherwise a paper deploy with only paper secrets set
+            # would skip the gateway.
+            if [ -n "$IB_USER" ] && [ -n "$IB_PASS" ]; then
+              echo "=== starting ibgateway (mode=$TRADING_MODE, port=$IB_PORT) ==="
               $COMPOSE up -d --no-deps ibgateway
             else
-              echo "WARNING: TWS_USERID/TWS_PASSWORD not set — skipping ibgateway."
+              if [ "$TRADING_MODE" = "live" ]; then
+                echo "WARNING: TWS_USERID/TWS_PASSWORD not set — skipping ibgateway."
+              else
+                echo "WARNING: TWS_USERID_PAPER/TWS_PASSWORD_PAPER not set — skipping ibgateway."
+              fi
               echo "         Auto-trading will stay disconnected until they are configured."
             fi
 

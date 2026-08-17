@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     ibkr_client_id: int = Field(default=1)
     ibkr_account_id: str = Field(default="")     # optional; leave empty for default account
 
+    # Which IB Gateway session the container actually launched. This is the
+    # ground truth about which account orders reach, and it selects the
+    # credential pair and relay port at deploy time.
+    # Distinct from auto_trade_live_allowed, which is a user-facing permission
+    # gate — do not infer one from the other.
+    trading_mode: str = Field(default="paper", description="IB Gateway session: paper | live")
+
+    @property
+    def is_live_trading(self) -> bool:
+        return self.trading_mode.strip().lower() == "live"
+
     # ── Alpaca (alternative venue; used when BROKER_PROVIDER=alpaca) ──────────
     alpaca_api_key: str = Field(default="")
     alpaca_api_secret: str = Field(default="")
