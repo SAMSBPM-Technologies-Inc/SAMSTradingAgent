@@ -45,5 +45,7 @@ structlog==24.1.0
 # Utilities
 python-dateutil==2.9.0
 
-# Automated trading — installed separately in Dockerfile (optional; app starts without it)
-# ib-insync==0.9.86
+# Automated trading — Interactive Brokers API wrapper.
+# ib_async is the maintained successor to ib_insync (unmaintained since 2024).
+# Drop-in API-compatible; supports Python 3.10–3.14.
+ib_async==2.1.0

@@ -1,8 +1,17 @@
 services:
   # ── Interactive Brokers Gateway (headless) ──────────────────────────────────
   # Runs IB Gateway in a Docker container using IBC for automatic login.
-  # Live trading port 4001 is exposed only on the internal network.
-  # Credentials: set TWS_USERID, TWS_PASSWORD, TRADING_MODE in .env.production
+  #
+  # PORT MODEL — read before changing anything here:
+  #   IB Gateway itself binds its API to 127.0.0.1 ONLY, inside this container:
+  #       127.0.0.1:4001 = live      127.0.0.1:4002 = paper
+  #   Those are unreachable from any other container. The image therefore runs
+  #   socat to republish them on all interfaces under DIFFERENT port numbers:
+  #       0.0.0.0:4003   = live      0.0.0.0:4004   = paper
+  #   So the api container MUST connect to ibgateway:4003 / ibgateway:4004.
+  #   Connecting to 4001/4002 is refused and is the classic silent failure here.
+  #
+  # Credentials come from .env.production: TWS_USERID, TWS_PASSWORD, TRADING_MODE.
   ibgateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     container_name: trading_ibgateway
@@ -14,20 +23,31 @@ services:
       - EXISTING_SESSION_DETECTED_ACTION=primary
       - ACCEPT_INCOMING_CONNECTION_ACTION=accept
       - DISMISS_PASSWORD_EXPIRY_WARNING=yes
+      # IBKR force-logs-off every session daily. Schedule the restart well after
+      # the US close and before pre-market, so it never lands mid-session.
+      # Override with IB_AUTO_RESTART_TIME in .env.production.
+      - AUTO_RESTART_TIME=${IB_AUTO_RESTART_TIME:-11:45 PM}
+      - TIME_ZONE=${IB_TIME_ZONE:-America/New_York}
+      # If a 2FA push is never answered, restart and retry rather than dying.
+      - TWOFA_TIMEOUT_ACTION=restart
     volumes:
       - ibgateway_settings:/home/ibgateway/Jts    # persists IB Gateway preferences
       - ibgateway_logs:/home/ibgateway/IBController/Logs
-    # Only expose API port on the internal network — never to the host
+    # Reachable only on the internal Docker network — never published to the host.
     expose:
-      - "4001"   # live trading API (used when IB_TRADING_MODE=live)
-      - "4002"   # paper trading API (used when IB_TRADING_MODE=paper)
+      - "4003"   # live  API via socat relay (IBKR_PORT=4003)
+      - "4004"   # paper API via socat relay (IBKR_PORT=4004)
     healthcheck:
-      # Check the API port is accepting connections (IB Gateway takes ~90s to boot)
-      test: ["CMD-SHELL", "nc -z localhost ${IBKR_PORT:-4002} || exit 1"]
+      # Probe the SOCAT RELAY port (4004/4003), not IB Gateway's own port.
+      # The old check (`nc -z localhost 4002`) passed from inside this container
+      # even when every cross-container connection was refused — a false green.
+      # socat binds 0.0.0.0, so if loopback answers on the relay port the relay
+      # is up and other containers can reach it too.
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${IBKR_PORT:-4004} || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 15
-      start_period: 90s
+      start_period: 120s   # IB Gateway + IBC login takes ~90-120s
     networks:
       - internal
 
@@ -47,8 +67,16 @@ services:
       - LOG_LEVEL=INFO
       # Point IBKR client to the ibgateway container on the internal network.
       # These override any values in .env.production for Docker deployments.
+      # 4004 = paper relay, 4003 = live relay. See the port model note above —
+      # 4001/4002 are loopback-only inside ibgateway and will always refuse.
       - IBKR_HOST=ibgateway
-      - IBKR_PORT=${IBKR_PORT:-4002}
+      - IBKR_PORT=${IBKR_PORT:-4004}
+    depends_on:
+      # Start ordering only — the api must come up even if the gateway is still
+      # booting or failing, since it also serves the dashboard. broker.py's
+      # reconnect loop handles a gateway that arrives late.
+      ibgateway:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

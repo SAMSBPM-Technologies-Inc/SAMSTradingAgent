@@ -44,17 +44,34 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _check_owner_account()
     start_scheduler()
 
-    # Connect to IB Gateway if auto-trading is enabled
+    # Connect to the broker if auto-trading is enabled
     from app.config import get_settings
     from app.services import broker as ibkr
     _settings = get_settings()
     if _settings.auto_trade_enabled:
-        await ibkr.connect(
+        connected = await ibkr.connect(
             host=_settings.ibkr_host,
             port=_settings.ibkr_port,
             client_id=_settings.ibkr_client_id,
         )
+        # Not fatal — the reconnect loop keeps trying (IB Gateway needs ~2min
+        # to finish IBC login, so a miss on the first attempt is normal).
+        if not connected:
+            logger.warning(
+                "broker_initial_connect_failed",
+                provider=ibkr.provider_name(),
+                host=_settings.ibkr_host,
+                port=_settings.ibkr_port,
+                hint="retrying in background; check ibgateway container logs",
+            )
         ibkr.start_reconnect_loop()
+    else:
+        # Log loudly: this flag silently disables the entire trading path,
+        # including any connection attempt, and is easy to overlook.
+        logger.warning(
+            "auto_trade_disabled",
+            hint="AUTO_TRADE_ENABLED=false — no broker connection, no orders placed",
+        )
 
     logger.info("app_ready")
 
@@ -65,7 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     stop_scheduler()
     from app.services import broker as ibkr
     ibkr.stop_reconnect_loop()
-    ibkr.disconnect()
+    await ibkr.disconnect()
     await close_db()
     logger.info("app_stopped")
 

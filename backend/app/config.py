@@ -61,15 +61,40 @@ class Settings(BaseSettings):
     fred_api_key: str = Field(default="", description="FRED API key for macro data")
     anthropic_api_key: str = Field(default="", description="Anthropic API key for AI analyst (Claude)")
 
-    # ── IBKR / Automated Trading ──────────────────────────────────────────────
-    # IB Gateway must be running on the configured host:port with API enabled.
-    # IB Gateway default ports: 4002=paper, 4001=live.
-    # TWS default ports (if using TWS instead): 7497=paper, 7496=live.
+    # ── Broker / Automated Trading ────────────────────────────────────────────
+    # Execution venue. "ibkr" = IB Gateway over TCP, "alpaca" = REST (no gateway).
+    broker_provider: str = Field(default="ibkr", description="Execution venue: ibkr | alpaca")
+
+    # IBKR port selection — READ THIS BEFORE CHANGING:
+    #   Running IB Gateway in the ghcr.io/gnzsnz/ib-gateway container, IB Gateway
+    #   binds its API to 127.0.0.1 ONLY (4001 live / 4002 paper). The image runs
+    #   socat to republish those on 0.0.0.0 as 4003 (live) / 4004 (paper).
+    #   → From another container or host, connect to 4003/4004. Using 4001/4002
+    #     is refused and is the classic silent "never connects" failure.
+    #   Bare-metal IB Gateway on the same host: 4001 live / 4002 paper.
+    #   TWS instead of Gateway: 7496 live / 7497 paper.
     # CIRO NOTE: API-based automated trading is only permitted for US-listed securities.
     ibkr_host: str = Field(default="127.0.0.1")
-    ibkr_port: int = Field(default=4002)          # 4002=IB Gateway paper, 4001=IB Gateway live
+    ibkr_port: int = Field(default=4004)          # 4004=paper relay, 4003=live relay
     ibkr_client_id: int = Field(default=1)
     ibkr_account_id: str = Field(default="")     # optional; leave empty for default account
+
+    # Which IB Gateway session the container actually launched. This is the
+    # ground truth about which account orders reach, and it selects the
+    # credential pair and relay port at deploy time.
+    # Distinct from auto_trade_live_allowed, which is a user-facing permission
+    # gate — do not infer one from the other.
+    trading_mode: str = Field(default="paper", description="IB Gateway session: paper | live")
+
+    @property
+    def is_live_trading(self) -> bool:
+        return self.trading_mode.strip().lower() == "live"
+
+    # ── Alpaca (alternative venue; used when BROKER_PROVIDER=alpaca) ──────────
+    alpaca_api_key: str = Field(default="")
+    alpaca_api_secret: str = Field(default="")
+    # Leave empty to derive from paper/live automatically.
+    alpaca_base_url: str = Field(default="", description="Override Alpaca API base URL")
     auto_trade_enabled: bool = Field(default=False, description="Global kill-switch for automated trading")
     auto_trade_live_allowed: bool = Field(default=False, description="Allow live (non-paper) trading")
 

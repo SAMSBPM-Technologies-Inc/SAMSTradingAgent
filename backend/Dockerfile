@@ -16,8 +16,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt && \
-    pip install --prefix=/install ib-insync==0.9.86 || echo "WARNING: ib-insync optional — automated trading disabled"
+# NOTE: do NOT append `|| echo ...` here. Shell precedence (`A && B || C`) makes
+# the whole RUN exit 0 when requirements.txt itself fails, which silently ships
+# an image missing its dependencies. A broken build must fail the build.
+RUN pip install --prefix=/install -r requirements.txt
 
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────────
@@ -45,8 +47,14 @@ USER appuser
 
 EXPOSE 8000
 
+# --loop asyncio is REQUIRED, not a preference.
+# uvicorn[standard] installs uvloop and selects it by default, but ib_async /
+# ib_insync rely on nest_asyncio for their synchronous call paths and
+# nest_asyncio cannot patch a uvloop event loop. Running under uvloop makes
+# every broker call that touches a sync helper raise at runtime.
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \
+     "--loop", "asyncio", \
      "--log-level", "info"]
