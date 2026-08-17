@@ -166,9 +166,11 @@ jobs:
             # Checks the credentials actually selected for this mode, not the
             # live pair — otherwise a paper deploy with only paper secrets set
             # would skip the gateway.
+            GATEWAY_STARTED=0
             if [ -n "$IB_USER" ] && [ -n "$IB_PASS" ]; then
               echo "=== starting ibgateway (mode=$TRADING_MODE, port=$IB_PORT) ==="
               $COMPOSE up -d --no-deps ibgateway
+              GATEWAY_STARTED=1
             else
               if [ "$TRADING_MODE" = "live" ]; then
                 echo "WARNING: TWS_USERID/TWS_PASSWORD not set — skipping ibgateway."
@@ -194,11 +196,27 @@ jobs:
             sleep 5
             $COMPOSE ps
 
+            # ── IB Gateway login diagnostics ──────────────────────────────────
+            # IBC's own output is the only place a failed login is visible —
+            # notably a live 2FA push that nobody answered, which otherwise just
+            # looks like a gateway that never starts serving.
+            if [ "$GATEWAY_STARTED" = "1" ]; then
+              echo "=== waiting for IBC login (~120s) ==="
+              sleep 90
+              echo "=== ibgateway logs ==="
+              $COMPOSE logs --tail=60 ibgateway 2>&1 \
+                | grep -viE 'password|userid|username' || true
+              echo "=== ibgateway container state ==="
+              docker inspect --format='{{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}}' trading_ibgateway || true
+            fi
+
             # ── Broker reachability probe ─────────────────────────────────────
             # Proves the api container can actually open a socket to the gateway
-            # relay port. Non-fatal: IB Gateway needs ~120s to finish IBC login,
-            # so a miss here right after deploy is expected — broker.py retries.
-            if [ "$AUTO_TRADE_ENABLED" = "true" ]; then
+            # relay port. Runs whenever the gateway was started — not only when
+            # auto-trading is armed — since it is the cheapest proof that the
+            # port/credentials/mode combination is right.
+            # Non-fatal: IB Gateway needs ~120s to finish IBC login.
+            if [ "$GATEWAY_STARTED" = "1" ]; then
               echo "=== IBKR reachability (api -> ibgateway:${TRADING_MODE}) ==="
               # Keep this a single line — a multi-line -c would break the YAML block scalar.
               # The api image is python:3.12-slim and has no nc, so use socket directly.
