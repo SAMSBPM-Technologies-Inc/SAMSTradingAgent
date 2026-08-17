@@ -2,9 +2,14 @@
 Pydantic models for automated trade execution.
 """
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, Field
+
+# Venue order IDs: IBKR emits ints, Alpaca emits UUID strings. A union keeps
+# trade documents written before the multi-broker change readable — Pydantic v2
+# does not coerce int → str, so narrowing to `str` would break historical rows.
+OrderId = Union[int, str]
 
 
 class AutoTradeSettings(BaseModel):
@@ -38,7 +43,7 @@ class TradeRecord(BaseModel):
     action: str                         # "BUY" or "SELL"
     qty: int
     limit_price: float
-    order_id: Optional[int] = None      # IBKR order ID
+    order_id: Optional[OrderId] = None  # venue order ID (IBKR int / Alpaca UUID)
     status: str = TradeStatus.PENDING
     reason: Optional[str] = None        # skip/reject reason
     signal_score: Optional[float] = None
@@ -59,7 +64,7 @@ class TradeResponse(BaseModel):
     action: str
     qty: int
     limit_price: float
-    order_id: Optional[int] = None
+    order_id: Optional[OrderId] = None
     status: str
     reason: Optional[str] = None
     signal_score: Optional[float] = None

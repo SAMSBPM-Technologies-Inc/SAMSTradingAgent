@@ -17,11 +17,20 @@ jobs:
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          # IB Gateway login — required for the ibgateway container to authenticate.
+          # Without these IBC exits at startup and nothing listens on the API port.
+          TWS_USERID: ${{ secrets.TWS_USERID }}
+          TWS_PASSWORD: ${{ secrets.TWS_PASSWORD }}
+          # "paper" or "live". Controls which socat relay port the api dials.
+          TRADING_MODE: ${{ vars.TRADING_MODE || 'paper' }}
+          # Master kill-switch. Must be "true" or the app never even attempts a
+          # broker connection (see main.py lifespan / pipeline._execute_trades).
+          AUTO_TRADE_ENABLED: ${{ vars.AUTO_TRADE_ENABLED || 'false' }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TRADING_MODE,AUTO_TRADE_ENABLED
           command_timeout: 30m
           script: |
             set -e
@@ -53,6 +62,24 @@ jobs:
             inject_secret CLOUDFLARE_TUNNEL_TOKEN "$CLOUDFLARE_TUNNEL_TOKEN"
             inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 
+            # ── IB Gateway credentials + mode ─────────────────────────────────
+            # These were previously never written to .env.production, so the
+            # ibgateway container had no login and IBC exited immediately.
+            inject_secret TWS_USERID   "$TWS_USERID"
+            inject_secret TWS_PASSWORD "$TWS_PASSWORD"
+            inject_secret TRADING_MODE "$TRADING_MODE"
+            inject_secret AUTO_TRADE_ENABLED "$AUTO_TRADE_ENABLED"
+
+            # IBKR_PORT must match TRADING_MODE and must be a SOCAT RELAY port:
+            #   paper -> 4004, live -> 4003.
+            # IB Gateway's own 4001/4002 are bound to 127.0.0.1 inside the
+            # gateway container and are unreachable from the api container.
+            if [ "$TRADING_MODE" = "live" ]; then
+              inject_secret IBKR_PORT 4003
+            else
+              inject_secret IBKR_PORT 4004
+            fi
+
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             inject_secret           CORS_ORIGINS                   https://sta.samsbpm.com,https://samtrades.samsbpm.com
             set_if_missing_or_empty ANALYST_MODEL                  claude-opus-4-6
@@ -61,10 +88,11 @@ jobs:
             set_if_missing_or_empty ANALYST_PRICE_CHANGE_PCT       0.03
             set_if_missing_or_empty ANALYST_SCORE_CHANGE_THRESHOLD 0.12
             set_if_missing_or_empty ANALYST_VIX_SPIKE_THRESHOLD    30.0
-            set_if_missing_or_empty AUTO_TRADE_ENABLED             false
+            # AUTO_TRADE_ENABLED / IBKR_PORT are injected above (not set_if_missing).
+            # set_if_missing_or_empty only fills blanks, so the old `false` written
+            # on the first deploy could never be flipped on by a later deploy.
+            # IBKR_HOST is set by docker-compose (=ibgateway) and needs no default here.
             set_if_missing_or_empty AUTO_TRADE_LIVE_ALLOWED        false
-            set_if_missing_or_empty IBKR_HOST                      127.0.0.1
-            set_if_missing_or_empty IBKR_PORT                      4002
             set_if_missing_or_empty IBKR_CLIENT_ID                 1
             set_if_missing_or_empty ENABLE_ML_MODEL                false
             set_if_missing_or_empty ENABLE_BACKTESTING             false
@@ -77,20 +105,51 @@ jobs:
             set_if_missing_or_empty WEIGHT_VOLATILITY              0.10
             set_if_missing_or_empty WEIGHT_CATALYST                0.15
 
-            docker compose -f docker-compose.prod.yml --env-file .env.production build api
+            COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.production"
+
+            $COMPOSE build api
+
+            # ── IB Gateway ────────────────────────────────────────────────────
+            # This service was previously NEVER started by this workflow (every
+            # `up` used --no-deps and named only api/cloudflared), so unless it
+            # had been launched by hand on the box there was no gateway at all.
+            if [ -n "$TWS_USERID" ] && [ -n "$TWS_PASSWORD" ]; then
+              echo "=== starting ibgateway (mode=$TRADING_MODE) ==="
+              $COMPOSE up -d --no-deps ibgateway
+            else
+              echo "WARNING: TWS_USERID/TWS_PASSWORD not set — skipping ibgateway."
+              echo "         Auto-trading will stay disconnected until they are configured."
+            fi
 
             # Start api alone first so we can capture its logs if it crashes
-            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api
+            $COMPOSE up -d --no-deps api
             sleep 25
 
             # Always show api logs before checking health (helps diagnose crashes)
             echo "=== api logs ==="
-            docker compose -f docker-compose.prod.yml --env-file .env.production logs --tail=50 api
+            $COMPOSE logs --tail=50 api
 
             # Verify api is running before starting cloudflared
-            docker compose -f docker-compose.prod.yml --env-file .env.production ps api
+            $COMPOSE ps api
             docker inspect --format='{{.State.Status}} {{.State.Health.Status}}' trading_agent_api
 
-            docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps cloudflared
+            $COMPOSE up -d --no-deps cloudflared
             sleep 5
-            docker compose -f docker-compose.prod.yml --env-file .env.production ps
+            $COMPOSE ps
+
+            # ── Broker reachability probe ─────────────────────────────────────
+            # Proves the api container can actually open a socket to the gateway
+            # relay port. Non-fatal: IB Gateway needs ~120s to finish IBC login,
+            # so a miss here right after deploy is expected — broker.py retries.
+            if [ "$AUTO_TRADE_ENABLED" = "true" ]; then
+              echo "=== IBKR reachability (api -> ibgateway:${TRADING_MODE}) ==="
+              # Keep this a single line — a multi-line -c would break the YAML block scalar.
+              # The api image is python:3.12-slim and has no nc, so use socket directly.
+              if docker exec trading_agent_api python -c "import os,socket; socket.create_connection((os.getenv('IBKR_HOST','ibgateway'), int(os.getenv('IBKR_PORT','4004'))), 5).close()"; then
+                echo "OK: api reached the IB Gateway relay port"
+              else
+                echo "NOT READY: api cannot reach the gateway relay port yet."
+                echo "  Expected if the deploy just ran (IBC login takes ~120s) — broker.py retries."
+                echo "  If it persists: docker compose -f docker-compose.prod.yml logs ibgateway"
+              fi
+            fi
