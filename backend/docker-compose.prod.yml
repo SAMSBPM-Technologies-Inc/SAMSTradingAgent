@@ -19,7 +19,17 @@ services:
     env_file:
       - .env.production
     environment:
-      - READ_ONLY_API=false
+      # IBC expects yes/no here, NOT true/false. Passing "false" left the
+      # setting undefined, so IB Gateway kept its persisted default of
+      # read-only and rejected every order with:
+      #   code 321 "The API interface is currently in Read-Only mode."
+      # The socket still connects and market data flows, so this looks like a
+      # working integration right up until the first order is submitted.
+      - READ_ONLY_API=no
+      # Suppress the "order submitted without market data" confirmation dialog.
+      # Without a live data subscription for a symbol, IB otherwise blocks the
+      # order behind a modal no headless gateway can answer.
+      - ALLOW_BLIND_TRADING=yes
       - EXISTING_SESSION_DETECTED_ACTION=primary
       - ACCEPT_INCOMING_CONNECTION_ACTION=accept
       - DISMISS_PASSWORD_EXPIRY_WARNING=yes
