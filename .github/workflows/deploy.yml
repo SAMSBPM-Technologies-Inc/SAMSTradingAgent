@@ -11,6 +11,12 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # REQUIRED: the TWS_* secrets and the TRADING_MODE / AUTO_TRADE_* variables
+    # are scoped to the "Production" environment. GitHub only exposes
+    # environment-scoped secrets to a job that declares the environment —
+    # without this line every secrets.* and vars.* lookup below silently
+    # resolves to an empty string and the gateway is skipped.
+    environment: Production
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
