@@ -49,11 +49,17 @@ services:
       - "4004"   # paper API via socat relay (IBKR_PORT=4004)
     healthcheck:
       # Probe the SOCAT RELAY port (4004/4003), not IB Gateway's own port.
-      # The old check (`nc -z localhost 4002`) passed from inside this container
-      # even when every cross-container connection was refused — a false green.
+      # An earlier check (`nc -z localhost 4002`) passed from inside this
+      # container even when every cross-container connection was refused.
       # socat binds 0.0.0.0, so if loopback answers on the relay port the relay
       # is up and other containers can reach it too.
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${IBKR_PORT:-4004} || exit 1"]
+      #
+      # Uses bash's /dev/tcp rather than nc: this image ships neither nc nor
+      # ncat nor python, so every nc-based check failed with
+      # "/bin/sh: 1: nc: not found" and reported the container permanently
+      # unhealthy while it was in fact serving. bash must be invoked explicitly
+      # because /bin/sh here is dash, which has no /dev/tcp.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/${IBKR_PORT:-4004}"]
       interval: 30s
       timeout: 10s
       retries: 15
