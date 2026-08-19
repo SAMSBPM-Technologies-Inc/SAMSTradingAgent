@@ -190,6 +190,27 @@ class IbkrAdapter(BrokerAdapter):
         if not self.is_connected():
             logger.error("ibkr_not_connected", ticker=ticker)
             return None
+
+        # Refuse to submit into an ambiguous account. IB only defaults sanely
+        # when the login manages exactly one account; with several (e.g. an
+        # individual account alongside a registered one) an order without an
+        # explicit account code can land in the wrong one. Failing closed is
+        # the only safe behaviour for real money.
+        managed = [a for a in (self._ib.managedAccounts() or []) if a]
+        if not account_id and len(managed) > 1:
+            logger.error(
+                "ibkr_ambiguous_account_for_order",
+                ticker=ticker, accounts=sorted(managed),
+                hint="set IBKR_ACCOUNT_ID to the account that should be traded",
+            )
+            return None
+        if account_id and managed and account_id not in managed:
+            logger.error(
+                "ibkr_unknown_account", ticker=ticker,
+                account_id=account_id, managed=sorted(managed),
+            )
+            return None
+
         try:
             from ib_async import LimitOrder, Stock
 
@@ -261,20 +282,33 @@ class IbkrAdapter(BrokerAdapter):
         if not self.is_connected():
             return AccountSummary()
         try:
-            # Async request, then read the populated cache. Calling the sync
-            # `accountSummary()` cold would spin the running event loop.
-            await self._ib.reqAccountSummaryAsync()
-            rows = (
-                self._ib.accountSummary(account_id)
-                if account_id
-                else self._ib.accountSummary()
-            )
-            if not rows:
-                rows = (
-                    self._ib.accountValues(account_id)
-                    if account_id
-                    else self._ib.accountValues()
+            # MUST be accountSummaryAsync, never accountSummary. The sync form
+            # unconditionally calls IB._run() -> loop.run_until_complete, which
+            # raises "This event loop is already running" inside any async
+            # caller — regardless of whether the summary cache is warm. Under
+            # the previous code every call raised, was swallowed by the except
+            # below, and returned zero equity, so trade_manager skipped every
+            # trade with "Could not read account equity from IBKR".
+            # accountValues/portfolio/positions/openTrades are plain cache reads
+            # and are safe to call directly.
+            rows = await self._ib.accountSummaryAsync(account_id or "")
+
+            # Filter to the requested account. IB returns one row per tag PER
+            # ACCOUNT, so with several managed accounts the flattening below
+            # would let the last account silently overwrite the others and
+            # position sizing could be computed from the wrong balance.
+            if account_id:
+                rows = [r for r in rows if r.account == account_id]
+                if not rows:
+                    rows = [r for r in self._ib.accountValues(account_id)
+                            if r.account == account_id]
+            elif len({r.account for r in rows if r.account}) > 1:
+                logger.error(
+                    "ibkr_ambiguous_account",
+                    accounts=sorted({r.account for r in rows if r.account}),
+                    hint="set IBKR_ACCOUNT_ID — equity and orders would target an arbitrary account",
                 )
+                return AccountSummary()
 
             values: dict[str, float] = {}
             for item in rows:

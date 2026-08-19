@@ -52,11 +52,16 @@ jobs:
           # without it PUT /trading/settings rejects paper_trading=false with 403.
           # TRADING_MODE=live alone is not sufficient.
           AUTO_TRADE_LIVE_ALLOWED: ${{ vars.AUTO_TRADE_LIVE_ALLOWED || 'false' }}
+          # Which IBKR account to trade. REQUIRED when the login manages more
+          # than one account (e.g. an individual account plus a registered one):
+          # without it the adapter refuses to size positions or submit orders
+          # rather than let IB pick an account for us.
+          IBKR_ACCOUNT_ID: ${{ vars.IBKR_ACCOUNT_ID }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID
           command_timeout: 30m
           script: |
             set -e
@@ -108,10 +113,14 @@ jobs:
               echo "⚠️  TRADING_MODE=live — orders will hit the REAL account."
               echo "    AUTO_TRADE_ENABLED     = ${AUTO_TRADE_ENABLED:-false}"
               echo "    AUTO_TRADE_LIVE_ALLOWED= ${AUTO_TRADE_LIVE_ALLOWED:-false}"
-              echo "    Real orders require BOTH to be true AND each user's"
+              echo "    IBKR_ACCOUNT_ID        = ${IBKR_ACCOUNT_ID:-<unset>}"
+              echo "    Real orders require BOTH flags true AND each user's"
               echo "    auto_trade_settings.paper_trading=false."
-              echo "    Live IBKR logins are 2FA-challenged; IBC cannot answer a"
-              echo "    push notification. Watch the ibgateway logs for a stall."
+              echo "    IBKR_ACCOUNT_ID must be set when the login manages more"
+              echo "    than one account, or orders and sizing are refused."
+              if [ -z "$IBKR_ACCOUNT_ID" ]; then
+                echo "    ⚠️  IBKR_ACCOUNT_ID is UNSET — trading will fail closed."
+              fi
               echo "════════════════════════════════════════════════════════════"
             else
               IB_USER="$TWS_USERID_PAPER"
@@ -125,6 +134,7 @@ jobs:
             inject_secret IBKR_PORT    "$IB_PORT"
             inject_secret TRADING_MODE "$TRADING_MODE"
             inject_secret AUTO_TRADE_ENABLED "$AUTO_TRADE_ENABLED"
+            inject_secret IBKR_ACCOUNT_ID   "$IBKR_ACCOUNT_ID"
 
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             inject_secret           CORS_ORIGINS                   https://sta.samsbpm.com,https://samtrades.samsbpm.com
