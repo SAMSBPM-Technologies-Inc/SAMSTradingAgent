@@ -263,18 +263,35 @@ async def _execute_trades(ticker: str, signal: dict) -> None:
         score = signal.get("score", 0.0)
         current_price = signal.get("current_price")
 
-        # Only act on BUY signals (SELL signals are handled via EXIT_ALERT from dip-buy scan)
-        if new_sig != "BUY":
+        if new_sig not in ("BUY", "SELL"):
             return
 
-        from bson import ObjectId
-        from app.services.trade_manager import execute_entry
+        from app.services.trade_manager import execute_entry, execute_exit
 
         db = await get_db()
         watchers = await db[COLL_WATCHED].find({"ticker": ticker}, {"user_id": 1}).to_list(length=500)
+
+        if new_sig == "BUY":
+            # The analyst's own levels bracket the entry when they validate;
+            # trade_manager falls back to configured percentages otherwise.
+            ao = signal.get("analyst_output") or {}
+            for w in watchers:
+                await execute_entry(
+                    w["user_id"], ticker, score, current_price,
+                    analyst_stop_loss=ao.get("stop_loss"),
+                    analyst_price_target=ao.get("price_target"),
+                )
+            return
+
+        # SELL — close any open position.
+        #
+        # This was previously unwired: the code returned on anything that was not
+        # a BUY, with a comment claiming SELL was "handled via EXIT_ALERT from
+        # dip-buy scan". Nothing ever called the exit path from there — the scan
+        # only builds display cards — so the agent opened positions automatically
+        # and never closed them. execute_exit no-ops when no position is open.
         for w in watchers:
-            user_id = w["user_id"]
-            await execute_entry(user_id, ticker, score, current_price)
+            await execute_exit(w["user_id"], ticker, current_price, trigger="SELL_SIGNAL")
 
     except Exception as exc:
         logger.warning("execute_trades_failed", ticker=ticker, error=str(exc))

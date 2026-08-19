@@ -12,6 +12,7 @@ Called from pipeline._execute_trades() after a signal is generated.
 """
 from datetime import datetime, timezone
 
+from app.config import get_settings
 from app.db import COLL_TRADES, COLL_USERS, get_db
 from app.models.trade import AutoTradeSettings, TradeRecord, TradeStatus
 from app.services import broker as ibkr
@@ -27,6 +28,42 @@ _CANADIAN_EXCHANGE_SUFFIXES = {".TO", ".V", ".CN", ".NEO"}
 def _is_canadian_listed(ticker: str) -> bool:
     """Return True if ticker suffix indicates a Canadian-exchange listing."""
     return any(ticker.upper().endswith(sfx) for sfx in _CANADIAN_EXCHANGE_SUFFIXES)
+
+
+def _bracket_levels(
+    entry: float,
+    analyst_stop: float | None,
+    analyst_target: float | None,
+) -> tuple[float | None, float | None]:
+    """
+    Resolve the protective levels for a long entry.
+
+    Prefers the AI analyst's own stop/target, since those reflect the thesis for
+    this specific setup. Falls back to fixed percentages when a level is absent
+    OR fails validation — an analyst can return a stop above the entry, and
+    trusting that blindly would submit an inverted bracket that IB rejects,
+    leaving the position unprotected.
+
+    Returns (stop, target), or (None, None) if bracketing is disabled.
+    """
+    s = get_settings()
+    if not s.enable_bracket_orders or entry <= 0:
+        return None, None
+
+    stop = analyst_stop if (analyst_stop and 0 < analyst_stop < entry) else None
+    target = analyst_target if (analyst_target and analyst_target > entry) else None
+
+    if stop is None:
+        stop = entry * (1.0 - s.bracket_stop_loss_pct)
+    if target is None:
+        target = entry * (1.0 + s.bracket_take_profit_pct)
+
+    stop, target = round(stop, 2), round(target, 2)
+
+    # Rounding at low prices can collapse the levels onto the entry.
+    if not (stop < entry < target):
+        return None, None
+    return stop, target
 
 
 def _calculate_qty(price: float, equity: float, position_size_pct: float) -> int:
@@ -51,7 +88,6 @@ async def _get_user_settings(user_id: str) -> AutoTradeSettings | None:
 
 async def _get_user_account_id(user_id: str) -> str:
     """Return the server IBKR account ID from config (same for all users)."""
-    from app.config import get_settings
     return get_settings().ibkr_account_id
 
 
@@ -112,6 +148,8 @@ async def execute_entry(
     ticker: str,
     signal_score: float,
     current_price: float | None,
+    analyst_stop_loss: float | None = None,
+    analyst_price_target: float | None = None,
 ) -> None:
     """
     Attempt to open a BUY position for this user+ticker if all risk guards pass.
@@ -197,24 +235,43 @@ async def execute_entry(
         # Limit price: current price (will fill at or better)
         limit_price = round(price, 2)
 
+        # ── Protective exits ──────────────────────────────────────────────────
+        stop_price, target_price = _bracket_levels(
+            limit_price, analyst_stop_loss, analyst_price_target
+        )
+        if stop_price is None:
+            # Refuse rather than open a position nothing will ever close. The
+            # app only sells on a SELL signal, which requires it to be running.
+            await _skip("Could not derive a valid stop-loss — refusing unprotected entry")
+            return
+
         # ── Log pending trade ─────────────────────────────────────────────────
         trade_id = await _log_trade({
             "user_id": user_id, "ticker": ticker, "action": "BUY",
             "qty": qty, "limit_price": limit_price,
+            "stop_loss": stop_price, "take_profit": target_price,
             "status": TradeStatus.PENDING,
             "signal_score": signal_score, "signal_type": "BUY",
-            "is_paper": settings.paper_trading,
+            # Reflects the gateway session actually in use, not the user's
+            # preference — the server's TRADING_MODE decides which account is hit.
+            "is_paper": not get_settings().is_live_trading,
             "opened_at": now, "closed_at": None,
         })
 
         # ── Place order ───────────────────────────────────────────────────────
-        order_id = await ibkr.place_limit_order(ticker, "BUY", qty, limit_price, account_id=account_id)
+        order_id = await ibkr.place_limit_order(
+            ticker, "BUY", qty, limit_price,
+            account_id=account_id,
+            stop_loss_price=stop_price,
+            take_profit_price=target_price,
+        )
         if order_id is not None:
             await _update_trade(trade_id, {"order_id": order_id})
             logger.info(
                 "trade_entry_placed", user_id=user_id, ticker=ticker,
                 qty=qty, limit_price=limit_price, order_id=order_id,
-                paper=settings.paper_trading,
+                stop_loss=stop_price, take_profit=target_price,
+                paper=not get_settings().is_live_trading,
             )
         else:
             await _update_trade(trade_id, {
@@ -264,6 +321,20 @@ async def execute_exit(
 
         limit_price = round(price, 2)
         account_id = await _get_user_account_id(user_id)
+
+        # Cancel the entry's bracket first. Its stop and target are still
+        # working, so submitting a closing sell alongside them could liquidate
+        # the position twice — our order plus the stop firing — leaving an
+        # unintended short. Must complete before the exit is submitted.
+        cancelled = await ibkr.cancel_open_orders(ticker, account_id=account_id)
+        if cancelled:
+            logger.info(
+                "exit_cancelled_protective_orders",
+                user_id=user_id, ticker=ticker, count=cancelled,
+            )
+
+        # Plain limit order: the protective legs are gone, so this must not
+        # carry a bracket of its own.
         order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)
 
         from bson import ObjectId

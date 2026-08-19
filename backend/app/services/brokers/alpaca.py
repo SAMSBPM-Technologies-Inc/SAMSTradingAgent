@@ -120,24 +120,49 @@ class AlpacaAdapter(BrokerAdapter):
         account_id: str = "",
         exchange: str = "SMART",   # unused — Alpaca routes internally
         currency: str = "USD",     # unused — USD only
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
     ) -> str | None:
         if not self.is_connected():
             logger.error("alpaca_not_connected", ticker=ticker)
             return None
         try:
-            resp = await self._client.post(
-                "/v2/orders",
-                json={
-                    "symbol": ticker.upper(),
-                    "qty": str(qty),
-                    "side": action.lower(),      # "buy" / "sell"
-                    "type": "limit",
-                    "time_in_force": "day",
-                    "limit_price": str(round(limit_price, 2)),
-                    "extended_hours": False,
-                    "client_order_id": None,
-                },
-            )
+            entry = round(limit_price, 2)
+            stop = round(stop_loss_price, 2) if stop_loss_price else None
+            target = round(take_profit_price, 2) if take_profit_price else None
+
+            payload: dict = {
+                "symbol": ticker.upper(),
+                "qty": str(qty),
+                "side": action.lower(),      # "buy" / "sell"
+                "type": "limit",
+                "time_in_force": "day",
+                "limit_price": str(entry),
+                "extended_hours": False,
+            }
+
+            # Alpaca expresses brackets natively via order_class, which is
+            # simpler than IB's parent/child linkage — one request, one order ID.
+            if stop is not None and target is not None:
+                ok = (stop < entry < target) if action.upper() == "buy".upper() \
+                    else (target < entry < stop)
+                if not ok:
+                    logger.error(
+                        "alpaca_invalid_bracket",
+                        ticker=ticker, entry=entry, stop=stop, target=target,
+                    )
+                    return None
+                payload["order_class"] = "bracket"
+                payload["take_profit"] = {"limit_price": str(target)}
+                payload["stop_loss"] = {"stop_price": str(stop)}
+            else:
+                logger.warning(
+                    "alpaca_unprotected_order",
+                    ticker=ticker,
+                    hint="no bracket — this position has no automatic exit",
+                )
+
+            resp = await self._client.post("/v2/orders", json=payload)
             if resp.status_code >= 400:
                 logger.error(
                     "alpaca_order_rejected",
@@ -174,6 +199,38 @@ class AlpacaAdapter(BrokerAdapter):
         except Exception as exc:
             logger.error("alpaca_cancel_order_failed", order_id=order_id, error=str(exc))
             return False
+
+    async def cancel_open_orders(self, ticker: str, account_id: str = "") -> int:
+        """Cancel all working orders for `ticker` — including live bracket legs."""
+        if not self.is_connected():
+            return 0
+        try:
+            symbol = ticker.upper()
+            # nested=true surfaces bracket children, which are otherwise hidden
+            # behind their parent and would survive cancelling the parent alone.
+            resp = await self._client.get(
+                "/v2/orders", params={"status": "open", "symbols": symbol, "nested": "true"}
+            )
+            resp.raise_for_status()
+
+            def _ids(orders: list) -> list[str]:
+                out: list[str] = []
+                for o in orders:
+                    out.append(str(o.get("id")))
+                    out.extend(_ids(o.get("legs") or []))
+                return out
+
+            cancelled = 0
+            for oid in _ids(resp.json()):
+                r = await self._client.delete(f"/v2/orders/{oid}")
+                if r.status_code in (200, 204):
+                    cancelled += 1
+            if cancelled:
+                logger.info("alpaca_open_orders_cancelled", ticker=symbol, count=cancelled)
+            return cancelled
+        except Exception as exc:
+            logger.error("alpaca_cancel_open_orders_failed", ticker=ticker, error=str(exc))
+            return 0
 
     # ── Read-only state ──────────────────────────────────────────────────────
 

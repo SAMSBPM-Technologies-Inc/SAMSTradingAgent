@@ -56,6 +56,27 @@ _INFO_ERROR_CODES = {
 _CLIENT_ID_ROTATION = 8
 
 
+def _bracket_levels_valid(
+    action: str, entry: float, stop: float, target: float
+) -> bool:
+    """
+    Reject a bracket whose protective legs sit on the wrong side of the entry.
+
+    For a BUY the stop must be below and the target above; for a SELL the
+    reverse. IB would reject an inverted bracket anyway, but catching it here
+    means the entry never goes out either — submitting the parent and having the
+    children rejected would leave exactly the unprotected position brackets
+    exist to prevent.
+    """
+    if entry <= 0 or stop <= 0 or target <= 0:
+        return False
+    if action.upper() == "BUY":
+        return stop < entry < target
+    if action.upper() == "SELL":
+        return target < entry < stop
+    return False
+
+
 class IbkrAdapter(BrokerAdapter):
     name = "ibkr"
 
@@ -186,6 +207,8 @@ class IbkrAdapter(BrokerAdapter):
         account_id: str = "",
         exchange: str = "SMART",
         currency: str = "USD",
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
     ) -> str | None:
         if not self.is_connected():
             logger.error("ibkr_not_connected", ticker=ticker)
@@ -220,15 +243,58 @@ class IbkrAdapter(BrokerAdapter):
                 logger.error("ibkr_contract_not_found", ticker=ticker)
                 return None
 
-            order = LimitOrder(action, qty, round(limit_price, 2))
-            order.tif = "DAY"
-            order.outsideRth = False
-            # Tag orders so they're identifiable in TWS / account statements.
-            order.orderRef = f"STA-{ticker}-{action}"
-            if account_id:
-                order.account = account_id
+            entry = round(limit_price, 2)
+            stop = round(stop_loss_price, 2) if stop_loss_price else None
+            target = round(take_profit_price, 2) if take_profit_price else None
 
-            trade = self._ib.placeOrder(qualified[0], order)
+            # A bracket needs both legs; IB rejects a half-formed one.
+            use_bracket = stop is not None and target is not None
+            if use_bracket and not _bracket_levels_valid(action, entry, stop, target):
+                logger.error(
+                    "ibkr_invalid_bracket",
+                    ticker=ticker, action=action,
+                    entry=entry, stop=stop, target=target,
+                    hint="stop/target are on the wrong side of entry — refusing to submit",
+                )
+                return None
+
+            # Applied to every leg. `account` in particular MUST reach the child
+            # orders, or the protective legs can be routed to another account.
+            common = {"tif": "DAY", "outsideRth": False}
+            if account_id:
+                common["account"] = account_id
+
+            if use_bracket:
+                bracket = self._ib.bracketOrder(
+                    action, qty, entry, target, stop, **common
+                )
+                # Order matters: children reference parent.orderId, and only the
+                # last leg carries transmit=True, which releases the whole set.
+                parent_trade = None
+                for leg, suffix in zip(bracket, ("ENTRY", "TP", "SL")):
+                    leg.orderRef = f"STA-{ticker}-{action}-{suffix}"
+                    placed = self._ib.placeOrder(qualified[0], leg)
+                    if leg.orderId == bracket.parent.orderId:
+                        parent_trade = placed
+                if parent_trade is None:
+                    logger.error("ibkr_bracket_parent_missing", ticker=ticker)
+                    return None
+                trade = parent_trade
+                logger.info(
+                    "ibkr_bracket_submitted",
+                    ticker=ticker, entry=entry, stop=stop, target=target,
+                    risk_per_share=round(abs(entry - stop), 2),
+                )
+            else:
+                order = LimitOrder(action, qty, entry, **common)
+                # Tag orders so they're identifiable in TWS / account statements.
+                order.orderRef = f"STA-{ticker}-{action}"
+                trade = self._ib.placeOrder(qualified[0], order)
+                logger.warning(
+                    "ibkr_unprotected_order",
+                    ticker=ticker,
+                    hint="no bracket — this position has no automatic exit",
+                )
 
             # Give IB a moment to accept or reject. placeOrder returns
             # immediately; without this an outright rejection looks like success.
@@ -275,6 +341,30 @@ class IbkrAdapter(BrokerAdapter):
         except Exception as exc:
             logger.error("ibkr_cancel_order_failed", order_id=order_id, error=str(exc))
             return False
+
+    async def cancel_open_orders(self, ticker: str, account_id: str = "") -> int:
+        """Cancel all working orders for `ticker` — including live bracket legs."""
+        if not self.is_connected():
+            return 0
+        try:
+            symbol = ticker.upper()
+            cancelled = 0
+            for trade in self._ib.openTrades():
+                if getattr(trade.contract, "symbol", "").upper() != symbol:
+                    continue
+                if account_id and getattr(trade.order, "account", "") not in ("", account_id):
+                    continue
+                self._ib.cancelOrder(trade.order)
+                cancelled += 1
+            if cancelled:
+                logger.info("ibkr_open_orders_cancelled", ticker=symbol, count=cancelled)
+                # Give IB a moment to process the cancels before a new order is
+                # submitted against the same position.
+                await asyncio.sleep(1.0)
+            return cancelled
+        except Exception as exc:
+            logger.error("ibkr_cancel_open_orders_failed", ticker=ticker, error=str(exc))
+            return 0
 
     # ── Read-only state ──────────────────────────────────────────────────────
 

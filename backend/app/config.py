@@ -90,6 +90,25 @@ class Settings(BaseSettings):
     def is_live_trading(self) -> bool:
         return self.trading_mode.strip().lower() == "live"
 
+    # ── Protective exits ──────────────────────────────────────────────────────
+    # Entries are submitted as bracket orders: the entry limit plus a take-profit
+    # limit and a stop-loss, linked so that filling one cancels the other.
+    # This matters because protection then lives at the broker: it survives this
+    # app crashing, the gateway dropping, or the host going down. An unbracketed
+    # position has no automatic exit at all — the app never sells on its own
+    # outside of a SELL signal, and a SELL signal requires the app to be running.
+    enable_bracket_orders: bool = Field(
+        default=True, description="Submit entries as bracket orders (entry + stop + target)"
+    )
+    # Fallbacks used when the AI analyst supplies no usable level, or supplies
+    # one that fails validation (stop above entry, target below entry, etc).
+    bracket_stop_loss_pct: float = Field(
+        default=0.05, ge=0.005, le=0.50, description="Stop distance below entry, as a fraction"
+    )
+    bracket_take_profit_pct: float = Field(
+        default=0.10, ge=0.005, le=2.00, description="Target distance above entry, as a fraction"
+    )
+
     # ── Alpaca (alternative venue; used when BROKER_PROVIDER=alpaca) ──────────
     alpaca_api_key: str = Field(default="")
     alpaca_api_secret: str = Field(default="")

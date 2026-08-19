@@ -123,9 +123,21 @@ class BrokerAdapter(ABC):
         account_id: str = "",
         exchange: str = "SMART",
         currency: str = "USD",
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
     ) -> str | None:
         """
         Submit a day limit order. Returns the venue order ID, or None on failure.
+        For a bracket the ID returned is the PARENT (entry) order's.
+
+        When both `stop_loss_price` and `take_profit_price` are supplied, the
+        order is submitted as a bracket: entry plus a linked stop and target, so
+        that a fill on one cancels the other. Protection then lives at the
+        broker and survives this process dying — which matters because nothing
+        here closes a position automatically otherwise.
+
+        Implementations MUST validate the levels against the entry side and
+        refuse rather than submit an inverted bracket.
 
         CIRO: only US-listed securities may be traded through an automated API
         route. Callers are responsible for enforcing that (see
@@ -135,6 +147,17 @@ class BrokerAdapter(ABC):
     @abstractmethod
     async def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order by venue order ID."""
+
+    @abstractmethod
+    async def cancel_open_orders(self, ticker: str, account_id: str = "") -> int:
+        """
+        Cancel every working order for `ticker`. Returns how many were cancelled.
+
+        Required before submitting a manual exit on a bracketed position: the
+        bracket's stop and target are still live, so an additional sell would
+        risk closing the position twice — once by our order and again when the
+        stop triggers, leaving an unintended short.
+        """
 
     # ── Read-only state ──────────────────────────────────────────────────────
 

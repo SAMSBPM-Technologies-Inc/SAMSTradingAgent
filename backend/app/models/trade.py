@@ -44,6 +44,8 @@ class TradeRecord(BaseModel):
     qty: int
     limit_price: float
     order_id: Optional[OrderId] = None  # venue order ID (IBKR int / Alpaca UUID)
+    stop_loss: Optional[float] = None   # protective stop submitted with the entry
+    take_profit: Optional[float] = None # target submitted with the entry
     status: str = TradeStatus.PENDING
     reason: Optional[str] = None        # skip/reject reason
     signal_score: Optional[float] = None
@@ -65,6 +67,8 @@ class TradeResponse(BaseModel):
     qty: int
     limit_price: float
     order_id: Optional[OrderId] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
     status: str
     reason: Optional[str] = None
     signal_score: Optional[float] = None

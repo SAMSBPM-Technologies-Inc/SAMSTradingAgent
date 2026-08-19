@@ -161,14 +161,21 @@ async def place_limit_order(
     account_id: str = "",
     exchange: str = "SMART",
     currency: str = "USD",
+    stop_loss_price: Optional[float] = None,
+    take_profit_price: Optional[float] = None,
 ) -> Optional[str]:
-    """Place a limit order. Returns the venue order ID (str) or None on failure."""
+    """
+    Place a limit order. Returns the venue order ID (str) or None on failure.
+    Supplying both stop and target submits a bracket; the ID returned is the
+    entry order's.
+    """
     if _adapter is None:
         logger.error("broker_not_configured", ticker=ticker)
         return None
     return await _adapter.place_limit_order(
         ticker, action, qty, limit_price,
         account_id=account_id, exchange=exchange, currency=currency,
+        stop_loss_price=stop_loss_price, take_profit_price=take_profit_price,
     )
 
 
@@ -177,6 +184,17 @@ async def cancel_order(order_id: str) -> bool:
     if _adapter is None:
         return False
     return await _adapter.cancel_order(str(order_id))
+
+
+async def cancel_open_orders(ticker: str, account_id: str = "") -> int:
+    """
+    Cancel every working order for `ticker`; returns the count.
+    Call before submitting a manual exit so a live bracket leg cannot close the
+    position a second time.
+    """
+    if _adapter is None:
+        return 0
+    return await _adapter.cancel_open_orders(ticker, account_id=account_id)
 
 
 async def get_account_summary(account_id: str = "") -> dict:

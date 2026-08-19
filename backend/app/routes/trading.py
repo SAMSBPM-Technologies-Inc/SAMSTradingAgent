@@ -39,6 +39,8 @@ def _trade_to_response(doc: dict) -> TradeResponse:
         qty=doc.get("qty", 0),
         limit_price=doc.get("limit_price", 0.0),
         order_id=doc.get("order_id"),
+        stop_loss=doc.get("stop_loss"),
+        take_profit=doc.get("take_profit"),
         status=doc.get("status", TradeStatus.PENDING),
         reason=doc.get("reason"),
         signal_score=doc.get("signal_score"),
