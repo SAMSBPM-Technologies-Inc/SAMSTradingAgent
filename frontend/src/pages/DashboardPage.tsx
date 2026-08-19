@@ -5,6 +5,7 @@ import { AlertCircle, ArrowRight, Plus, Search, Trash2, TrendingUp } from 'lucid
 import { watchlistApi, analyzeApi } from '../lib/api'
 import type { Signal, WatchlistItem } from '../types'
 import Layout from '../components/Layout'
+import AccountSummaryCard from '../components/AccountSummaryCard'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -402,6 +403,9 @@ export default function DashboardPage() {
           )}
         </div>
       </div>
+
+      {/* Broker account — balances, capital deployed, P&L */}
+      <AccountSummaryCard />
 
       {/* Add ticker */}
       <div className="mb-6">

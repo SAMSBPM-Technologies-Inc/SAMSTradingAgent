@@ -317,13 +317,28 @@ class IbkrAdapter(BrokerAdapter):
                 except (ValueError, TypeError):
                     continue
 
+            # UnrealizedPnL is not part of the account-summary tag set; it comes
+            # from the portfolio subscription. Sum it there, scoped to the same
+            # account, so the dashboard's P&L matches the positions it lists.
+            resolved = account_id or next((r.account for r in rows if r.account), "")
+            unrealized = values.get("UnrealizedPnL")
+            realized = values.get("RealizedPnL")
+            if unrealized is None or realized is None:
+                pf = [p for p in self._ib.portfolio() if not resolved or p.account == resolved]
+                if unrealized is None:
+                    unrealized = sum(p.unrealizedPNL or 0.0 for p in pf)
+                if realized is None:
+                    realized = sum(p.realizedPNL or 0.0 for p in pf)
+
             return AccountSummary(
                 connected=True,
                 net_liquidation=values.get("NetLiquidation", 0.0),
                 total_cash=values.get("TotalCashValue", 0.0),
-                unrealized_pnl=values.get("UnrealizedPnL", 0.0),
-                realized_pnl=values.get("RealizedPnL", 0.0),
+                unrealized_pnl=unrealized or 0.0,
+                realized_pnl=realized or 0.0,
                 buying_power=values.get("BuyingPower", 0.0),
+                account_id=resolved,
+                gross_position_value=values.get("GrossPositionValue", 0.0),
             )
         except Exception as exc:
             logger.error("ibkr_account_summary_failed", error=str(exc))

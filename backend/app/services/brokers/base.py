@@ -35,6 +35,12 @@ class AccountSummary:
     unrealized_pnl: float = 0.0
     realized_pnl: float = 0.0
     buying_power: float = 0.0
+    #: Broker account this snapshot describes. Surfaced in the UI so it is
+    #: always obvious which account the agent is trading — this login manages
+    #: more than one.
+    account_id: str = ""
+    #: Market value of all open positions ("funds in trade").
+    gross_position_value: float = 0.0
 
     def as_dict(self) -> dict:
         return {
@@ -44,6 +50,8 @@ class AccountSummary:
             "unrealized_pnl": self.unrealized_pnl,
             "realized_pnl": self.realized_pnl,
             "buying_power": self.buying_power,
+            "account_id": self.account_id,
+            "gross_position_value": self.gross_position_value,
         }
 
 

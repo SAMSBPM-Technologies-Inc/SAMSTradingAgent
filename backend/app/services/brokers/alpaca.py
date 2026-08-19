@@ -195,6 +195,10 @@ class AlpacaAdapter(BrokerAdapter):
             except Exception:
                 pass
 
+            # "Funds in trade" — Alpaca reports long and short market value
+            # separately; gross exposure is the sum of their magnitudes.
+            gross = abs(_f(a.get("long_market_value"))) + abs(_f(a.get("short_market_value")))
+
             return AccountSummary(
                 connected=True,
                 net_liquidation=_f(a.get("equity")),
@@ -204,6 +208,8 @@ class AlpacaAdapter(BrokerAdapter):
                 # trades collection is the source of truth for it.
                 realized_pnl=0.0,
                 buying_power=_f(a.get("buying_power")),
+                account_id=str(a.get("account_number") or ""),
+                gross_position_value=gross,
             )
         except Exception as exc:
             logger.error("alpaca_account_summary_failed", error=str(exc))

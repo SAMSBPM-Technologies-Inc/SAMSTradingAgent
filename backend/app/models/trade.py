@@ -84,3 +84,5 @@ class AccountSummaryResponse(BaseModel):
     realized_pnl: float = 0.0
     buying_power: float = 0.0
     connected: bool = False
+    account_id: str = ""              # broker account being traded
+    gross_position_value: float = 0.0  # market value of open positions

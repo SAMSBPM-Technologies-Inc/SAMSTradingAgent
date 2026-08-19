@@ -155,6 +155,10 @@ export interface AccountSummaryResponse {
   realized_pnl: number
   buying_power: number
   connected: boolean
+  /** Broker account being traded — this login manages more than one. */
+  account_id: string
+  /** Market value of open positions ("funds in trade"). */
+  gross_position_value: number
 }
 
 export interface TradeRecord {
