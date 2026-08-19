@@ -138,3 +138,15 @@
 .mb-bottom-bar {
   margin-bottom: calc(4rem + env(safe-area-inset-bottom, 0px));
 }
+
+/* Hide the scrollbar while keeping the element scrollable.
+   Used by the account strip, which scrolls horizontally on narrow screens —
+   a visible scrollbar inside a 2.5rem-tall bar eats most of its height. */
+.scrollbar-none {
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;       /* legacy Edge */
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;                  /* Chrome, Safari */
+}

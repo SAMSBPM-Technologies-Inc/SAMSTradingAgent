@@ -10,6 +10,7 @@ import {
   User,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth-context'
+import AccountBar from './AccountBar'
 import ThemeToggle from './ThemeToggle'
 
 // Icon mark SVG (inlined so it renders at any size with no extra request)
@@ -180,11 +181,18 @@ export default function Layout({ children }: LayoutProps) {
         <ThemeToggle />
       </header>
 
-      {/* Main content */}
-      <main className="flex-1 md:pt-[60px] mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
-                       max-w-5xl mx-auto w-full">
-        {children}
-      </main>
+      {/* Account strip + main content.
+          The desktop header is fixed, so the 60px offset lives on this wrapper
+          rather than on <main> — that way AccountBar clears the header too and
+          can stick directly beneath it. */}
+      <div className="flex-1 flex flex-col md:pt-[60px] min-w-0">
+        <AccountBar />
+
+        <main className="flex-1 mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
+                         max-w-5xl mx-auto w-full">
+          {children}
+        </main>
+      </div>
 
       {/* Footer */}
       <footer className="hidden md:flex border-t border-[var(--color-border)] bg-[var(--color-surface)] transition-colors duration-200">
