@@ -34,6 +34,25 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: frontend
+        env:
+          # REQUIRED. Vite inlines this at BUILD time, so it must be present in
+          # CI — it cannot be supplied later. src/lib/api.ts falls back to
+          # http://localhost:8000 when it is unset, which produces a build that
+          # looks fine but cannot reach the API at all: login and every
+          # authenticated request fail against the user's own machine.
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL || 'https://api.samsbpm.com' }}
+
+      # Guard: a bundle pointing at localhost is worse than a failed deploy,
+      # because it replaces a working site with a broken one. Fail here instead.
+      - name: Verify API base URL was inlined
+        working-directory: frontend
+        run: |
+          if grep -rqF "localhost:8000" dist/assets/*.js; then
+            echo "::error::Build inlined http://localhost:8000 as the API base URL."
+            echo "VITE_API_BASE_URL was not set at build time. Refusing to deploy."
+            exit 1
+          fi
+          echo "OK: no localhost API URL in the bundle."
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
