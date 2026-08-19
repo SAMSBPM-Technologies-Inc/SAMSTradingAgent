@@ -11,6 +11,13 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # REQUIRED: CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are scoped to the
+    # "Production" environment. GitHub only exposes environment-scoped secrets to
+    # a job that declares the environment — without this line both resolve to an
+    # empty string and wrangler fails with "it's necessary to set a
+    # CLOUDFLARE_API_TOKEN environment variable". Same omission previously broke
+    # the backend deploy (see deploy.yml).
+    environment: Production
     steps:
       - uses: actions/checkout@v4
 
