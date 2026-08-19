@@ -333,6 +333,19 @@ async def execute_exit(
                 user_id=user_id, ticker=ticker, count=cancelled,
             )
 
+        # Confirm, don't assume. cancelOrder is fire-and-forget and can itself be
+        # refused (a read-only API session rejects cancels too). Selling while a
+        # stop leg is still working could close the position twice and leave a
+        # short, so abort instead — the bracket still protects the position, which
+        # is the safe side to fail on.
+        if await ibkr.has_open_orders(ticker, account_id=account_id):
+            logger.error(
+                "exit_aborted_orders_still_working",
+                user_id=user_id, ticker=ticker, trigger=trigger,
+                hint="protective legs survived cancellation; position left bracketed",
+            )
+            return
+
         # Plain limit order: the protective legs are gone, so this must not
         # carry a bracket of its own.
         order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)

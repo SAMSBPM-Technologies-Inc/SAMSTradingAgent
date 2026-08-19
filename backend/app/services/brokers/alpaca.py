@@ -232,6 +232,21 @@ class AlpacaAdapter(BrokerAdapter):
             logger.error("alpaca_cancel_open_orders_failed", ticker=ticker, error=str(exc))
             return 0
 
+    async def has_open_orders(self, ticker: str, account_id: str = "") -> bool:
+        if not self.is_connected():
+            return False
+        try:
+            r = await self._client.get(
+                "/v2/orders",
+                params={"status": "open", "symbols": ticker.upper(), "nested": "true"},
+            )
+            r.raise_for_status()
+            return len(r.json()) > 0
+        except Exception as exc:
+            # Fail closed: an unknown order state must not green-light a close.
+            logger.error("alpaca_has_open_orders_failed", ticker=ticker, error=str(exc))
+            return True
+
     # ── Read-only state ──────────────────────────────────────────────────────
 
     async def get_account_summary(self, account_id: str = "") -> AccountSummary:

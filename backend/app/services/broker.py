@@ -197,6 +197,13 @@ async def cancel_open_orders(ticker: str, account_id: str = "") -> int:
     return await _adapter.cancel_open_orders(ticker, account_id=account_id)
 
 
+async def has_open_orders(ticker: str, account_id: str = "") -> bool:
+    """True if any order for `ticker` is still working at the broker."""
+    if _adapter is None:
+        return False
+    return await _adapter.has_open_orders(ticker, account_id=account_id)
+
+
 async def get_account_summary(account_id: str = "") -> dict:
     """
     Account snapshot as a plain dict with keys: connected, net_liquidation,

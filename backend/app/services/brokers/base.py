@@ -159,6 +159,17 @@ class BrokerAdapter(ABC):
         stop triggers, leaving an unintended short.
         """
 
+    @abstractmethod
+    async def has_open_orders(self, ticker: str, account_id: str = "") -> bool:
+        """
+        True if any order for `ticker` is still working.
+
+        Used to confirm a bracket was actually cancelled before a closing order
+        is submitted. Cancellation can silently fail — a read-only API session
+        refuses cancels just as it refuses orders — and submitting a sell while
+        a stop leg is still live risks closing the position twice.
+        """
+
     # ── Read-only state ──────────────────────────────────────────────────────
 
     @abstractmethod

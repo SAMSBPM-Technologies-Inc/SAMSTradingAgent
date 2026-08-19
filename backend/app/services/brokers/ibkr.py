@@ -55,6 +55,18 @@ _INFO_ERROR_CODES = {
 # rejects re-use with error 326; rotating sidesteps that entirely.
 _CLIENT_ID_ROTATION = 8
 
+# Order statuses that mean "this will never fill".
+# ValidationError is the one that matters most and is easy to miss: IB reports a
+# read-only API session by *accepting* the placeOrder call and then marking the
+# order ValidationError. Without it here, a fully rejected order looks placed
+# and a trade record is written for an order the broker never took.
+_REJECTED_STATUSES = frozenset({
+    "Cancelled",
+    "ApiCancelled",
+    "Inactive",
+    "ValidationError",
+})
+
 
 def _bracket_levels_valid(
     action: str, entry: float, stop: float, target: float
@@ -85,6 +97,9 @@ class IbkrAdapter(BrokerAdapter):
         self._ib = None
         self._attempt = 0
         self._lock = asyncio.Lock()
+        #: Latched when IB reports a read-only API session (error 321). Cleared
+        #: on each new connection, since a gateway restart is what fixes it.
+        self._read_only = False
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -106,6 +121,25 @@ class IbkrAdapter(BrokerAdapter):
         every order and the only symptom is a silent absence of fills.
         """
         def _on_error(reqId, errorCode, errorString, contract=None):
+            # 321 with this cause means IB Gateway's API is read-only: it accepts
+            # placeOrder and then marks the order ValidationError. Latch it so
+            # orders are refused up front with an actionable message instead of
+            # each one failing individually.
+            #
+            # This happens on EVERY fresh gateway start: IBC unchecks the
+            # Read-Only API box during login, but the API layer has already read
+            # the old value, so the first session stays read-only until the
+            # gateway is restarted.
+            if errorCode == 321 and "Read-Only" in (errorString or ""):
+                if not self._read_only:
+                    logger.error(
+                        "ibkr_read_only_api",
+                        message=errorString,
+                        hint="restart the ibgateway container — IBC's fix only "
+                             "applies from the NEXT gateway start",
+                    )
+                self._read_only = True
+                return
             if errorCode in _INFO_ERROR_CODES:
                 logger.info("ibkr_status", code=errorCode, message=errorString)
             else:
@@ -139,6 +173,7 @@ class IbkrAdapter(BrokerAdapter):
             ib = self._new_ib()
             if ib is None:
                 return False
+            self._read_only = False
             self._wire_events(ib)
 
             client_id = self.config.client_id + (self._attempt % _CLIENT_ID_ROTATION)
@@ -212,6 +247,14 @@ class IbkrAdapter(BrokerAdapter):
     ) -> str | None:
         if not self.is_connected():
             logger.error("ibkr_not_connected", ticker=ticker)
+            return None
+
+        if self._read_only:
+            logger.error(
+                "ibkr_read_only_refusing_order",
+                ticker=ticker,
+                hint="gateway API is read-only; restart the ibgateway container",
+            )
             return None
 
         # Refuse to submit into an ambiguous account. IB only defaults sanely
@@ -301,12 +344,22 @@ class IbkrAdapter(BrokerAdapter):
             for _ in range(20):
                 await asyncio.sleep(0.1)
                 status = trade.orderStatus.status
-                if status in ("Cancelled", "Inactive", "ApiCancelled"):
-                    reason = "; ".join(e.message for e in trade.log) or status
+                if status in _REJECTED_STATUSES:
+                    reason = "; ".join(e.message for e in trade.log if e.message) or status
                     logger.error("ibkr_order_rejected", ticker=ticker, status=status, reason=reason)
                     return None
                 if status in ("PreSubmitted", "Submitted", "Filled"):
                     break
+            else:
+                # Never reached an accepted state within the window. Treat as a
+                # failure rather than reporting a phantom order — the caller
+                # records a trade against whatever ID we return.
+                logger.error(
+                    "ibkr_order_not_accepted",
+                    ticker=ticker, status=trade.orderStatus.status,
+                    reason="; ".join(e.message for e in trade.log if e.message) or "timed out",
+                )
+                return None
 
             order_id = str(trade.order.orderId)
             logger.info(
@@ -348,23 +401,52 @@ class IbkrAdapter(BrokerAdapter):
             return 0
         try:
             symbol = ticker.upper()
-            cancelled = 0
-            for trade in self._ib.openTrades():
-                if getattr(trade.contract, "symbol", "").upper() != symbol:
-                    continue
-                if account_id and getattr(trade.order, "account", "") not in ("", account_id):
-                    continue
+
+            def _working() -> list:
+                return [
+                    t for t in self._ib.openTrades()
+                    if getattr(t.contract, "symbol", "").upper() == symbol
+                    and (not account_id
+                         or getattr(t.order, "account", "") in ("", account_id))
+                ]
+
+            before = _working()
+            if not before:
+                return 0
+            for trade in before:
                 self._ib.cancelOrder(trade.order)
-                cancelled += 1
-            if cancelled:
+
+            # Give IB time to process before anything is submitted against the
+            # same position, then count what ACTUALLY left the working set —
+            # cancelOrder is fire-and-forget and can itself be rejected (a
+            # read-only API session refuses cancels too).
+            await asyncio.sleep(1.5)
+            remaining = _working()
+            cancelled = len(before) - len(remaining)
+
+            if remaining:
+                logger.error(
+                    "ibkr_cancel_open_orders_incomplete",
+                    ticker=symbol, requested=len(before), cancelled=cancelled,
+                    still_working=len(remaining),
+                    hint="protective legs are still live — do NOT submit a closing order",
+                )
+            else:
                 logger.info("ibkr_open_orders_cancelled", ticker=symbol, count=cancelled)
-                # Give IB a moment to process the cancels before a new order is
-                # submitted against the same position.
-                await asyncio.sleep(1.0)
             return cancelled
         except Exception as exc:
             logger.error("ibkr_cancel_open_orders_failed", ticker=ticker, error=str(exc))
             return 0
+
+    async def has_open_orders(self, ticker: str, account_id: str = "") -> bool:
+        if not self.is_connected():
+            return False
+        symbol = ticker.upper()
+        return any(
+            getattr(t.contract, "symbol", "").upper() == symbol
+            and (not account_id or getattr(t.order, "account", "") in ("", account_id))
+            for t in self._ib.openTrades()
+        )
 
     # ── Read-only state ──────────────────────────────────────────────────────
 
