@@ -73,7 +73,19 @@ async def update_alert_settings(
 async def send_test_alert(current_user: dict = Depends(get_current_user)) -> dict:
     """Send a test notification through all configured channels."""
     prefs = current_user.get("alert_settings") or {}
-    sent = []
+    sent: list[str] = []
+    errors: dict[str, str] = {}
+
+    # Email first — it is the channel most likely to be misconfigured, and the
+    # only one whose failure reason is worth surfacing to the caller.
+    from app.services.notifier import send_test_email
+    to = (prefs.get("trade_email") or current_user.get("email") or "").strip()
+    if to:
+        reason = await send_test_email(to)
+        if reason:
+            errors["email"] = reason
+        else:
+            sent.append(f"email ({to})")
 
     from app.services.notifier import send_signal_alert
     slack_url = prefs.get("slack_webhook_url")
@@ -111,7 +123,18 @@ async def send_test_alert(current_user: dict = Depends(get_current_user)) -> dic
         )
         sent.append("whatsapp")
 
-    if not sent:
+    if not sent and not errors:
         return {"status": "no_channels", "message": "No notification channels configured."}
+
+    # A channel that was attempted and failed must not be reported as success —
+    # silently "sent" email that never arrives is the failure mode this endpoint
+    # exists to rule out.
+    if errors:
+        logger.warning("alert_test_partial_failure", errors=errors, sent=sent)
+        return {
+            "status": "partial" if sent else "failed",
+            "channels": sent,
+            "errors": errors,
+        }
 
     return {"status": "sent", "channels": sent}

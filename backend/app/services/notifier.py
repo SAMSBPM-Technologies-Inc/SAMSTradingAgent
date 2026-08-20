@@ -161,8 +161,14 @@ def _send_email_blocking(to: str, subject: str, text: str, html: str) -> None:
             srv.send_message(msg)
 
 
-async def _send_email(to: str, subject: str, text: str, html: str) -> None:
-    """Fire-and-forget email. Never raises — a mail outage must not stop trading."""
+async def _send_email(to: str, subject: str, text: str, html: str) -> str | None:
+    """
+    Send an email. Never raises — a mail outage must not stop trading.
+
+    Returns None on success, or a short reason on failure. Callers that are
+    firing-and-forgetting can ignore it; the test endpoint surfaces it so SMTP
+    can be diagnosed from the UI rather than the server logs.
+    """
     import asyncio
 
     from app.config import get_settings
@@ -170,14 +176,17 @@ async def _send_email(to: str, subject: str, text: str, html: str) -> None:
     s = get_settings()
     if not s.email_enabled:
         logger.debug("email_disabled", hint="SMTP_HOST/USERNAME/PASSWORD not configured")
-        return
+        return "email not configured (SMTP_HOST / SMTP_USERNAME / SMTP_PASSWORD unset)"
     if not to:
-        return
+        return "no recipient address"
     try:
         await asyncio.to_thread(_send_email_blocking, to, subject, text, html)
         logger.info("email_sent", to=to, subject=subject)
+        return None
     except Exception as exc:
-        logger.warning("email_send_failed", to=to, subject=subject, error=str(exc))
+        reason = f"{type(exc).__name__}: {exc}"
+        logger.warning("email_send_failed", to=to, subject=subject, error=reason)
+        return reason
 
 
 def _money(v) -> str:
@@ -265,3 +274,26 @@ async def send_trade_email(
 </div>"""
 
     await _send_email(to, subject, text, html)
+
+
+async def send_test_email(to: str) -> str | None:
+    """Deliverability check. Returns None on success or the failure reason."""
+    subject = "[TEST] SAMSBPM Trading Agent — email notifications working"
+    text = (
+        "This is a test from your trading agent.\n\n"
+        "If you received it, trade notifications will reach you: every order the "
+        "agent submits sends a message like this one, with the ticker, size, "
+        "limit price and protective levels."
+    )
+    html = """\
+<div style="font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:520px;
+            margin:0 auto;padding:24px;color:#111827">
+  <p style="margin:0 0 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+            color:#6b7280">SAMSBPM Trading Agent</p>
+  <h2 style="margin:0 0 12px;font-size:18px;font-weight:600">Email notifications are working</h2>
+  <p style="margin:0;font-size:13px;line-height:1.6;color:#374151">
+    Every order the agent submits will send a message like this one — ticker,
+    size, limit price, and the stop and target protecting the position.
+  </p>
+</div>"""
+    return await _send_email(to, subject, text, html)
