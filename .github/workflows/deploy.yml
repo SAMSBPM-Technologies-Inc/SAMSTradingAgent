@@ -39,6 +39,11 @@ jobs:
           # analyst.py returned at its first guard, and every signal silently
           # fell back to rule-based.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Market-data providers. Absent from this workflow until now, so both
+          # arrived empty on the server: news sentiment reported no_api_key and
+          # the macro block stayed unpopulated.
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           # IB Gateway login — required for the ibgateway container to authenticate.
           # Without these IBC exits at startup and nothing listens on the API port.
           # IBKR issues SEPARATE credentials for paper and live; the deploy script
@@ -84,7 +89,7 @@ jobs:
           # the names listed here. A variable set above and omitted here arrives
           # as an empty string, with no error from either side — which is how
           # ANTHROPIC_API_KEY reached the server blank. Add to BOTH places.
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
           command_timeout: 30m
           script: |
             set -e
@@ -217,32 +222,50 @@ jobs:
             set_if_missing_or_empty ENABLE_BACKTESTING             false
             set_if_missing_or_empty ENABLE_AI_ANALYST              true
 
-            # ── Claude API key ────────────────────────────────────────────────
+            # ── Third-party API keys ──────────────────────────────────────────
             # Guarded rather than injected straight through. inject_secret always
-            # overwrites, so an unscoped or missing secret resolves to "" and
-            # would blank a working key — and the only symptom is the analyst
-            # quietly not running, since analyst.py treats a missing key as
-            # "disabled" and pipeline.py falls back to rule-based without error.
-            # An empty value here is far more likely to mean the secret is not
-            # visible to this job than that it was deliberately cleared.
-            if [ -n "$ANTHROPIC_API_KEY" ]; then
-              inject_secret ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
-              # Length only, never the value — enough to confirm it arrived.
-              echo "ANTHROPIC_API_KEY injected (${#ANTHROPIC_API_KEY} chars)"
-            else
-              echo "WARNING: ANTHROPIC_API_KEY resolved empty on the server."
+            # overwrites, so a missing secret — or one merely absent from the
+            # ssh-action envs: allowlist — resolves to "" and would blank a
+            # working key. Every consumer here treats a missing key as "feature
+            # off" and degrades silently, so a blanked key produces no error
+            # anywhere: the analyst stops running, sentiment falls back to
+            # no_api_key, macro goes empty. An empty value is far more likely to
+            # mean the secret never reached this script than that someone meant
+            # to clear it, so never overwrite a good value with a blank.
+            inject_key_guarded() {
+              local key="$1" value="$2" consequence="$3"
+              if [ -n "$value" ]; then
+                inject_secret "$key" "$value"
+                # Length only, never the value — enough to confirm it arrived.
+                echo "$key injected (${#value} chars)"
+                return
+              fi
+              echo "WARNING: $key resolved empty on the server."
               echo "  Check, in order:"
-              echo "   1. ANTHROPIC_API_KEY is listed in the ssh-action 'envs:'"
-              echo "      allowlist. Setting it in the job's env: block alone is"
-              echo "      NOT enough — anything absent from envs: arrives blank."
+              echo "   1. $key is listed in the ssh-action 'envs:' allowlist."
+              echo "      Setting it in the job's env: block alone is NOT enough —"
+              echo "      anything absent from envs: arrives blank."
               echo "   2. The secret exists and is scoped to the Production"
               echo "      environment (gh secret list --env Production)."
-              if [ -n "$(grep '^ANTHROPIC_API_KEY=' "$ENV" 2>/dev/null | cut -d= -f2-)" ]; then
-                echo "  Existing key on the server left untouched."
+              if [ -n "$(grep "^${key}=" "$ENV" 2>/dev/null | cut -d= -f2-)" ]; then
+                echo "  Existing value on the server left untouched."
               else
-                echo "  No key on the server either — the AI analyst stays disabled."
+                echo "  No value on the server either — $consequence"
               fi
-            fi
+            }
+
+            inject_key_guarded ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY" \
+              "the AI analyst stays disabled and every signal falls back to rule-based."
+            # Finnhub drives news sentiment; FRED drives the macro block. Both
+            # were absent from this workflow entirely, so neither could ever
+            # reach the server. The cost is not an outage but a silently
+            # degraded score: sentiment_score collapses to a narrow band and
+            # macro_score to a constant, which flattens the composite and can
+            # leave the BUY threshold effectively unreachable.
+            inject_key_guarded FINNHUB_API_KEY "$FINNHUB_API_KEY" \
+              "news sentiment will read no_api_key and sentiment_score goes flat."
+            inject_key_guarded FRED_API_KEY "$FRED_API_KEY" \
+              "macro data will be empty and macro_score becomes a constant."
             set_if_missing_or_empty INGESTION_INTERVAL_MINUTES     5
             set_if_missing_or_empty WEIGHT_TECHNICAL               0.25
             set_if_missing_or_empty WEIGHT_FUNDAMENTAL             0.15
