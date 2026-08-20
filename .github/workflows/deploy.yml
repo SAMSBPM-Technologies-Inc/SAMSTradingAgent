@@ -79,7 +79,12 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
+          # EXPLICIT ALLOWLIST. The env: block above only populates the runner's
+          # own environment; ssh-action forwards to the remote shell nothing but
+          # the names listed here. A variable set above and omitted here arrives
+          # as an empty string, with no error from either side — which is how
+          # ANTHROPIC_API_KEY reached the server blank. Add to BOTH places.
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
           command_timeout: 30m
           script: |
             set -e
@@ -225,10 +230,13 @@ jobs:
               # Length only, never the value — enough to confirm it arrived.
               echo "ANTHROPIC_API_KEY injected (${#ANTHROPIC_API_KEY} chars)"
             else
-              echo "WARNING: ANTHROPIC_API_KEY resolved empty in the workflow env."
-              echo "  If the secret exists, confirm it is scoped to the Production"
-              echo "  environment — this job declares 'environment: Production', and"
-              echo "  repository-level secrets are NOT exposed to it."
+              echo "WARNING: ANTHROPIC_API_KEY resolved empty on the server."
+              echo "  Check, in order:"
+              echo "   1. ANTHROPIC_API_KEY is listed in the ssh-action 'envs:'"
+              echo "      allowlist. Setting it in the job's env: block alone is"
+              echo "      NOT enough — anything absent from envs: arrives blank."
+              echo "   2. The secret exists and is scoped to the Production"
+              echo "      environment (gh secret list --env Production)."
               if [ -n "$(grep '^ANTHROPIC_API_KEY=' "$ENV" 2>/dev/null | cut -d= -f2-)" ]; then
                 echo "  Existing key on the server left untouched."
               else
