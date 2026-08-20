@@ -400,12 +400,28 @@ class IbkrAdapter(BrokerAdapter):
             logger.error("ibkr_cancel_order_failed", order_id=order_id, error=str(exc))
             return False
 
+    async def _refresh_open_orders(self) -> None:
+        """
+        Pull ALL working orders for the account into the local cache.
+
+        `openTrades()` only reports orders submitted by the CURRENT client
+        session. Any bracket placed before the last reconnect — and the client
+        id rotates on every reconnect — is invisible without this. That blind
+        spot is dangerous: has_open_orders would report "nothing working" while
+        a stop leg was live, and the exit path would sell into it.
+        """
+        try:
+            await self._ib.reqAllOpenOrdersAsync()
+        except Exception as exc:
+            logger.warning("ibkr_req_all_open_orders_failed", error=str(exc))
+
     async def cancel_open_orders(self, ticker: str, account_id: str = "") -> int:
         """Cancel all working orders for `ticker` — including live bracket legs."""
         if not self.is_connected():
             return 0
         try:
             symbol = ticker.upper()
+            await self._refresh_open_orders()
 
             def _working() -> list:
                 return [
@@ -446,6 +462,7 @@ class IbkrAdapter(BrokerAdapter):
     async def has_open_orders(self, ticker: str, account_id: str = "") -> bool:
         if not self.is_connected():
             return False
+        await self._refresh_open_orders()
         symbol = ticker.upper()
         return any(
             getattr(t.contract, "symbol", "").upper() == symbol
