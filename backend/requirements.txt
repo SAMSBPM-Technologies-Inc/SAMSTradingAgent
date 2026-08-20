@@ -30,7 +30,11 @@ fredapi==0.5.1          # FRED macro data (rates, CPI, unemployment, VIX)
 vaderSentiment==3.3.2   # VADER sentiment analysis on news headlines (no API key needed)
 
 # Phase 3: AI analyst
-anthropic>=0.30.0       # Claude API for AI analyst layer
+# Floor set by what the analyst actually calls: adaptive thinking and
+# output_config.effort. An older SDK silently lacks output_config, so the
+# previous >=0.30.0 would let a rebuild install a version that cannot run
+# the analyst at all.
+anthropic>=0.122.0      # Claude API for AI analyst layer
 
 # Auth
 python-jose[cryptography]==3.3.0

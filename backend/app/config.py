@@ -157,12 +157,41 @@ class Settings(BaseSettings):
     enable_ml_model: bool = Field(default=False)
     enable_backtesting: bool = Field(default=False)
     enable_ai_analyst: bool = Field(default=False, description="Use Claude AI analyst instead of rule-based signal")
-    # Claude model for AI analyst. Opus 4.6 scores 23pts higher on Anthropic's
-    # Real-World Finance benchmark; Sonnet 4.6 is ~5x cheaper per token.
-    analyst_model: str = Field(default="claude-opus-4-6", description="Claude model for AI analyst")
-    # Extended thinking lets Claude reason through conflicting signals before answering.
-    # Adds ~3-8s per analysis but produces better calibrated signals.
-    analyst_extended_thinking: bool = Field(default=True, description="Enable Claude extended thinking for AI analyst")
+    # Sonnet 5 reaches near-Opus quality on this kind of structured analysis at
+    # $3/$15 per MTok against Opus's $5/$25. Output dominates the bill here
+    # (thinking tokens are billed as output), so the output rate is what matters.
+    analyst_model: str = Field(default="claude-sonnet-5", description="Claude model for AI analyst")
+    # Adaptive thinking: Claude decides how hard to think per request rather than
+    # spending a fixed budget on every call. Depth is steered by analyst_effort.
+    analyst_extended_thinking: bool = Field(default=True, description="Enable Claude adaptive thinking for AI analyst")
+    # low | medium | high | xhigh | max. medium is roughly Sonnet 4.6 at high and
+    # is ample for a note written from data already assembled for the model.
+    analyst_effort: str = Field(default="medium", description="Thinking/effort level for the AI analyst")
+
+    # ── Analyst call gating ───────────────────────────────────────────────────
+    # A Claude call is only worth making where its judgment can change the
+    # outcome. BUY fires above 0.70 and SELL below 0.30, so a ticker sitting at
+    # 0.47 produces the same HOLD whether or not a research note is written —
+    # and that described nearly every call: 592 of 602 recorded signals were
+    # HOLD. Away from the thresholds the rule-based path is used instead.
+    #
+    # The margin is measured from the live thresholds in signal_generator rather
+    # than as an absolute band, so the two cannot drift apart. At the default,
+    # Claude is called when score >= 0.62 or <= 0.38.
+    analyst_gate_enabled: bool = Field(default=True, description="Only call Claude near a decision boundary")
+    analyst_gate_margin: float = Field(
+        default=0.08,
+        description="How close to the BUY/SELL threshold a score must be to justify a Claude call",
+    )
+    # Open positions are analysed at any score. This is the larger share of the
+    # remaining spend, and it is the share worth paying: once capital is
+    # committed the exit decision is the most consequential call the analyst
+    # makes. Set false to gate holdings on the margin like everything else.
+    analyst_always_analyse_holdings: bool = Field(
+        default=True,
+        description="Always analyse tickers with an open position, regardless of score",
+    )
+
     # Analysis caching — Claude is only re-called when one of these triggers fires:
     #   1. Last analysis is older than analyst_cache_minutes
     #   2. Price has moved >= analyst_price_change_pct since last analysis

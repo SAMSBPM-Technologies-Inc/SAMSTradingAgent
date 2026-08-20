@@ -37,12 +37,15 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # ── Model config ───────────────────────────────────────────────────────────────
-# claude-opus-4-6: 23-pt improvement on Anthropic's Real-World Finance benchmark
-# vs Sonnet 4.5; use Opus for highest signal quality, Sonnet for lower cost.
-_MODEL = "claude-opus-4-6"
-_MAX_TOKENS = 16000          # must be high when extended thinking is on
-_THINKING_BUDGET = 8000      # tokens Claude uses to reason before answering
-_ANSWER_TOKENS = 2000        # tokens reserved for the final JSON answer
+# Sonnet 5 reaches near-Opus quality on structured analysis at $3/$15 per MTok
+# against Opus's $5/$25. Output rate is what matters: thinking tokens bill as
+# output and dominate this workload — input is well under a tenth of the cost.
+_MODEL = "claude-sonnet-5"
+
+# A ceiling, not a reservation: only tokens actually generated are billed, so
+# there is no cost to leaving adaptive thinking room. Too *low* is what costs —
+# a truncated response fails to parse and the whole call is wasted.
+_MAX_TOKENS = 12000
 
 _SYSTEM_PROMPT = """\
 You are a senior equity research analyst with 20 years of experience across multiple market cycles.
@@ -105,6 +108,7 @@ async def run_analysis(ticker: str) -> Optional[dict]:
             settings.anthropic_api_key,
             model=settings.analyst_model,
             extended_thinking=settings.analyst_extended_thinking,
+            effort=settings.analyst_effort,
         )
     except Exception as exc:
         logger.warning("analyst_claude_failed", ticker=ticker, error=str(exc))
@@ -275,13 +279,16 @@ async def _call_claude(
     api_key: str,
     model: str = _MODEL,
     extended_thinking: bool = True,
+    effort: str = "medium",
 ) -> dict:
     import anthropic
 
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
-    # Prompt caching: system prompt is marked ephemeral — subsequent calls within
-    # the 5-minute cache window cost ~10% of normal input token price.
+    # Prompt caching keeps the system prompt cheap on repeat calls. Worth having,
+    # but not worth much here: input is a small share of the bill next to
+    # thinking tokens, so the levers that matter are the model, the effort
+    # level, and not making the call at all.
     system = [
         {
             "type": "text",
@@ -294,17 +301,31 @@ async def _call_claude(
         "model": model,
         "system": system,
         "messages": [{"role": "user", "content": context}],
+        "max_tokens": _MAX_TOKENS,
     }
 
     if extended_thinking:
-        # Extended thinking: Claude reasons through conflicting signals before answering.
-        # Requires max_tokens > thinking budget. Temperature must be 1 (default).
-        kwargs["max_tokens"] = _THINKING_BUDGET + _ANSWER_TOKENS
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": _THINKING_BUDGET}
+        # Adaptive thinking replaces the fixed `budget_tokens` form, which is
+        # deprecated on 4.6-era models and rejected outright by current ones.
+        # It also matches spend to difficulty: an obvious HOLD no longer costs
+        # the same as a genuinely contested call, which the fixed budget did.
+        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["output_config"] = {"effort": effort}
     else:
-        kwargs["max_tokens"] = _ANSWER_TOKENS
+        # Adaptive is the default on these models, so opting out has to be
+        # explicit — omitting `thinking` would leave it on.
+        kwargs["thinking"] = {"type": "disabled"}
 
     message = await client.messages.create(**kwargs)
+
+    # A truncated response cannot be parsed and wastes the whole call. Surface
+    # it rather than letting it read as a generic JSON failure downstream.
+    if getattr(message, "stop_reason", None) == "max_tokens":
+        logger.warning(
+            "analyst_response_truncated",
+            model=model, max_tokens=_MAX_TOKENS,
+            hint="raise _MAX_TOKENS or lower analyst_effort",
+        )
 
     # Extended thinking returns multiple content blocks; extract the text block
     raw_text = ""

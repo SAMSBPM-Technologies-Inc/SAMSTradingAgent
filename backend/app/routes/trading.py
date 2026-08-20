@@ -102,6 +102,45 @@ async def get_account(current_user: dict = Depends(get_current_user)) -> Account
     return AccountSummaryResponse(**summary)
 
 
+@router.post("/reconcile", summary="Force a broker reconciliation pass now")
+async def force_reconcile(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Run trade reconciliation immediately instead of waiting for the schedule.
+
+    Also returns what the broker currently reports, because the usual question
+    when a trade looks stuck is not "what did reconciliation decide" but "what
+    does the venue actually say" — and the two are only separable side by side.
+    """
+    from app.services.trade_manager import reconcile_trades
+
+    summary = await reconcile_trades()
+
+    account = await ibkr.get_account_summary()
+    account_id = account.get("account_id") or ""
+    statuses = await ibkr.get_order_statuses(account_id)
+    positions = await ibkr.get_positions()
+    fills = await ibkr.get_fills(1440)
+
+    return {
+        "reconciled": summary,
+        "broker": {
+            "connected": account.get("connected", False),
+            "account_id": account_id,
+            "order_ids_visible": sorted(statuses.keys()),
+            "orders": [
+                {
+                    "order_id": o.order_id, "status": o.status,
+                    "filled": o.filled_qty, "remaining": o.remaining_qty,
+                    "avg_price": o.avg_fill_price,
+                }
+                for o in list(statuses.values())[:40]
+            ],
+            "positions": [{"ticker": p["ticker"], "qty": p["qty"]} for p in positions],
+            "fill_count": len(fills),
+        },
+    }
+
+
 @router.get("/holdings", summary="Live holdings straight from the broker")
 async def get_holdings(current_user: dict = Depends(get_current_user)) -> dict:
     """

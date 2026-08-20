@@ -30,11 +30,20 @@ Every pipeline run upserts a record to stocks_signal_history keyed on
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.db import COLL_FEATURES, COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
+from app.db import (
+    COLL_FEATURES,
+    COLL_SIGNAL_HISTORY,
+    COLL_SIGNALS,
+    COLL_TRADES,
+    COLL_USERS,
+    COLL_WATCHED,
+    get_db,
+)
+from app.models.trade import TradeStatus
 from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
-from app.services.signal_generator import generate_signal
+from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD, generate_signal
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -69,10 +78,17 @@ async def run_pipeline(ticker: str) -> dict:
     if settings.enable_ai_analyst and settings.anthropic_api_key:
         from app.services.analyst import run_analysis
 
-        # Check whether market conditions warrant a fresh Claude call or if
-        # the cached signal is still valid.
         feat_doc = await db[COLL_FEATURES].find_one({"ticker": ticker}) or {}
+
+        # Is this ticker close enough to a decision for Claude's judgment to
+        # matter? Checked before the cache triggers, because a mid-band ticker
+        # should not be analysed however stale its last look was.
+        worth_calling, gate_reason = await _analyst_worth_calling(ticker, feat_doc)
+        if not worth_calling:
+            logger.debug("analyst_gated", ticker=ticker, reason=gate_reason)
+
         needs_refresh, cache_reason = await _needs_analyst_refresh(ticker, raw_doc, feat_doc)
+        needs_refresh = needs_refresh and worth_calling
 
         if not needs_refresh:
             # Serve cached signal — just refresh live price on the existing doc.
@@ -85,29 +101,35 @@ async def run_pipeline(ticker: str) -> dict:
                 existing["current_price"] = current_price
                 existing["day_change_pct"] = day_change_pct
                 logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst_cached",
-                            signal=existing.get("signal"), cache_reason=cache_reason)
+                            signal=existing.get("signal"),
+                            cache_reason=cache_reason if worth_calling else gate_reason)
                 return existing
 
-        try:
-            signal = await run_analysis(ticker)
-            if signal:
-                signal["data_sources"] = data_sources
-                signal["analyst_used"] = True
-                signal["current_price"] = current_price
-                signal["day_change_pct"] = day_change_pct
-                signal["alternative_data"] = alternative_data
-                await db[COLL_SIGNALS].update_one(
-                    {"ticker": ticker},
-                    {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
-                )
-                await _append_history(signal, raw_doc)
-                logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst",
-                            signal=signal.get("signal"), cache_reason=cache_reason)
-                await _fire_alerts(ticker, prev_signal, signal)
-                await _execute_trades(ticker, signal)
-                return signal
-        except Exception as exc:
-            logger.warning("analyst_failed_falling_back", ticker=ticker, error=str(exc))
+        # No cached doc to serve. Falling through to run_analysis here would
+        # call Claude for a ticker the gate just rejected — the gate has to
+        # send it to the rule-based path instead, which reaches the same
+        # verdict away from the thresholds.
+        if worth_calling:
+            try:
+                signal = await run_analysis(ticker)
+                if signal:
+                    signal["data_sources"] = data_sources
+                    signal["analyst_used"] = True
+                    signal["current_price"] = current_price
+                    signal["day_change_pct"] = day_change_pct
+                    signal["alternative_data"] = alternative_data
+                    await db[COLL_SIGNALS].update_one(
+                        {"ticker": ticker},
+                        {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
+                    )
+                    await _append_history(signal, raw_doc)
+                    logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst",
+                                signal=signal.get("signal"), cache_reason=cache_reason)
+                    await _fire_alerts(ticker, prev_signal, signal)
+                    await _execute_trades(ticker, signal)
+                    return signal
+            except Exception as exc:
+                logger.warning("analyst_failed_falling_back", ticker=ticker, error=str(exc))
 
     signal = await generate_signal(ticker)
     signal["data_sources"] = data_sources
@@ -140,6 +162,63 @@ async def run_pipeline_all(tickers: list[str]) -> dict[str, str]:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _analyst_worth_calling(ticker: str, feat_doc: dict) -> tuple[bool, str]:
+    """
+    Decide whether Claude's judgment can change this ticker's outcome.
+
+    A research note costs real money and its only effect is the signal it
+    produces. Away from the thresholds it cannot produce anything but the HOLD
+    the rule-based path already returns — and that described nearly every call:
+    of 602 recorded signals, 592 were HOLD, with every live composite score
+    sitting between 0.38 and 0.56 against a 0.70 BUY / 0.30 SELL boundary.
+
+    Two cases justify the spend:
+      * the score is within `analyst_gate_margin` of a real threshold, so the
+        verdict is genuinely live
+      * a position is open, where the exit decision is worth paying for at any
+        score because capital is already committed
+
+    The margin is measured against signal_generator's own thresholds rather
+    than a hard-coded band, so moving a threshold moves the gate with it.
+
+    Returns (should_call, reason).
+    """
+    settings = get_settings()
+    if not settings.analyst_gate_enabled:
+        return True, "gate_disabled"
+
+    score = feat_doc.get("composite_score")
+    if score is None:
+        # No score means scoring failed; let the analyst look rather than
+        # silently downgrade a ticker on missing data.
+        return True, "no_score"
+
+    margin = settings.analyst_gate_margin
+    if score >= BUY_THRESHOLD - margin:
+        return True, f"near_buy_{score:.2f}"
+    if score <= SELL_THRESHOLD + margin:
+        return True, f"near_sell_{score:.2f}"
+
+    if settings.analyst_always_analyse_holdings:
+        try:
+            db = await get_db()
+            held = await db[COLL_TRADES].find_one({
+                "ticker": ticker,
+                "action": "BUY",
+                "status": {"$in": list(TradeStatus.OPEN)},
+                "closed_at": None,
+            })
+            if held:
+                return True, f"position_open_{score:.2f}"
+        except Exception as exc:
+            # Can't confirm there's no position — analyse rather than stop
+            # forming a view on capital that may still be committed.
+            logger.warning("analyst_gate_position_check_failed", ticker=ticker, error=str(exc))
+            return True, "position_check_failed"
+
+    return False, f"mid_range_{score:.2f}"
+
 
 async def _needs_analyst_refresh(ticker: str, raw_doc: dict, feat_doc: dict) -> tuple[bool, str]:
     """
