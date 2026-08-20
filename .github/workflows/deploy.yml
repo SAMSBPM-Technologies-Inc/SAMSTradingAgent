@@ -33,6 +33,12 @@ jobs:
         env:
           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+          # Claude API key for the AI analyst. This was previously absent from
+          # the workflow entirely, so the key could never reach the server no
+          # matter what was configured in GitHub — ENABLE_AI_ANALYST=true while
+          # analyst.py returned at its first guard, and every signal silently
+          # fell back to rule-based.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # IB Gateway login — required for the ibgateway container to authenticate.
           # Without these IBC exits at startup and nothing listens on the API port.
           # IBKR issues SEPARATE credentials for paper and live; the deploy script
@@ -205,6 +211,30 @@ jobs:
             set_if_missing_or_empty ENABLE_ML_MODEL                false
             set_if_missing_or_empty ENABLE_BACKTESTING             false
             set_if_missing_or_empty ENABLE_AI_ANALYST              true
+
+            # ── Claude API key ────────────────────────────────────────────────
+            # Guarded rather than injected straight through. inject_secret always
+            # overwrites, so an unscoped or missing secret resolves to "" and
+            # would blank a working key — and the only symptom is the analyst
+            # quietly not running, since analyst.py treats a missing key as
+            # "disabled" and pipeline.py falls back to rule-based without error.
+            # An empty value here is far more likely to mean the secret is not
+            # visible to this job than that it was deliberately cleared.
+            if [ -n "$ANTHROPIC_API_KEY" ]; then
+              inject_secret ANTHROPIC_API_KEY "$ANTHROPIC_API_KEY"
+              # Length only, never the value — enough to confirm it arrived.
+              echo "ANTHROPIC_API_KEY injected (${#ANTHROPIC_API_KEY} chars)"
+            else
+              echo "WARNING: ANTHROPIC_API_KEY resolved empty in the workflow env."
+              echo "  If the secret exists, confirm it is scoped to the Production"
+              echo "  environment — this job declares 'environment: Production', and"
+              echo "  repository-level secrets are NOT exposed to it."
+              if [ -n "$(grep '^ANTHROPIC_API_KEY=' "$ENV" 2>/dev/null | cut -d= -f2-)" ]; then
+                echo "  Existing key on the server left untouched."
+              else
+                echo "  No key on the server either — the AI analyst stays disabled."
+              fi
+            fi
             set_if_missing_or_empty INGESTION_INTERVAL_MINUTES     5
             set_if_missing_or_empty WEIGHT_TECHNICAL               0.25
             set_if_missing_or_empty WEIGHT_FUNDAMENTAL             0.15
