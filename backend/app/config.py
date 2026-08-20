@@ -90,6 +90,22 @@ class Settings(BaseSettings):
     def is_live_trading(self) -> bool:
         return self.trading_mode.strip().lower() == "live"
 
+    # ── Funding limits ────────────────────────────────────────────────────────
+    # Position size is a fraction of EQUITY, which says nothing about whether the
+    # cash to pay for it exists. Sizing several positions off the same equity
+    # figure silently borrows: eight 8% positions on a $1M account overshot into
+    # roughly -$86k of margin. When false, entries are sized against settled cash
+    # instead, so the agent cannot open a position it cannot pay for.
+    allow_margin: bool = Field(
+        default=False, description="Permit entries funded by margin rather than settled cash"
+    )
+    # Cash held back from sizing, as a fraction of equity. Absorbs commissions
+    # and the slippage between a limit price and the actual fill, either of which
+    # can otherwise tip a fully-deployed account into borrowing.
+    cash_reserve_pct: float = Field(
+        default=0.05, ge=0.0, le=0.50, description="Fraction of equity kept unspent"
+    )
+
     # ── Protective exits ──────────────────────────────────────────────────────
     # Entries are submitted as bracket orders: the entry limit plus a take-profit
     # limit and a stop-loss, linked so that filling one cancels the other.

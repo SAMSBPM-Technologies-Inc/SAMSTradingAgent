@@ -265,6 +265,41 @@ async def execute_entry(
         # Limit price: current price (will fill at or better)
         limit_price = round(price, 2)
 
+        # ── Guard: fundable from available money ──────────────────────────────
+        # position_size_pct is a fraction of EQUITY, which says nothing about
+        # whether the cash exists. Every position sizes off the same equity
+        # figure, so N positions commit N x pct of it and the account quietly
+        # borrows the difference. Size against real available funds instead.
+        env = get_settings()
+        available = (
+            acct.get("buying_power", 0.0) if env.allow_margin
+            else acct.get("total_cash", 0.0)
+        )
+        available -= equity * env.cash_reserve_pct
+
+        if available <= 0:
+            await _skip(
+                f"No available funds "
+                f"(cash ${acct.get('total_cash', 0.0):,.2f}, "
+                f"reserve ${equity * env.cash_reserve_pct:,.2f}"
+                f"{'' if env.allow_margin else '; margin disabled'})"
+            )
+            return
+
+        if qty * limit_price > available:
+            reduced = int(available // limit_price)
+            if reduced < 1:
+                await _skip(
+                    f"Available funds ${available:,.2f} below one share at ${limit_price:,.2f}"
+                )
+                return
+            logger.info(
+                "position_size_reduced_to_available_funds",
+                user_id=user_id, ticker=ticker,
+                requested_qty=qty, funded_qty=reduced, available=round(available, 2),
+            )
+            qty = reduced
+
         # ── Protective exits ──────────────────────────────────────────────────
         stop_price, target_price = _bracket_levels(
             limit_price, analyst_stop_loss, analyst_price_target
