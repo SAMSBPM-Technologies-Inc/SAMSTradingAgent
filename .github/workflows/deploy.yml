@@ -85,22 +85,38 @@ jobs:
             # Appends if the key is absent; overwrites if the key exists with an empty value.
             # This prevents pydantic from receiving "" and failing to parse bool/int/float.
             ENV=/opt/trading-agent/backend/.env.production
+            touch "$ENV"
+
+            # Rewrite a key by dropping its line and appending the new one.
+            #
+            # Deliberately NOT sed. The previous implementation used
+            # `sed "s|^KEY=.*|KEY=$value|"`, which breaks on any value
+            # containing the delimiter — a Zoho app password with a "|" in it
+            # failed the whole deploy with "unterminated `s' command", and
+            # escaping for sed is easy to get subtly wrong for arbitrary
+            # secrets. printf writes the value literally, whatever it contains.
+            _set_key() {
+              local key="$1" value="$2"
+              grep -v "^${key}=" "$ENV" > "${ENV}.tmp" 2>/dev/null || true
+              printf '%s=%s\n' "$key" "$value" >> "${ENV}.tmp"
+              mv "${ENV}.tmp" "$ENV"
+            }
+
+            # Fill in a default only when the key is absent or empty, so a value
+            # already tuned on the server is never clobbered by a deploy.
+            # (Empty values matter: pydantic fails to parse "" as bool/int/float.)
             set_if_missing_or_empty() {
               local key="$1" value="$2"
-              if grep -q "^${key}=$" "$ENV" 2>/dev/null; then
-                sed -i "s|^${key}=$|${key}=${value}|" "$ENV"
-              elif ! grep -q "^${key}=" "$ENV" 2>/dev/null; then
-                echo "${key}=${value}" >> "$ENV"
+              local current
+              current=$(grep "^${key}=" "$ENV" 2>/dev/null | head -1 | cut -d= -f2-)
+              if [ -z "$current" ]; then
+                _set_key "$key" "$value"
               fi
             }
-            # Always overwrite secrets from GitHub Secrets (never leave stale/empty values)
+
+            # Always overwrite from GitHub Secrets (never leave stale/empty values)
             inject_secret() {
-              local key="$1" value="$2"
-              if grep -q "^${key}=" "$ENV" 2>/dev/null; then
-                sed -i "s|^${key}=.*|${key}=${value}|" "$ENV"
-              else
-                echo "${key}=${value}" >> "$ENV"
-              fi
+              _set_key "$1" "$2"
             }
             inject_secret CLOUDFLARE_TUNNEL_TOKEN "$CLOUDFLARE_TUNNEL_TOKEN"
             inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
