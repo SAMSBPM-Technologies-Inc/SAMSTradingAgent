@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { AlertCircle, RefreshCw, Wallet } from 'lucide-react'
 import { tradingApi } from '../lib/api'
+import { relativeTime } from '../lib/format'
 import type { HoldingsResponse } from '../types'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -52,16 +53,6 @@ function SignedMoney({ value }: { value: number | null | undefined }) {
 let cachedData: HoldingsResponse | null = null
 let cachedAt: Date | null = null
 
-/** "just now" / "3 min ago" — matters more once a snapshot can be an hour old. */
-function relativeAge(from: Date): string {
-  const mins = Math.floor((Date.now() - from.getTime()) / 60_000)
-  if (mins < 1) return 'just now'
-  if (mins === 1) return '1 min ago'
-  if (mins < 60) return `${mins} min ago`
-  const hrs = Math.floor(mins / 60)
-  return hrs === 1 ? '1 hr ago' : `${hrs} hrs ago`
-}
-
 export default function HoldingsPage() {
   // Seed from the module cache so returning to this page shows what was already
   // fetched instead of resetting to the empty state.
@@ -106,7 +97,7 @@ export default function HoldingsPage() {
           </h1>
           <p className="text-sm text-[var(--color-fg-muted)] mt-0.5">
             {fetchedAt
-              ? `As of ${fetchedAt.toLocaleTimeString()} · ${relativeAge(fetchedAt)}`
+              ? `As of ${fetchedAt.toLocaleTimeString()} · ${relativeTime(fetchedAt)}`
               : 'Live positions, fetched on demand'}
           </p>
         </div>
