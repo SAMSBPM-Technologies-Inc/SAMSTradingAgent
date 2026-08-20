@@ -74,11 +74,41 @@ def _calculate_qty(price: float, equity: float, position_size_pct: float) -> int
     return max(1, int(dollar_amount / price))
 
 
-async def _get_user_settings(user_id: str) -> AutoTradeSettings | None:
-    """Load auto-trade settings from the users collection."""
+async def _get_user_settings(user_id) -> AutoTradeSettings | None:
+    """
+    Load auto-trade settings from the users collection.
+
+    Accepts the id as either a str or an ObjectId. This matters: `users._id` is
+    an ObjectId, but `watched_tickers.user_id` and `trades.user_id` store the
+    stringified form, and the pipeline passes the string straight through. The
+    previous `{"_id": user_id}` lookup therefore never matched, execute_entry
+    returned at its first guard, and automated trading could not place an order
+    at all — silently, because that early return logs nothing.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
     db = await get_db()
-    user = await db[COLL_USERS].find_one({"_id": user_id}, {"auto_trade_settings": 1})
+
+    # Match either storage convention rather than assuming one.
+    candidates = [user_id]
+    if isinstance(user_id, str):
+        try:
+            candidates.append(ObjectId(user_id))
+        except (InvalidId, TypeError):
+            pass
+    else:
+        candidates.append(str(user_id))
+
+    user = await db[COLL_USERS].find_one(
+        {"_id": {"$in": candidates}}, {"auto_trade_settings": 1}
+    )
     if not user:
+        logger.warning(
+            "auto_trade_user_not_found",
+            user_id=str(user_id),
+            hint="no users document matched this id — auto-trading cannot run for it",
+        )
         return None
     raw = user.get("auto_trade_settings")
     if not raw:
