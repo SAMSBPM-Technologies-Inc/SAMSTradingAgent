@@ -55,6 +55,11 @@ _INFO_ERROR_CODES = {
 # rejects re-use with error 326; rotating sidesteps that entirely.
 _CLIENT_ID_ROTATION = 8
 
+# A group account summary carries rows under the pseudo-account "All" alongside
+# the real account numbers. Counting those as accounts makes a single-account
+# login look ambiguous, which blanks out the equity read and skips every trade.
+_PSEUDO_ACCOUNTS = frozenset({"All", ""})
+
 # Order statuses that mean "this will never fill".
 # ValidationError is the one that matters most and is easy to miss: IB reports a
 # read-only API session by *accepting* the placeOrder call and then marking the
@@ -465,22 +470,36 @@ class IbkrAdapter(BrokerAdapter):
             # and are safe to call directly.
             rows = await self._ib.accountSummaryAsync(account_id or "")
 
-            # Filter to the requested account. IB returns one row per tag PER
-            # ACCOUNT, so with several managed accounts the flattening below
-            # would let the last account silently overwrite the others and
-            # position sizing could be computed from the wrong balance.
+            # Resolve which account this snapshot describes, then keep only its
+            # rows. IB returns one row per tag PER ACCOUNT, so flattening across
+            # accounts would let the last one silently win and position sizing
+            # could be computed from the wrong balance.
+            #
+            # `_REAL_ACCOUNTS` filtering matters: a group summary also carries
+            # rows under the pseudo-account "All", which is not a tradable
+            # account. Counting it made a single-account login look ambiguous.
+            real = {r.account for r in rows if r.account and r.account not in _PSEUDO_ACCOUNTS}
+
             if account_id:
-                rows = [r for r in rows if r.account == account_id]
-                if not rows:
-                    rows = [r for r in self._ib.accountValues(account_id)
-                            if r.account == account_id]
-            elif len({r.account for r in rows if r.account}) > 1:
+                target = account_id
+            elif len(real) == 1:
+                target = next(iter(real))
+            elif len(real) > 1:
                 logger.error(
                     "ibkr_ambiguous_account",
-                    accounts=sorted({r.account for r in rows if r.account}),
+                    accounts=sorted(real),
                     hint="set IBKR_ACCOUNT_ID — equity and orders would target an arbitrary account",
                 )
                 return AccountSummary()
+            else:
+                target = ""
+
+            if target:
+                scoped = [r for r in rows if r.account == target]
+                if not scoped:
+                    scoped = [r for r in self._ib.accountValues(target)
+                              if r.account == target]
+                rows = scoped
 
             values: dict[str, float] = {}
             for item in rows:
@@ -492,7 +511,10 @@ class IbkrAdapter(BrokerAdapter):
             # UnrealizedPnL is not part of the account-summary tag set; it comes
             # from the portfolio subscription. Sum it there, scoped to the same
             # account, so the dashboard's P&L matches the positions it lists.
-            resolved = account_id or next((r.account for r in rows if r.account), "")
+            resolved = target or next(
+                (r.account for r in rows
+                 if r.account and r.account not in _PSEUDO_ACCOUNTS), ""
+            )
             unrealized = values.get("UnrealizedPnL")
             realized = values.get("RealizedPnL")
             if unrealized is None or realized is None:

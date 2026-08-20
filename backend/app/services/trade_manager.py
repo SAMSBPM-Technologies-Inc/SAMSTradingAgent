@@ -198,7 +198,7 @@ async def execute_entry(
                 "qty": 0, "limit_price": 0.0,
                 "status": TradeStatus.SKIPPED, "reason": reason,
                 "signal_score": signal_score, "signal_type": "BUY",
-                "is_paper": settings.paper_trading,
+                "is_paper": not get_settings().is_live_trading,
                 "opened_at": now, "closed_at": now,
             })
             logger.info("trade_skipped", user_id=user_id, ticker=ticker, reason=reason)
