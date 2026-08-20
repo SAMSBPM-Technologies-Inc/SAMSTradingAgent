@@ -376,6 +376,42 @@ async def execute_exit(
             )
             return
 
+        # Size the exit to what the broker ACTUALLY holds, not to the quantity
+        # recorded when the entry was submitted. The entry is a resting limit
+        # order and may never have filled — selling its nominal quantity in that
+        # case does not close anything, it opens a short. Partial fills have the
+        # same problem in smaller form.
+        held = 0.0
+        for p in await ibkr.get_positions():
+            if p.get("ticker", "").upper() == ticker.upper():
+                held = float(p.get("qty") or 0.0)
+                break
+
+        if held <= 0:
+            # Nothing to sell. The working orders are already cancelled above,
+            # so close the record out rather than leaving it open forever.
+            logger.info(
+                "exit_no_position_held",
+                user_id=user_id, ticker=ticker, recorded_qty=qty, trigger=trigger,
+                hint="entry never filled — cancelled the order instead of selling",
+            )
+            await db[COLL_TRADES].update_one(
+                {"_id": open_trade["_id"]},
+                {"$set": {
+                    "closed_at": utcnow(),
+                    "status": TradeStatus.CANCELLED,
+                    "reason": "Entry never filled; order cancelled on exit signal",
+                }},
+            )
+            return
+
+        if held < qty:
+            logger.warning(
+                "exit_partial_position",
+                user_id=user_id, ticker=ticker, recorded_qty=qty, held=held,
+            )
+        qty = int(min(qty, held))
+
         # Plain limit order: the protective legs are gone, so this must not
         # carry a bracket of its own.
         order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)
