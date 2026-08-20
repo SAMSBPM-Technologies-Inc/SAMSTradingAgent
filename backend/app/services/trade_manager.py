@@ -555,7 +555,8 @@ async def reconcile_trades() -> dict:
 
     Returns a counts summary for logging. Never raises.
     """
-    summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0, "unpriced": 0}
+    summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0,
+               "unpriced": 0, "unreconciled": 0}
 
     if not ibkr.is_connected():
         logger.debug("reconcile_skipped_broker_disconnected")
@@ -631,7 +632,7 @@ async def reconcile_trades() -> dict:
                 status=update.get("status"), fill_price=update.get("entry_price"),
             )
 
-    # ── Phase 2: detect closures and price them ──────────────────────────────
+    # ── Phase 2: recover fills the order status pass could not see ───────────
     try:
         positions = await ibkr.get_positions()
     except Exception as exc:
@@ -649,16 +650,84 @@ async def reconcile_trades() -> dict:
         logger.warning("reconcile_fills_failed", error=str(exc))
         fills = []
 
+    # An entry can fill while nothing is watching — the app restarts, or the
+    # gateway session rolls — and the parent order then ages out of the order
+    # set before phase 1 ever observes it filled. Its execution is still in the
+    # log, so match on that rather than leaving the trade stuck at PENDING.
+    #
+    # Matched by order ID only. Matching on ticker alone would happily attach
+    # an unrelated purchase of the same stock to this record.
+    buys_by_order: dict[str, list] = {}
+    for f in fills:
+        if f.side == "BUY" and f.order_id:
+            buys_by_order.setdefault(str(f.order_id), []).append(f)
+
+    for trade in open_trades:
+        if trade.get("action") != "BUY" or trade.get("closed_at") is not None:
+            continue
+        if trade.get("entry_price") and trade.get("status") == TradeStatus.FILLED:
+            continue
+        matched = buys_by_order.get(str(trade.get("order_id") or ""))
+        if not matched:
+            continue
+
+        qty = sum(f.qty for f in matched)
+        if qty <= 0:
+            continue
+        vwap = sum(f.qty * f.price for f in matched) / qty
+        update = {
+            "status": TradeStatus.FILLED,
+            "entry_price": round(vwap, 4),
+            "filled_qty": qty,
+            "filled_at": trade.get("filled_at") or min(
+                (f.executed_at for f in matched if f.executed_at), default=utcnow()
+            ),
+        }
+        await _update_trade(str(trade["_id"]), update)
+        trade.update(update)
+        summary["filled"] += 1
+        logger.info(
+            "trade_fill_recovered",
+            ticker=trade.get("ticker"), order_id=str(trade.get("order_id")),
+            qty=qty, price=update["entry_price"],
+        )
+
+    # ── Phase 3: detect closures and price them ──────────────────────────────
     now = utcnow()
     for trade in open_trades:
-        if trade.get("status") != TradeStatus.FILLED or trade.get("action") != "BUY":
+        if trade.get("action") != "BUY" or trade.get("closed_at") is not None:
             continue
-        if trade.get("closed_at") is not None:
+        # Deliberately not restricted to FILLED: a trade that filled and closed
+        # entirely between two reconciliation passes never appears as FILLED,
+        # and requiring that status would leave it PENDING forever.
+        if trade.get("status") not in TradeStatus.OPEN:
             continue
 
         ticker = str(trade.get("ticker", "")).upper()
         if held.get(ticker, 0) > 0:
             continue  # still open — nothing to settle
+
+        # An order still working has not resolved; leave it alone.
+        if str(trade.get("order_id") or "") in statuses:
+            continue
+
+        # Never observed filled and no execution to prove it did. Could have
+        # filled and closed unseen, or never filled at all — the record cannot
+        # say which, so mark it unreconciled rather than inventing an outcome.
+        if not trade.get("entry_price") or trade.get("status") == TradeStatus.PENDING:
+            if not buys_by_order.get(str(trade.get("order_id") or "")):
+                await _update_trade(str(trade["_id"]), {
+                    "status": TradeStatus.UNRECONCILED,
+                    "closed_at": now,
+                    "exit_reason": "no_broker_record",
+                })
+                summary["unreconciled"] += 1
+                logger.warning(
+                    "trade_unreconcilable",
+                    ticker=ticker, order_id=str(trade.get("order_id")),
+                    hint="no position, no working order, and no execution in the log",
+                )
+                continue
 
         filled_at = trade.get("filled_at") or trade.get("opened_at")
         if isinstance(filled_at, datetime):

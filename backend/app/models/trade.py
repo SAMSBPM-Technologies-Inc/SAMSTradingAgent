@@ -35,6 +35,11 @@ class TradeStatus:
     REJECTED  = "REJECTED"   # rejected by broker
     SKIPPED   = "SKIPPED"    # risk guard prevented submission
     CLOSED    = "CLOSED"     # position exited, realised P&L recorded
+    #: The broker has no record of this order and holds no matching position,
+    #: and the execution log no longer reaches back far enough to say what
+    #: happened. Terminal, but explicitly NOT a trade outcome — distinguished
+    #: from CLOSED so an unknowable record is never counted as a real result.
+    UNRECONCILED = "UNRECONCILED"
 
     #: Statuses that represent a live commitment — an order that may still fill,
     #: or a position that is open. Anything here counts against position limits.
