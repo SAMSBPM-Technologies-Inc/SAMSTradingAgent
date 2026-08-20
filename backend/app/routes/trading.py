@@ -137,8 +137,39 @@ async def force_reconcile(current_user: dict = Depends(get_current_user)) -> dic
             ],
             "positions": [{"ticker": p["ticker"], "qty": p["qty"]} for p in positions],
             "fill_count": len(fills),
+            # Grouped by (ticker, side, order) so a P&L figure can be traced back
+            # to the executions it came from. Exit matching is by ticker and
+            # time — the closing order belongs to the bracket, not to us — so
+            # this is the only way to see whether an unrelated sell was absorbed.
+            "fills_by_order": _summarise_fills(fills),
         },
     }
+
+
+def _summarise_fills(fills: list) -> list[dict]:
+    grouped: dict[tuple, dict] = {}
+    for f in fills:
+        key = (f.ticker, f.side, str(f.order_id))
+        g = grouped.setdefault(key, {
+            "ticker": f.ticker, "side": f.side, "order_id": str(f.order_id),
+            "qty": 0.0, "notional": 0.0, "first": None, "last": None,
+        })
+        g["qty"] += f.qty
+        g["notional"] += f.qty * f.price
+        stamp = f.executed_at.isoformat() if f.executed_at else None
+        if stamp:
+            g["first"] = min(g["first"] or stamp, stamp)
+            g["last"] = max(g["last"] or stamp, stamp)
+    out = []
+    for g in grouped.values():
+        out.append({
+            "ticker": g["ticker"], "side": g["side"], "order_id": g["order_id"],
+            "qty": g["qty"],
+            "vwap": round(g["notional"] / g["qty"], 4) if g["qty"] else None,
+            "first": g["first"], "last": g["last"],
+        })
+    out.sort(key=lambda x: (x["ticker"], x["side"], x["order_id"]))
+    return out
 
 
 @router.get("/holdings", summary="Live holdings straight from the broker")
