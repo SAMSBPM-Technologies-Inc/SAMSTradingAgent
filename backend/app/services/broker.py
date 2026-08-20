@@ -222,3 +222,23 @@ async def get_positions() -> list[dict]:
     if _adapter is None:
         return []
     return [p.as_dict() for p in await _adapter.get_positions()]
+
+
+async def get_order_statuses(account_id: str = "") -> dict:
+    """
+    order_id → OrderStatus for every order the venue still reports.
+
+    Returns the dataclasses rather than dicts: the caller (trade reconciliation)
+    branches on `is_filled` / `is_dead`, and flattening here would push that
+    venue-vocabulary matching back out into business logic.
+    """
+    if _adapter is None:
+        return {}
+    return await _adapter.get_order_statuses(account_id)
+
+
+async def get_fills(lookback_minutes: int = 1440) -> list:
+    """Recent execution reports, oldest first. Empty when unavailable."""
+    if _adapter is None:
+        return []
+    return await _adapter.get_fills(lookback_minutes)

@@ -158,7 +158,7 @@ async def get_positions(current_user: dict = Depends(get_current_user)) -> list[
     docs = await db[COLL_TRADES].find({
         "user_id": user_id,
         "action": "BUY",
-        "status": {"$in": [TradeStatus.PENDING, TradeStatus.FILLED, TradeStatus.PARTIAL]},
+        "status": {"$in": list(TradeStatus.OPEN)},
         "closed_at": None,
     }).sort("opened_at", -1).to_list(length=200)
     return [_trade_to_response(d) for d in docs]
@@ -187,7 +187,7 @@ async def close_position(
         "user_id": user_id,
         "ticker": ticker.upper(),
         "action": "BUY",
-        "status": {"$in": [TradeStatus.PENDING, TradeStatus.FILLED, TradeStatus.PARTIAL]},
+        "status": {"$in": list(TradeStatus.OPEN)},
         "closed_at": None,
     })
     if not open_trade:

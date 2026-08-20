@@ -19,12 +19,16 @@ manager already enforces.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 
 from app.services.brokers.base import (
     AccountSummary,
     BrokerAdapter,
     BrokerConfig,
+    Fill,
+    OrderStatus,
     Position,
 )
 from app.utils.logger import get_logger
@@ -305,4 +309,85 @@ class AlpacaAdapter(BrokerAdapter):
             ]
         except Exception as exc:
             logger.error("alpaca_positions_failed", error=str(exc))
+            return []
+
+    # ── Reconciliation ───────────────────────────────────────────────────────
+
+    async def get_order_statuses(self, account_id: str = "") -> dict[str, OrderStatus]:
+        """
+        Recent orders in every state, keyed by Alpaca's order UUID.
+
+        `account_id` is accepted for interface symmetry and ignored: Alpaca keys
+        the account off the API credentials, so a client can only ever see one.
+        """
+        if not self.is_connected():
+            return {}
+        try:
+            resp = await self._client.get(
+                "/v2/orders",
+                params={"status": "all", "limit": 500, "nested": "true"},
+            )
+            resp.raise_for_status()
+
+            statuses: dict[str, OrderStatus] = {}
+
+            def _absorb(order: dict) -> None:
+                oid = str(order.get("id") or "")
+                if not oid:
+                    return
+                filled = _f(order.get("filled_qty"))
+                total = _f(order.get("qty"))
+                statuses[oid] = OrderStatus(
+                    order_id=oid,
+                    status=str(order.get("status") or ""),
+                    filled_qty=filled,
+                    remaining_qty=max(0.0, total - filled),
+                    avg_fill_price=_f(order.get("filled_avg_price")),
+                )
+                # nested=true nests bracket children under the parent; they are
+                # the legs that actually close a position, so walk into them.
+                for leg in order.get("legs") or []:
+                    _absorb(leg)
+
+            for order in resp.json():
+                _absorb(order)
+            return statuses
+        except Exception as exc:
+            logger.error("alpaca_order_statuses_failed", error=str(exc))
+            return {}
+
+    async def get_fills(self, lookback_minutes: int = 1440) -> list[Fill]:
+        """Fill activities from the account activity log, oldest first."""
+        if not self.is_connected():
+            return []
+        try:
+            since = datetime.now(tz=timezone.utc) - timedelta(minutes=lookback_minutes)
+            resp = await self._client.get(
+                "/v2/account/activities/FILL",
+                params={"after": since.isoformat(), "page_size": 500},
+            )
+            resp.raise_for_status()
+
+            out: list[Fill] = []
+            for a in resp.json():
+                executed_at = None
+                raw_time = a.get("transaction_time")
+                if raw_time:
+                    try:
+                        executed_at = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+                    except ValueError:
+                        pass
+                out.append(Fill(
+                    ticker=str(a.get("symbol") or "").upper(),
+                    side="BUY" if str(a.get("side", "")).lower().startswith("b") else "SELL",
+                    qty=_f(a.get("qty")),
+                    price=_f(a.get("price")),
+                    executed_at=executed_at,
+                    order_id=str(a.get("order_id") or ""),
+                    exec_id=str(a.get("id") or ""),
+                ))
+            out.sort(key=lambda x: (x.executed_at is None, x.executed_at))
+            return out
+        except Exception as exc:
+            logger.error("alpaca_get_fills_failed", error=str(exc))
             return []

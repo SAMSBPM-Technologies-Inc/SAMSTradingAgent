@@ -29,11 +29,16 @@ class AutoTradeSettingsResponse(AutoTradeSettings):
 
 class TradeStatus:
     PENDING   = "PENDING"    # order submitted, awaiting fill
-    FILLED    = "FILLED"     # order fully filled
+    FILLED    = "FILLED"     # order fully filled, position open
     PARTIAL   = "PARTIAL"    # order partially filled
     CANCELLED = "CANCELLED"  # order cancelled
     REJECTED  = "REJECTED"   # rejected by broker
     SKIPPED   = "SKIPPED"    # risk guard prevented submission
+    CLOSED    = "CLOSED"     # position exited, realised P&L recorded
+
+    #: Statuses that represent a live commitment — an order that may still fill,
+    #: or a position that is open. Anything here counts against position limits.
+    OPEN = (PENDING, FILLED, PARTIAL)
 
 
 class TradeRecord(BaseModel):
@@ -56,6 +61,10 @@ class TradeRecord(BaseModel):
     is_paper: bool = True
     opened_at: datetime
     closed_at: Optional[datetime] = None
+    # ── Written by reconciliation, not at submission time ──────────────────
+    filled_qty: Optional[float] = None   # shares actually filled (may be < qty)
+    filled_at: Optional[datetime] = None
+    exit_reason: Optional[str] = None    # how the position closed (e.g. "bracket_or_manual")
 
 
 class TradeResponse(BaseModel):
@@ -79,6 +88,9 @@ class TradeResponse(BaseModel):
     is_paper: bool
     opened_at: datetime
     closed_at: Optional[datetime] = None
+    filled_qty: Optional[float] = None
+    filled_at: Optional[datetime] = None
+    exit_reason: Optional[str] = None
 
 
 class AccountSummaryResponse(BaseModel):

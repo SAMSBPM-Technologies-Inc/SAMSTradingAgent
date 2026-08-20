@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 
 
 @dataclass
@@ -71,6 +72,59 @@ class Position:
             "market_value": self.market_value,
             "unrealized_pnl": self.unrealized_pnl,
         }
+
+
+@dataclass
+class OrderStatus:
+    """
+    What the venue currently believes about one submitted order.
+
+    `status` is the venue's own string, normalised to upper case. Callers should
+    branch on the `is_*` helpers rather than matching venue vocabulary, so a new
+    adapter can report "accepted" or "PreSubmitted" without breaking anything.
+    """
+    order_id: str
+    status: str = ""
+    filled_qty: float = 0.0
+    remaining_qty: float = 0.0
+    avg_fill_price: float = 0.0
+
+    #: Venue strings that mean "this order is done and will not fill further".
+    _DEAD = frozenset({
+        "CANCELLED", "CANCELED", "APICANCELLED", "INACTIVE",
+        "EXPIRED", "REJECTED", "VALIDATIONERROR",
+    })
+
+    @property
+    def is_filled(self) -> bool:
+        return self.filled_qty > 0 and self.remaining_qty <= 0
+
+    @property
+    def is_partial(self) -> bool:
+        return self.filled_qty > 0 and self.remaining_qty > 0
+
+    @property
+    def is_dead(self) -> bool:
+        """Terminal without a full fill — cancelled, rejected, or expired."""
+        return self.status.upper().replace(" ", "") in self._DEAD
+
+
+@dataclass
+class Fill:
+    """
+    A single execution report.
+
+    Used to price an exit the agent never submitted itself: when a bracket's
+    stop or target triggers, the position simply disappears and the only record
+    of what it went out at is the venue's execution log.
+    """
+    ticker: str
+    side: str            # "BUY" | "SELL"
+    qty: float
+    price: float
+    executed_at: datetime | None = None
+    order_id: str = ""
+    exec_id: str = ""
 
 
 @dataclass
@@ -179,3 +233,34 @@ class BrokerAdapter(ABC):
     @abstractmethod
     async def get_positions(self) -> list[Position]:
         """Open positions as reported by the venue (not the local trades collection)."""
+
+    @abstractmethod
+    async def get_order_statuses(self, account_id: str = "") -> dict[str, OrderStatus]:
+        """
+        Current state of every order the venue still knows about, keyed by
+        order ID.
+
+        Submission and fill are separate events, and nothing pushes the second
+        one to us — an order logged as PENDING stays PENDING forever unless
+        something asks. That gap left every trade record stuck at PENDING with
+        no fill price, so realised P&L was never computed and the daily-loss
+        guard summed an empty set.
+
+        Absence from the mapping is not "unfilled": venues age orders out of
+        their working set once complete. Callers must treat a missing ID as
+        unknown and fall back to position state, never as a cancellation.
+        """
+
+    @abstractmethod
+    async def get_fills(self, lookback_minutes: int = 1440) -> list[Fill]:
+        """
+        Executions from roughly the last `lookback_minutes`, newest last.
+
+        Needed to price exits the agent did not submit: a bracket leg firing
+        closes the position without any order of ours completing, so the fill
+        log is the only place the exit price exists.
+
+        Best-effort and bounded — IBKR only serves same-session executions over
+        the API, so a long-closed trade may never be priced this way. Callers
+        must tolerate an empty list.
+        """

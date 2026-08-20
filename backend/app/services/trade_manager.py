@@ -166,7 +166,7 @@ async def _open_position_exists(user_id: str, ticker: str) -> bool:
         "user_id": user_id,
         "ticker": ticker,
         "action": "BUY",
-        "status": {"$in": [TradeStatus.PENDING, TradeStatus.FILLED, TradeStatus.PARTIAL]},
+        "status": {"$in": list(TradeStatus.OPEN)},
         "closed_at": None,
     })
     return doc is not None
@@ -177,7 +177,7 @@ async def _count_open_positions(user_id: str) -> int:
     return await db[COLL_TRADES].count_documents({
         "user_id": user_id,
         "action": "BUY",
-        "status": {"$in": [TradeStatus.PENDING, TradeStatus.FILLED, TradeStatus.PARTIAL]},
+        "status": {"$in": list(TradeStatus.OPEN)},
         "closed_at": None,
     })
 
@@ -412,7 +412,7 @@ async def execute_exit(
         db = await get_db()
         open_trade = await db[COLL_TRADES].find_one({
             "user_id": user_id, "ticker": ticker, "action": "BUY",
-            "status": {"$in": [TradeStatus.PENDING, TradeStatus.FILLED, TradeStatus.PARTIAL]},
+            "status": {"$in": list(TradeStatus.OPEN)},
             "closed_at": None,
         })
         if not open_trade:
@@ -528,3 +528,198 @@ async def execute_exit(
 
     except Exception as exc:
         logger.error("execute_exit_failed", user_id=user_id, ticker=ticker, error=str(exc))
+
+
+# ── Reconciliation ────────────────────────────────────────────────────────────
+#
+# Submission and outcome are separate events, and nothing pushes the second one
+# to us. Orders were logged PENDING and left there: no fill price, no realised
+# P&L, and `_daily_realized_loss` summing a `pnl` field nothing ever wrote — so
+# the daily-loss kill switch could never fire. This closes that loop.
+
+#: Don't judge a position closed the instant its entry fills — the positions
+#: cache can lag a fill by a beat, and reading "no position" too early would
+#: close the trade at a fabricated exit.
+_CLOSURE_GRACE_MINUTES = 3
+
+
+async def reconcile_trades() -> dict:
+    """
+    Bring local trade records in line with what the broker actually did.
+
+    Phase 1 — fills:    PENDING/PARTIAL orders adopt the venue's status and
+                        average fill price.
+    Phase 2 — closures: a filled BUY with no remaining broker position means a
+                        bracket leg fired (or someone closed it by hand); record
+                        the exit and realised P&L.
+
+    Returns a counts summary for logging. Never raises.
+    """
+    summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0, "unpriced": 0}
+
+    if not ibkr.is_connected():
+        logger.debug("reconcile_skipped_broker_disconnected")
+        return summary
+
+    # A disconnected adapter answers get_positions() with [] — indistinguishable
+    # from "genuinely flat". Closing every open trade against that would invent
+    # exits for live positions, so demand a summary that positively reports a
+    # connection before trusting any absence below.
+    account = await ibkr.get_account_summary()
+    if not account.get("connected"):
+        logger.warning("reconcile_skipped_no_account_snapshot")
+        return summary
+
+    db = await get_db()
+    account_id = account.get("account_id") or get_settings().ibkr_account_id
+
+    open_trades = await db[COLL_TRADES].find({
+        "status": {"$in": list(TradeStatus.OPEN)},
+        "closed_at": None,
+    }).to_list(length=1000)
+
+    if not open_trades:
+        return summary
+
+    # ── Phase 1: adopt venue order status ────────────────────────────────────
+    try:
+        statuses = await ibkr.get_order_statuses(account_id)
+    except Exception as exc:
+        logger.warning("reconcile_order_statuses_failed", error=str(exc))
+        statuses = {}
+
+    for trade in open_trades:
+        order_id = trade.get("order_id")
+        if order_id is None:
+            continue
+        st = statuses.get(str(order_id))
+        if st is None:
+            # Not "unfilled" — venues age completed orders out of the working
+            # set. Phase 2 settles it from position state instead of guessing.
+            continue
+
+        update: dict = {}
+        if st.is_filled and trade.get("status") != TradeStatus.FILLED:
+            update = {
+                "status": TradeStatus.FILLED,
+                "filled_qty": st.filled_qty,
+                "filled_at": trade.get("filled_at") or utcnow(),
+            }
+            if st.avg_fill_price > 0:
+                update["entry_price"] = round(st.avg_fill_price, 4)
+            summary["filled"] += 1
+        elif st.is_partial and trade.get("status") != TradeStatus.PARTIAL:
+            update = {"status": TradeStatus.PARTIAL, "filled_qty": st.filled_qty}
+            if st.avg_fill_price > 0:
+                update["entry_price"] = round(st.avg_fill_price, 4)
+            summary["partial"] += 1
+        elif st.is_dead:
+            update = {
+                "status": TradeStatus.REJECTED if "REJECT" in st.status.upper()
+                else TradeStatus.CANCELLED,
+                "closed_at": utcnow(),
+                "reason": f"broker reported {st.status}",
+            }
+            summary["dead"] += 1
+
+        if update:
+            await _update_trade(str(trade["_id"]), update)
+            trade.update(update)
+            logger.info(
+                "trade_reconciled",
+                ticker=trade.get("ticker"), order_id=str(order_id),
+                status=update.get("status"), fill_price=update.get("entry_price"),
+            )
+
+    # ── Phase 2: detect closures and price them ──────────────────────────────
+    try:
+        positions = await ibkr.get_positions()
+    except Exception as exc:
+        logger.warning("reconcile_positions_failed", error=str(exc))
+        return summary
+
+    held = {
+        str(p.get("ticker", "")).upper(): float(p.get("qty") or 0)
+        for p in positions
+    }
+
+    try:
+        fills = await ibkr.get_fills(lookback_minutes=1440)
+    except Exception as exc:
+        logger.warning("reconcile_fills_failed", error=str(exc))
+        fills = []
+
+    now = utcnow()
+    for trade in open_trades:
+        if trade.get("status") != TradeStatus.FILLED or trade.get("action") != "BUY":
+            continue
+        if trade.get("closed_at") is not None:
+            continue
+
+        ticker = str(trade.get("ticker", "")).upper()
+        if held.get(ticker, 0) > 0:
+            continue  # still open — nothing to settle
+
+        filled_at = trade.get("filled_at") or trade.get("opened_at")
+        if isinstance(filled_at, datetime):
+            if filled_at.tzinfo is None:
+                filled_at = filled_at.replace(tzinfo=timezone.utc)
+            if (now - filled_at).total_seconds() < _CLOSURE_GRACE_MINUTES * 60:
+                continue
+
+        exit_price = _latest_sell_price(fills, ticker, filled_at)
+        entry_price = trade.get("entry_price") or trade.get("limit_price")
+        qty = float(trade.get("filled_qty") or trade.get("qty") or 0)
+
+        update = {
+            "status": TradeStatus.CLOSED,
+            "closed_at": now,
+            "exit_reason": "bracket_or_manual",
+        }
+        if exit_price and entry_price and qty:
+            update["exit_price"] = round(exit_price, 4)
+            update["pnl"] = round((exit_price - float(entry_price)) * qty, 2)
+            summary["closed"] += 1
+        else:
+            # Close it regardless so position counts and the duplicate-entry
+            # guard stay accurate, but leave pnl unset rather than inventing a
+            # number. IB only serves same-session executions, so a position that
+            # closed on an earlier day genuinely cannot be priced from here.
+            update["exit_reason"] = "closed_unpriced"
+            summary["unpriced"] += 1
+
+        await _update_trade(str(trade["_id"]), update)
+        logger.info(
+            "trade_closed",
+            ticker=ticker, entry=entry_price, exit=update.get("exit_price"),
+            pnl=update.get("pnl"), reason=update["exit_reason"],
+        )
+
+    if any(summary.values()):
+        logger.info("reconcile_trades_done", **summary)
+    return summary
+
+
+def _latest_sell_price(fills: list, ticker: str, after: datetime | None) -> float | None:
+    """
+    Volume-weighted price of the SELL fills that closed `ticker` after `after`.
+
+    A bracket exit can print in several pieces; averaging by size gives the
+    price the position actually left at, where taking the last fill alone would
+    report whichever fragment happened to settle last.
+    """
+    total_qty = 0.0
+    total_notional = 0.0
+    for f in fills:
+        if f.ticker != ticker or f.side != "SELL":
+            continue
+        executed = f.executed_at
+        if after is not None and executed is not None:
+            if executed.tzinfo is None:
+                executed = executed.replace(tzinfo=timezone.utc)
+            if executed < after:
+                continue
+        if f.qty > 0 and f.price > 0:
+            total_qty += f.qty
+            total_notional += f.qty * f.price
+    return (total_notional / total_qty) if total_qty > 0 else None

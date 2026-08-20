@@ -60,6 +60,23 @@ def _is_market_hours() -> bool:
     return market_open <= now <= market_close
 
 
+def _is_reconcile_window() -> bool:
+    """
+    Market hours plus a tail past the close.
+
+    The tail matters: an order working at 16:00 can still fill or cancel in the
+    after-hours flush, and a stop that triggers near the bell prints after it.
+    Stopping dead at the close would leave those trades looking open until the
+    next session.
+    """
+    now = datetime.now(tz=ET)
+    if now.weekday() >= 5:
+        return False
+    start = now.replace(hour=9,  minute=25, second=0, microsecond=0)
+    end   = now.replace(hour=16, minute=45, second=0, microsecond=0)
+    return start <= now <= end
+
+
 async def _get_all_tickers() -> list[str]:
     """Merge config DEFAULT_TICKERS with all users' watched tickers (union across all users)."""
     settings = get_settings()
@@ -84,6 +101,24 @@ async def _market_pipeline_job() -> None:
     logger.info("scheduled_pipeline_start", tickers=tickers)
     results = await run_pipeline_all(tickers)
     logger.info("scheduled_pipeline_done", results=results)
+
+
+async def _reconcile_trades_job() -> None:
+    """
+    Sync local trade records with the broker's view of orders and positions.
+
+    Runs far more often than the pipeline: a fill or a triggered stop is a fact
+    about money already committed, and until it is recorded the position count,
+    the duplicate-entry guard, and the daily-loss kill switch are all working
+    from stale data.
+    """
+    if not _is_reconcile_window():
+        return
+    try:
+        from app.services.trade_manager import reconcile_trades
+        await reconcile_trades()
+    except Exception as exc:
+        logger.error("reconcile_trades_job_failed", error=str(exc))
 
 
 async def _premarket_sweep_job() -> None:
@@ -258,6 +293,20 @@ def start_scheduler() -> None:
         max_instances=1,
         misfire_grace_time=120,
         next_run_time=first_run,
+    )
+
+    # 1b. Trade reconciliation — every 2 min inside the reconcile window.
+    #     Deliberately independent of the pipeline interval: fills need to be
+    #     observed promptly, and the pipeline is far too slow and too expensive
+    #     to run at this cadence.
+    scheduler.add_job(
+        _reconcile_trades_job,
+        trigger=IntervalTrigger(minutes=2),
+        id="reconcile_trades",
+        name="Broker trade reconciliation",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
     )
 
     # 2. Pre-market sweep — 08:00 ET Mon–Fri

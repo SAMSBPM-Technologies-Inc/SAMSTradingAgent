@@ -26,11 +26,14 @@ CIRO: automated API order entry is permitted for US-listed securities only.
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 from app.services.brokers.base import (
     AccountSummary,
     BrokerAdapter,
     BrokerConfig,
+    Fill,
+    OrderStatus,
     Position,
 )
 from app.utils.logger import get_logger
@@ -585,4 +588,108 @@ class IbkrAdapter(BrokerAdapter):
             ]
         except Exception as exc:
             logger.error("ibkr_positions_failed", error=str(exc))
+            return []
+
+    # ── Reconciliation ───────────────────────────────────────────────────────
+
+    async def get_order_statuses(self, account_id: str = "") -> dict[str, OrderStatus]:
+        """
+        Merge working and completed orders into one order_id → status mapping.
+
+        Both requests are needed. `reqAllOpenOrdersAsync` covers orders still
+        working — including those from a previous client session, which plain
+        `openTrades()` hides. `reqCompletedOrdersAsync` covers the ones that
+        already filled, which is precisely the transition being reconciled and
+        which drops out of the open set the moment it happens.
+        """
+        if not self.is_connected():
+            return {}
+
+        statuses: dict[str, OrderStatus] = {}
+        try:
+            await self._refresh_open_orders()
+        except Exception as exc:
+            logger.warning("ibkr_order_status_open_refresh_failed", error=str(exc))
+
+        try:
+            # apiOnly=False so manually-placed and bracket child orders are
+            # included; a stop leg firing is exactly what we need to observe.
+            await self._ib.reqCompletedOrdersAsync(apiOnly=False)
+        except Exception as exc:
+            logger.warning("ibkr_completed_orders_failed", error=str(exc))
+
+        try:
+            for trade in self._ib.trades():
+                order = getattr(trade, "order", None)
+                st = getattr(trade, "orderStatus", None)
+                if order is None or st is None:
+                    continue
+
+                # An order carrying another account's ID is not ours to report.
+                # Blank means "unspecified", which IB uses on single-account
+                # logins — treat that as a match rather than dropping it.
+                if account_id and getattr(order, "account", "") not in ("", account_id):
+                    continue
+
+                oid = str(getattr(order, "orderId", "") or "")
+                if not oid:
+                    continue
+
+                statuses[oid] = OrderStatus(
+                    order_id=oid,
+                    status=str(getattr(st, "status", "") or ""),
+                    filled_qty=float(getattr(st, "filled", 0) or 0),
+                    remaining_qty=float(getattr(st, "remaining", 0) or 0),
+                    avg_fill_price=float(getattr(st, "avgFillPrice", 0) or 0),
+                )
+        except Exception as exc:
+            logger.error("ibkr_order_statuses_failed", error=str(exc))
+            return {}
+
+        return statuses
+
+    async def get_fills(self, lookback_minutes: int = 1440) -> list[Fill]:
+        """
+        Execution reports from the current session.
+
+        IB caps `reqExecutions` at roughly the current trading day and ignores a
+        filter time further back than that, so `lookback_minutes` narrows the
+        window but cannot widen it beyond what IB retains. Anything older needs
+        a Flex report, which is out of scope here — callers must cope with a
+        trade that can never be priced from this source.
+        """
+        if not self.is_connected():
+            return []
+        try:
+            from ib_async import ExecutionFilter
+
+            since = datetime.now(tz=timezone.utc) - timedelta(minutes=lookback_minutes)
+            # IB expects local-ish "yyyymmdd HH:MM:SS"; it treats a naive value
+            # as the gateway's timezone, which is UTC in this container.
+            exec_filter = ExecutionFilter(time=since.strftime("%Y%m%d %H:%M:%S"))
+
+            fills = await self._ib.reqExecutionsAsync(exec_filter)
+            out: list[Fill] = []
+            for f in fills:
+                ex = getattr(f, "execution", None)
+                contract = getattr(f, "contract", None)
+                if ex is None or contract is None:
+                    continue
+                # IB reports side as "BOT"/"SLD"; normalise to the vocabulary
+                # the rest of the app uses.
+                raw_side = str(getattr(ex, "side", "") or "").upper()
+                side = "BUY" if raw_side.startswith("B") else "SELL"
+                out.append(Fill(
+                    ticker=str(getattr(contract, "symbol", "") or "").upper(),
+                    side=side,
+                    qty=float(getattr(ex, "shares", 0) or 0),
+                    price=float(getattr(ex, "price", 0) or 0),
+                    executed_at=getattr(ex, "time", None),
+                    order_id=str(getattr(ex, "orderId", "") or ""),
+                    exec_id=str(getattr(ex, "execId", "") or ""),
+                ))
+            out.sort(key=lambda x: (x.executed_at is None, x.executed_at))
+            return out
+        except Exception as exc:
+            logger.error("ibkr_get_fills_failed", error=str(exc))
             return []
