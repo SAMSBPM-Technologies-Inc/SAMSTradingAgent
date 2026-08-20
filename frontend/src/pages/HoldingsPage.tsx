@@ -40,20 +40,49 @@ function SignedMoney({ value }: { value: number | null | undefined }) {
   )
 }
 
+/**
+ * Last fetch, held at module scope so it survives this component unmounting as
+ * the user navigates between pages — otherwise every trip to another tab threw
+ * the result away and forced a fresh broker round-trip on return.
+ *
+ * Deliberately in memory rather than sessionStorage: a browser refresh should
+ * clear it. Holdings move, and presenting a stale snapshot as current after a
+ * reload is worse than showing the empty state and letting the user ask again.
+ */
+let cachedData: HoldingsResponse | null = null
+let cachedAt: Date | null = null
+
+/** "just now" / "3 min ago" — matters more once a snapshot can be an hour old. */
+function relativeAge(from: Date): string {
+  const mins = Math.floor((Date.now() - from.getTime()) / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins === 1) return '1 min ago'
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.floor(mins / 60)
+  return hrs === 1 ? '1 hr ago' : `${hrs} hrs ago`
+}
+
 export default function HoldingsPage() {
-  const [data, setData] = useState<HoldingsResponse | null>(null)
+  // Seed from the module cache so returning to this page shows what was already
+  // fetched instead of resetting to the empty state.
+  const [data, setData] = useState<HoldingsResponse | null>(cachedData)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [fetchedAt, setFetchedAt] = useState<Date | null>(null)
+  const [fetchedAt, setFetchedAt] = useState<Date | null>(cachedAt)
 
   const load = async () => {
     setLoading(true)
     setError(null)
     try {
       const { data } = await tradingApi.getHoldings()
+      const now = new Date()
       setData(data)
-      setFetchedAt(new Date())
+      setFetchedAt(now)
+      cachedData = data
+      cachedAt = now
     } catch {
+      // Keep whatever was already on screen — a failed refresh should not wipe
+      // a snapshot the user still finds useful.
       setError('Could not reach the broker. Check the connection and try again.')
     } finally {
       setLoading(false)
@@ -77,7 +106,7 @@ export default function HoldingsPage() {
           </h1>
           <p className="text-sm text-[var(--color-fg-muted)] mt-0.5">
             {fetchedAt
-              ? `As of ${fetchedAt.toLocaleTimeString()}`
+              ? `As of ${fetchedAt.toLocaleTimeString()} · ${relativeAge(fetchedAt)}`
               : 'Live positions, fetched on demand'}
           </p>
         </div>
