@@ -116,6 +116,44 @@ async def _get_user_settings(user_id) -> AutoTradeSettings | None:
     return AutoTradeSettings(**raw)
 
 
+async def _trade_email_recipient(user_id) -> str:
+    """
+    Address for trade notifications: the alert_settings override if set,
+    otherwise the account email. Returns "" when the user has opted out.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    db = await get_db()
+    candidates = [user_id]
+    if isinstance(user_id, str):
+        try:
+            candidates.append(ObjectId(user_id))
+        except (InvalidId, TypeError):
+            pass
+    user = await db[COLL_USERS].find_one(
+        {"_id": {"$in": candidates}}, {"email": 1, "alert_settings": 1}
+    )
+    if not user:
+        return ""
+    prefs = user.get("alert_settings") or {}
+    if not prefs.get("notify_on_trade", True):
+        return ""
+    return (prefs.get("trade_email") or user.get("email") or "").strip()
+
+
+async def _notify_trade(user_id, **kwargs) -> None:
+    """Email the user that an order went out. Never raises."""
+    try:
+        to = await _trade_email_recipient(user_id)
+        if not to:
+            return
+        from app.services.notifier import send_trade_email
+        await send_trade_email(to, **kwargs)
+    except Exception as exc:
+        logger.warning("trade_email_failed", user_id=str(user_id), error=str(exc))
+
+
 async def _get_user_account_id(user_id: str) -> str:
     """Return the server IBKR account ID from config (same for all users)."""
     return get_settings().ibkr_account_id
@@ -338,6 +376,14 @@ async def execute_entry(
                 stop_loss=stop_price, take_profit=target_price,
                 paper=not get_settings().is_live_trading,
             )
+            await _notify_trade(
+                user_id, action="BUY", ticker=ticker, qty=qty,
+                limit_price=limit_price, order_id=order_id,
+                stop_loss=stop_price, take_profit=target_price,
+                is_paper=not get_settings().is_live_trading,
+                account_id=account_id, trigger="BUY signal",
+                signal_score=signal_score,
+            )
         else:
             await _update_trade(trade_id, {
                 "status": TradeStatus.REJECTED,
@@ -471,7 +517,13 @@ async def execute_exit(
         logger.info(
             "trade_exit_placed", user_id=user_id, ticker=ticker,
             qty=qty, limit_price=limit_price, trigger=trigger,
-            paper=settings.paper_trading,
+            paper=not get_settings().is_live_trading,
+        )
+        await _notify_trade(
+            user_id, action="SELL", ticker=ticker, qty=qty,
+            limit_price=limit_price, order_id=order_id,
+            is_paper=not get_settings().is_live_trading,
+            account_id=account_id, trigger=trigger,
         )
 
     except Exception as exc:

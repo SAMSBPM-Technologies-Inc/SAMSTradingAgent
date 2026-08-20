@@ -22,6 +22,12 @@ class AlertSettings(BaseModel):
     notify_on_signal_flip: bool = True
     notify_on_high_conviction: bool = True
     daily_digest: bool = False
+    # Emailed on every order the agent submits. Defaults on: the whole point of
+    # the channel is that automated trades are otherwise invisible until you
+    # happen to open the dashboard.
+    notify_on_trade: bool = True
+    # Optional override; blank sends to the account email.
+    trade_email: Optional[str] = None
 
 
 @router.get("/settings", response_model=AlertSettings)
@@ -34,6 +40,8 @@ async def get_alert_settings(current_user: dict = Depends(get_current_user)) -> 
         notify_on_signal_flip=prefs.get("notify_on_signal_flip", True),
         notify_on_high_conviction=prefs.get("notify_on_high_conviction", True),
         daily_digest=prefs.get("daily_digest", False),
+        notify_on_trade=prefs.get("notify_on_trade", True),
+        trade_email=prefs.get("trade_email"),
     )
 
 
@@ -50,6 +58,8 @@ async def update_alert_settings(
         "notify_on_signal_flip": body.notify_on_signal_flip,
         "notify_on_high_conviction": body.notify_on_high_conviction,
         "daily_digest": body.daily_digest,
+        "notify_on_trade": body.notify_on_trade,
+        "trade_email": (body.trade_email or "").strip() or None,
     }
     await db[COLL_USERS].update_one(
         {"_id": current_user["_id"]},

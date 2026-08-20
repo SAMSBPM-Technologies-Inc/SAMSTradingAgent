@@ -91,6 +91,7 @@ export const tradingApi = {
     api.put<import('../types').AutoTradeSettingsResponse>('/trading/settings', data),
   getAccount: () => api.get<import('../types').AccountSummaryResponse>('/trading/account'),
   getPositions: () => api.get<import('../types').TradeRecord[]>('/trading/positions'),
+  getHoldings: () => api.get<import('../types').HoldingsResponse>('/trading/holdings'),
   getOrders: () => api.get<import('../types').TradeRecord[]>('/trading/orders'),
   closePosition: (ticker: string) => api.post(`/trading/close/${ticker}`),
 }

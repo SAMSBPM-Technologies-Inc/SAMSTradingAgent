@@ -102,6 +102,54 @@ async def get_account(current_user: dict = Depends(get_current_user)) -> Account
     return AccountSummaryResponse(**summary)
 
 
+@router.get("/holdings", summary="Live holdings straight from the broker")
+async def get_holdings(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Current holdings as the broker reports them, fetched on demand.
+
+    Distinct from /trading/positions, which reflects this app's own trade
+    records. This endpoint is the broker's truth: it includes anything bought
+    outside the agent and excludes anything the agent believes it holds but
+    does not. Deliberately not polled — it costs a broker round-trip.
+    """
+    from app.config import get_settings
+
+    if not ibkr.is_connected():
+        return {"connected": False, "account_id": "", "holdings": [], "total_market_value": 0.0}
+
+    account_id = get_settings().ibkr_account_id
+    summary = await ibkr.get_account_summary(account_id=account_id)
+    positions = await ibkr.get_positions()
+
+    holdings = []
+    total = 0.0
+    for p in positions:
+        qty = float(p.get("qty") or 0)
+        if not qty:
+            continue
+        mv = p.get("market_value")
+        mv = float(mv) if mv is not None else None
+        if mv is not None:
+            total += mv
+        holdings.append({
+            "ticker": p.get("ticker", ""),
+            "qty": qty,
+            "avg_cost": float(p.get("avg_cost") or 0.0),
+            "market_value": mv,
+            "unrealized_pnl": (
+                float(p["unrealized_pnl"]) if p.get("unrealized_pnl") is not None else None
+            ),
+        })
+
+    holdings.sort(key=lambda h: (h["market_value"] or 0.0), reverse=True)
+    return {
+        "connected": True,
+        "account_id": summary.get("account_id", "") or account_id,
+        "holdings": holdings,
+        "total_market_value": round(total, 2),
+    }
+
+
 @router.get("/positions", response_model=list[TradeResponse], summary="Open positions tracked locally")
 async def get_positions(current_user: dict = Depends(get_current_user)) -> list[TradeResponse]:
     """Returns trades that are open (BUY without a closed_at)."""

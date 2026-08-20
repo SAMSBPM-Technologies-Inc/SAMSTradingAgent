@@ -90,6 +90,26 @@ class Settings(BaseSettings):
     def is_live_trading(self) -> bool:
         return self.trading_mode.strip().lower() == "live"
 
+    # ── Email (trade execution notifications) ─────────────────────────────────
+    # Plain SMTP so any provider works (Google Workspace, Fastmail, SES, Resend's
+    # SMTP bridge) without adding a dependency or tying the app to one vendor.
+    # Leave smtp_host empty to disable email entirely — every other channel and
+    # the trading path itself are unaffected.
+    smtp_host: str = Field(default="", description="SMTP server hostname; empty disables email")
+    smtp_port: int = Field(default=587, description="587 = STARTTLS, 465 = implicit TLS")
+    smtp_username: str = Field(default="")
+    smtp_password: str = Field(default="")
+    smtp_from: str = Field(default="", description="From address; defaults to smtp_username")
+    smtp_use_tls: bool = Field(default=True, description="STARTTLS on 587; ignored when port is 465")
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.smtp_host and self.smtp_username and self.smtp_password)
+
+    @property
+    def email_from(self) -> str:
+        return self.smtp_from or self.smtp_username
+
     # ── Funding limits ────────────────────────────────────────────────────────
     # Position size is a fraction of EQUITY, which says nothing about whether the
     # cash to pay for it exists. Sizing several positions off the same equity

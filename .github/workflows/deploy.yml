@@ -62,11 +62,18 @@ jobs:
           # with ibkr_unknown_account. Leave unset when the paper login manages
           # exactly one account; the adapter resolves it automatically then.
           IBKR_ACCOUNT_ID_PAPER: ${{ vars.IBKR_ACCOUNT_ID_PAPER }}
+          # SMTP for trade-execution emails. Leaving SMTP_HOST unset disables
+          # email entirely; trading is unaffected either way.
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT || '587' }}
+          SMTP_FROM: ${{ vars.SMTP_FROM }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
         with:
           host: ${{ secrets.HETZNER_HOST }}
           username: ${{ secrets.HETZNER_USER }}
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
           command_timeout: 30m
           script: |
             set -e
@@ -142,6 +149,11 @@ jobs:
             inject_secret TRADING_MODE "$TRADING_MODE"
             inject_secret AUTO_TRADE_ENABLED "$AUTO_TRADE_ENABLED"
             inject_secret IBKR_ACCOUNT_ID   "$IB_ACCT"
+            inject_secret SMTP_HOST     "$SMTP_HOST"
+            inject_secret SMTP_PORT     "$SMTP_PORT"
+            inject_secret SMTP_FROM     "$SMTP_FROM"
+            inject_secret SMTP_USERNAME "$SMTP_USERNAME"
+            inject_secret SMTP_PASSWORD "$SMTP_PASSWORD"
 
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             inject_secret           CORS_ORIGINS                   https://sta.samsbpm.com,https://samtrades.samsbpm.com

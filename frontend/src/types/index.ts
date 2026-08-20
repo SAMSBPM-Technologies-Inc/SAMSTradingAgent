@@ -161,6 +161,21 @@ export interface AccountSummaryResponse {
   gross_position_value: number
 }
 
+export interface Holding {
+  ticker: string
+  qty: number
+  avg_cost: number
+  market_value: number | null
+  unrealized_pnl: number | null
+}
+
+export interface HoldingsResponse {
+  connected: boolean
+  account_id: string
+  holdings: Holding[]
+  total_market_value: number
+}
+
 export interface TradeRecord {
   id: string
   user_id: string
