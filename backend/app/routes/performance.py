@@ -7,9 +7,10 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends
 
-from app.db import COLL_SIGNAL_HISTORY, COLL_WATCHED, get_db
+from app.db import COLL_SIGNAL_HISTORY, COLL_TRADES, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import PerformanceResponse, SignalPerformanceRecord
+from app.models.trade import TradeStatus
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["performance"])
@@ -91,6 +92,93 @@ async def get_performance(current_user: dict = Depends(get_current_user)) -> Per
         overall_avg_return_20d=round(overall_avg, 4) if overall_avg is not None else None,
         by_signal=by_signal, by_ticker=by_ticker,
     )
+
+
+@router.get("/performance/trades", summary="Realised trading performance from executed orders")
+async def get_trade_performance(current_user: dict = Depends(get_current_user)) -> dict[str, Any]:
+    """
+    What the executed trades actually did, as distinct from whether the signals
+    were right.
+
+    Signal accuracy takes ~28 days to settle and only scores BUY and SELL, so
+    with the current signal mix it will rest on a handful of records for weeks.
+    Realised P&L is available the moment a position closes, and it is the
+    measure that reflects money.
+
+    Manual and signal-driven trades are reported separately and never pooled: a
+    hand-seeded position says nothing about whether the signal engine works, and
+    averaging the two produces a number that describes neither.
+    """
+    user_id = str(current_user["_id"])
+    db = await get_db()
+
+    trades = await db[COLL_TRADES].find({"user_id": user_id}).to_list(length=5000)
+
+    def summarise(rows: list[dict]) -> dict:
+        closed = [t for t in rows if t.get("status") == TradeStatus.CLOSED]
+        priced = [t for t in closed if t.get("pnl") is not None]
+        wins = [t for t in priced if t["pnl"] > 0]
+        losses = [t for t in priced if t["pnl"] < 0]
+        open_rows = [t for t in rows if t.get("status") in TradeStatus.OPEN]
+        total = sum(t["pnl"] for t in priced)
+        return {
+            "closed": len(closed),
+            # Closed but unpriceable — the exit exists, the execution behind it
+            # does not. Reported separately so the win rate is never computed
+            # over a denominator that quietly excludes them.
+            "closed_unpriced": len(closed) - len(priced),
+            "open": len(open_rows),
+            "unreconciled": sum(1 for t in rows if t.get("status") == TradeStatus.UNRECONCILED),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(len(wins) / len(priced), 4) if priced else None,
+            "realised_pnl": round(total, 2) if priced else None,
+            "avg_win": round(sum(t["pnl"] for t in wins) / len(wins), 2) if wins else None,
+            "avg_loss": round(sum(t["pnl"] for t in losses) / len(losses), 2) if losses else None,
+            "best": round(max((t["pnl"] for t in priced), default=0), 2) if priced else None,
+            "worst": round(min((t["pnl"] for t in priced), default=0), 2) if priced else None,
+        }
+
+    # signal_type marks how the order came to exist. Anything not produced by a
+    # signal is excluded from the engine's record.
+    _SIGNAL_TYPES = {"BUY", "SELL", "EXIT_ALERT"}
+    signal_driven = [t for t in trades if t.get("signal_type") in _SIGNAL_TYPES]
+    manual = [t for t in trades if t.get("signal_type") not in _SIGNAL_TYPES]
+
+    recent = sorted(
+        [t for t in trades if t.get("status") in (TradeStatus.CLOSED, TradeStatus.UNRECONCILED)],
+        key=lambda t: t.get("closed_at") or t.get("opened_at"),
+        reverse=True,
+    )[:50]
+
+    return {
+        "signal_driven": summarise(signal_driven),
+        "manual": summarise(manual),
+        "all": summarise(trades),
+        "recent_closed": [
+            {
+                "ticker": t.get("ticker"),
+                "action": t.get("action"),
+                "qty": t.get("filled_qty") or t.get("qty"),
+                "entry_price": t.get("entry_price"),
+                "exit_price": t.get("exit_price"),
+                "pnl": t.get("pnl"),
+                "pnl_pct": (
+                    round((t["exit_price"] - t["entry_price"]) / t["entry_price"], 4)
+                    if t.get("exit_price") and t.get("entry_price") else None
+                ),
+                "stop_loss": t.get("stop_loss"),
+                "take_profit": t.get("take_profit"),
+                "exit_reason": t.get("exit_reason"),
+                "status": t.get("status"),
+                "signal_type": t.get("signal_type"),
+                "is_paper": t.get("is_paper", True),
+                "opened_at": t.get("opened_at"),
+                "closed_at": t.get("closed_at"),
+            }
+            for t in recent
+        ],
+    }
 
 
 @router.get("/performance/signals", summary="Recent individual signal history for your watchlist")

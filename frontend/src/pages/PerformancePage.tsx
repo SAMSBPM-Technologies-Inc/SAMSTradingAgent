@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, BarChart2, Clock, TrendingUp } from 'lucide-react'
 import { performanceApi } from '../lib/api'
-import type { PerformanceResponse, Signal, SignalRecord } from '../types'
+import type {
+  ClosedTrade,
+  PerformanceResponse,
+  Signal,
+  SignalRecord,
+  TradePerformanceResponse,
+  TradeStats,
+} from '../types'
 import Layout from '../components/Layout'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
@@ -71,6 +78,166 @@ function StatCard({
         {value}
       </span>
       {sub && <span className="text-[11px] text-[#83786a]">{sub}</span>}
+    </div>
+  )
+}
+
+// ── Realised trading performance ──────────────────────────────────────────────
+//
+// Separate from signal accuracy on purpose. That measures whether a call was
+// right 20 days later and only scores BUY/SELL; this measures money, and is
+// available the moment a position closes.
+
+const usd = new Intl.NumberFormat('en-US', {
+  style: 'currency',
+  currency: 'USD',
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+})
+
+/** Broker-statement convention: gains green, losses red in parentheses. */
+function Pnl({ value, className = '' }: { value: number | null | undefined; className?: string }) {
+  if (value == null) return <span className="text-[#83786a]">—</span>
+  const loss = value < -0.005
+  const gain = value > 0.005
+  const tone = loss ? 'text-red-500' : gain ? 'text-green-600' : 'text-[#14110c]'
+  return (
+    <span className={`tabular-nums ${tone} ${className}`}>
+      {loss ? `(${usd.format(Math.abs(value))})` : usd.format(value)}
+    </span>
+  )
+}
+
+function TradeStatsBlock({ title, note, stats }: {
+  title: string
+  note: string
+  stats: TradeStats
+}) {
+  const nothing = stats.closed === 0 && stats.open === 0 && stats.unreconciled === 0
+  return (
+    <div className="border border-[#e7e2d8] p-4" style={{ borderRadius: '10px' }}>
+      <div className="flex items-baseline justify-between gap-3 mb-1">
+        <span className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a]">
+          {title}
+        </span>
+        {stats.realised_pnl != null && (
+          <Pnl value={stats.realised_pnl} className="text-[18px] font-bold" />
+        )}
+      </div>
+      <p className="text-[11px] text-[#83786a] mb-3">{note}</p>
+
+      {nothing ? (
+        <p className="text-sm text-[#83786a]">No trades yet.</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+          <span className="text-[#83786a]">Closed</span>
+          <span className="tabular-nums text-right text-[#14110c]">{stats.closed}</span>
+          <span className="text-[#83786a]">Open</span>
+          <span className="tabular-nums text-right text-[#14110c]">{stats.open}</span>
+          <span className="text-[#83786a]">Win rate</span>
+          <span className="tabular-nums text-right text-[#14110c]">
+            {stats.win_rate == null
+              ? '—'
+              : `${Math.round(stats.win_rate * 100)}% (${stats.wins}/${stats.wins + stats.losses})`}
+          </span>
+          <span className="text-[#83786a]">Avg win</span>
+          <span className="text-right"><Pnl value={stats.avg_win} /></span>
+          <span className="text-[#83786a]">Avg loss</span>
+          <span className="text-right"><Pnl value={stats.avg_loss} /></span>
+          {stats.closed_unpriced > 0 && (
+            <>
+              <span className="text-[#83786a]">Unpriced</span>
+              <span className="tabular-nums text-right text-[#83786a]">
+                {stats.closed_unpriced}
+              </span>
+            </>
+          )}
+          {stats.unreconciled > 0 && (
+            <>
+              <span className="text-[#83786a]">Unreconciled</span>
+              <span className="tabular-nums text-right text-[#83786a]">
+                {stats.unreconciled}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
+  if (trades.length === 0) {
+    return (
+      <div className="card p-8 text-center text-sm text-[#83786a]">
+        No closed trades yet. Positions appear here once they exit.
+      </div>
+    )
+  }
+  return (
+    <div className="card overflow-hidden p-0">
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-[46rem]">
+          <thead>
+            <tr className="border-b border-[#e7e2d8] text-[11px] uppercase tracking-widest text-[#83786a]">
+              <th className="text-left font-semibold px-4 py-2.5">Ticker</th>
+              <th className="text-right font-semibold px-3 py-2.5">Qty</th>
+              <th className="text-right font-semibold px-3 py-2.5">Entry</th>
+              <th className="text-right font-semibold px-3 py-2.5">Exit</th>
+              <th className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
+              <th className="text-right font-semibold px-3 py-2.5">%</th>
+              <th className="text-left font-semibold px-4 py-2.5">Exit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map((t, i) => (
+              <tr
+                key={`${t.ticker}-${t.closed_at ?? i}`}
+                className="border-b border-[#e7e2d8] last:border-b-0"
+              >
+                <td className="px-4 py-2.5">
+                  <span className="font-semibold text-[#14110c]">{t.ticker}</span>
+                  {t.signal_type && t.signal_type !== 'BUY' && t.signal_type !== 'SELL' && (
+                    <span className="ml-2 text-[10px] uppercase tracking-wider text-[#83786a]">
+                      manual
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[#14110c]">
+                  {t.qty?.toLocaleString() ?? '—'}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[#83786a]">
+                  {fmtPrice(t.entry_price)}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[#83786a]">
+                  {fmtPrice(t.exit_price)}
+                </td>
+                <td className="px-3 py-2.5 text-right"><Pnl value={t.pnl} /></td>
+                <td className="px-3 py-2.5 text-right tabular-nums">
+                  {t.pnl_pct == null ? (
+                    <span className="text-[#83786a]">—</span>
+                  ) : (
+                    <span className={t.pnl_pct < 0 ? 'text-red-500' : 'text-green-600'}>
+                      {(t.pnl_pct * 100).toFixed(2)}%
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-[#83786a] text-[13px]">
+                  {t.status === 'UNRECONCILED'
+                    ? 'no broker record'
+                    : t.exit_reason === 'closed_unpriced'
+                      ? 'closed, unpriced'
+                      : t.stop_loss && t.exit_price && t.exit_price <= t.stop_loss
+                        ? 'stop hit'
+                        : t.take_profit && t.exit_price && t.exit_price >= t.take_profit
+                          ? 'target hit'
+                          : 'closed'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -323,14 +490,22 @@ function EmptyState() {
 export default function PerformancePage() {
   const [data, setData] = useState<PerformanceResponse | null>(null)
   const [signalHistory, setSignalHistory] = useState<SignalRecord[]>([])
+  const [trades, setTrades] = useState<TradePerformanceResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([performanceApi.get(), performanceApi.signals()])
-      .then(([perfRes, sigRes]) => {
+    Promise.all([
+      performanceApi.get(),
+      performanceApi.signals(),
+      // Trade stats are additive, not required: a failure here should not
+      // blank the signal dashboard that already works.
+      performanceApi.trades().catch(() => null),
+    ])
+      .then(([perfRes, sigRes, tradeRes]) => {
         setData(perfRes.data as PerformanceResponse)
         setSignalHistory(sigRes.data)
+        if (tradeRes) setTrades(tradeRes.data)
       })
       .catch((err: unknown) => {
         const msg = (err as { response?: { data?: { detail?: string } } })
@@ -382,7 +557,35 @@ export default function PerformancePage() {
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}
         </div>
-      ) : !data || data.total_signals === 0 ? (
+      ) : (
+        <>
+        {trades && (trades.all.closed > 0 || trades.all.open > 0) && (
+          <div className="flex flex-col gap-3 mb-6">
+            <div>
+              <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-1">
+                Realised trading performance
+              </h2>
+              <p className="text-[12px] text-[#83786a]">
+                What the executed orders did. Signal accuracy below measures
+                whether a call was right after 20 days; this measures money.
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <TradeStatsBlock
+                title="Signal-driven"
+                note="Orders the agent placed from its own signals — the engine's record."
+                stats={trades.signal_driven}
+              />
+              <TradeStatsBlock
+                title="Manual"
+                note="Hand-placed or seeded positions. Not evidence about the signals."
+                stats={trades.manual}
+              />
+            </div>
+            <ClosedTradesTable trades={trades.recent_closed} />
+          </div>
+        )}
+        {!data || data.total_signals === 0 ? (
         <EmptyState />
       ) : (
         <div className="flex flex-col gap-6">
@@ -456,6 +659,8 @@ export default function PerformancePage() {
             </div>
           )}
         </div>
+      )}
+        </>
       )}
     </Layout>
   )

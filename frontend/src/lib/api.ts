@@ -73,6 +73,8 @@ export const analyzeApi = {
 export const performanceApi = {
   get: () => api.get('/performance'),
   signals: () => api.get<import('../types').SignalRecord[]>('/performance/signals'),
+  trades: () =>
+    api.get<import('../types').TradePerformanceResponse>('/performance/trades'),
 }
 
 export const radarApi = {

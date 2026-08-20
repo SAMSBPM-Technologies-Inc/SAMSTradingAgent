@@ -222,3 +222,53 @@ export interface DipBuyScanResponse {
   unanalyzed_tickers: string[]
   scanned: number
 }
+
+/**
+ * Realised trading performance — what the executed orders actually did.
+ *
+ * Kept separate from signal accuracy: that measures whether a call was right
+ * 20 days later, this measures money. Manual and signal-driven trades are
+ * never pooled, because a hand-placed position says nothing about whether the
+ * signal engine works.
+ */
+export interface TradeStats {
+  closed: number
+  /** Closed, but the execution behind the exit is gone — excluded from win_rate. */
+  closed_unpriced: number
+  open: number
+  /** Terminal but unknowable: no position, no order, no execution. Not an outcome. */
+  unreconciled: number
+  wins: number
+  losses: number
+  win_rate: number | null
+  realised_pnl: number | null
+  avg_win: number | null
+  avg_loss: number | null
+  best: number | null
+  worst: number | null
+}
+
+export interface ClosedTrade {
+  ticker: string
+  action: string
+  qty: number | null
+  entry_price: number | null
+  exit_price: number | null
+  pnl: number | null
+  pnl_pct: number | null
+  stop_loss: number | null
+  take_profit: number | null
+  exit_reason: string | null
+  status: string
+  signal_type: string | null
+  is_paper: boolean
+  opened_at: string | null
+  closed_at: string | null
+}
+
+export interface TradePerformanceResponse {
+  signal_driven: TradeStats
+  manual: TradeStats
+  all: TradeStats
+  recent_closed: ClosedTrade[]
+}
