@@ -173,12 +173,25 @@ jobs:
 
             set_if_missing_or_empty MONGODB_DB_NAME                trading_agent
             inject_secret           CORS_ORIGINS                   https://sta.samsbpm.com,https://samtrades.samsbpm.com
-            set_if_missing_or_empty ANALYST_MODEL                  claude-opus-4-6
+            # Injected, not set_if_missing: the first deploy wrote
+            # claude-opus-4-6 here, and set_if_missing_or_empty only fills
+            # blanks — so the model could never be changed by a later deploy,
+            # the same trap described below for AUTO_TRADE_ENABLED. The whole
+            # point of moving to Sonnet 5 was the output rate, which is where
+            # this workload's cost lives.
+            inject_secret           ANALYST_MODEL                  claude-sonnet-5
+            inject_secret           ANALYST_EFFORT                 medium
             set_if_missing_or_empty ANALYST_EXTENDED_THINKING      true
             set_if_missing_or_empty ANALYST_CACHE_MINUTES          60
             set_if_missing_or_empty ANALYST_PRICE_CHANGE_PCT       0.03
             set_if_missing_or_empty ANALYST_SCORE_CHANGE_THRESHOLD 0.12
             set_if_missing_or_empty ANALYST_VIX_SPIKE_THRESHOLD    30.0
+            # Gate: only call Claude within this margin of a BUY/SELL threshold,
+            # or when a position is open. Injected so the values stay tunable
+            # from here rather than freezing on whatever the first deploy wrote.
+            inject_secret           ANALYST_GATE_ENABLED           true
+            inject_secret           ANALYST_GATE_MARGIN            0.08
+            inject_secret           ANALYST_ALWAYS_ANALYSE_HOLDINGS true
             # AUTO_TRADE_ENABLED / IBKR_PORT are injected above (not set_if_missing).
             # set_if_missing_or_empty only fills blanks, so the old `false` written
             # on the first deploy could never be flipped on by a later deploy.
