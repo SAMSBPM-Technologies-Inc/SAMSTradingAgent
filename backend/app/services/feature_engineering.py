@@ -578,18 +578,27 @@ def _macro_score(
 
     components: list[tuple[float, float]] = []
 
+    # Each band below is wider than it was, because all three used to saturate
+    # in ordinary conditions: VIX 14, a +0.8 curve and 2.3% CPI each hit their
+    # ceiling, so a perfectly unremarkable bull market scored a flat 1.000 for
+    # every ticker and the component stopped distinguishing "fine" from
+    # "exceptional". Gradation in the normal range is where a macro score earns
+    # its weight; the extremes were never the hard part.
+
     # 1. VIX — low fear is bullish
     vix = macro.get("vix")
     if vix is not None:
-        # VIX ≤ 15 = calm (1.0), VIX ≥ 35 = fearful (0.0)
-        vix_score = clamp(1.0 - (float(vix) - 15) / 20.0)
+        # VIX ≤ 10 = exceptionally calm (1.0), VIX ≥ 38 = fearful (0.0).
+        # 14 now reads 0.86 rather than a saturated 1.0.
+        vix_score = clamp(1.0 - (float(vix) - 10) / 28.0)
         components.append((vix_score, 0.35))
 
     # 2. Yield curve spread (10Y − 2Y)
     spread = macro.get("yield_curve_spread")
     if spread is not None:
-        # Spread ≥ +0.5% = healthy (1.0), Spread ≤ −0.5% = inverted (0.0)
-        spread_score = clamp((float(spread) + 0.5) / 1.0)
+        # Spread ≥ +1.5% = steep (1.0), ≤ −0.75% = deeply inverted (0.0).
+        # A +0.8 curve is healthy but not maximal, and now scores as such.
+        spread_score = clamp((float(spread) + 0.75) / 2.25)
         components.append((spread_score, 0.35))
 
     # 3. CPI YoY inflation
@@ -599,10 +608,12 @@ def _macro_score(
         cpi = float(cpi_yoy)
         if cpi < 0:
             cpi_score = 0.3         # deflation risk
-        elif cpi <= 2.5:
+        elif cpi <= 2.0:
+            # On target. Only genuinely at-target inflation earns the ceiling;
+            # 2.5% used to, which put most of the last two years at 1.0.
             cpi_score = 1.0
-        elif cpi <= 6.0:
-            cpi_score = clamp(1.0 - (cpi - 2.5) / 3.5)
+        elif cpi <= 7.0:
+            cpi_score = clamp(1.0 - (cpi - 2.0) / 5.0)
         else:
             cpi_score = 0.0
         components.append((cpi_score, 0.30))

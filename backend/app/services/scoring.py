@@ -135,7 +135,18 @@ def _ml_score(feat: dict) -> float:
 
     if _xgb_model is None:
         if not os.path.exists(_MODEL_PATH):
-            logger.warning("xgb_model_not_found", path=_MODEL_PATH, fallback="weighted")
+            # ERROR, not warning: ENABLE_ML_MODEL=true is an explicit statement
+            # that the ML path should be running, and it silently is not. The
+            # model file is gitignored, so it never reaches a deployed box no
+            # matter what the flag says — every production run lands here and
+            # scores on the weighted path while the config claims otherwise.
+            logger.error(
+                "xgb_model_missing_scoring_weighted_instead",
+                path=_MODEL_PATH,
+                enable_ml_model=True,
+                hint="model/*.json is gitignored and never ships; set "
+                     "ENABLE_ML_MODEL=false or commit and retrain the model",
+            )
             return _weighted_score(feat, get_settings())
         try:
             import xgboost as xgb
