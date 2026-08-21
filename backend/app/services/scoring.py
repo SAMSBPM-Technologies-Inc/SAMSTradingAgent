@@ -55,15 +55,14 @@ def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[f
         settings = get_settings()
         score = clamp(_weighted_score(feat, settings))
 
-    risk_score = feat.get("risk", {}).get("score", 5) if isinstance(feat.get("risk"), dict) else 5
-    if score > 0.70 and risk_score < 6:
-        signal = "BUY"
-    elif score < 0.30:
-        signal = "SELL"
-    else:
-        signal = "HOLD"
+    # Imported, not restated. This function used to hold its own copies of the
+    # thresholds, so tuning signal_generator left any user with custom weights
+    # scored on a different model from the stored signal, with nothing to
+    # surface the disagreement.
+    from app.services.signal_generator import classify_signal
 
-    return round(score, 4), signal
+    risk_score = feat.get("risk", {}).get("score", 5) if isinstance(feat.get("risk"), dict) else 5
+    return round(score, 4), classify_signal(score, risk_score)
 
 
 async def score_ticker(ticker: str) -> dict:

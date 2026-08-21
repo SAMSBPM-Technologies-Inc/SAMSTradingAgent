@@ -17,9 +17,19 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+#: A BUY is refused at or above this risk score. Defined here rather than in
+#: signal_generator because it is a property of the risk scale, and because the
+#: volatility curve below is calibrated so that its knee lands exactly on it.
+RISK_MAX_FOR_BUY = 6.0
+
 # Thresholds
 _LOW_MAX = 3.5
-_HIGH_MIN = 6.5
+#: HIGH begins where the BUY veto begins. These were 6.5 and 6.0 respectively,
+#: so a score of 6.2 reported MEDIUM while silently blocking the trade — anyone
+#: reading the explanation saw a moderate risk and an unexplained missing
+#: signal. Deriving one from the other makes the label and the behaviour
+#: incapable of disagreeing.
+_HIGH_MIN = RISK_MAX_FOR_BUY
 
 
 def assess_risk(features: dict) -> dict:
@@ -31,18 +41,26 @@ def assess_risk(features: dict) -> dict:
     raw_score = 0.0  # accumulates, then normalised to 0–10
 
     # ── Factor 1: Volatility ─────────────────────────────────────────────────
-    # Two segments. The first is the original 0→4 points across 0–80%; the
-    # second adds up to 3 more between 80% and 160%.
+    # Two segments with the knee placed exactly on the BUY veto: 100% annualised
+    # volatility scores RISK_MAX_FOR_BUY, so "the gate refuses this on
+    # volatility alone" and "this name moves more than 100% annualised" are the
+    # same statement, which is the only version of this curve that explains
+    # itself.
     #
-    # Capping the whole factor at 4 points meant volatility alone could never
-    # reach the 6.0 that blocks a BUY, no matter how extreme. Cerebras at 143%
-    # annualised — a stock that can move roughly ±9% on an ordinary day —
-    # scored 4.0 MEDIUM and passed the risk gate, identical to Palantir at
-    # 106%. A risk check that cannot fail on its worst input is not a check.
+    # Steepened when volatility was removed from the composite. It had been
+    # charged twice — 0.10 of the score AND up to 7 risk points — and taking it
+    # out of the score removed a soft brake the gate was never calibrated to
+    # replace. Under the previous curve a name needed 135% annualised before
+    # volatility alone refused a BUY; a 130% stock, one that moves roughly ±8%
+    # on an ordinary day, sailed through at 5.88. It now scores 7.0.
+    #
+    # Caps at 8.0 rather than 10 so the remaining factors still have room to
+    # push a genuinely broken name higher.
     vol = features.get("volatility_20d") or 0.0
-    vol_contribution = clamp(vol / 0.80) * 4.0
-    if vol > 0.80:
-        vol_contribution += clamp((vol - 0.80) / 0.80) * 3.0
+    if vol <= 1.00:
+        vol_contribution = clamp(vol / 1.00) * RISK_MAX_FOR_BUY
+    else:
+        vol_contribution = RISK_MAX_FOR_BUY + clamp((vol - 1.00) / 0.60) * 2.0
     raw_score += vol_contribution
     if vol > 1.20:
         factors.append(f"extreme annualised volatility ({vol:.0%}) — position risk is severe")
