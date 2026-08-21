@@ -38,12 +38,16 @@ def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[f
     Risk score is expected in feat["risk"]["score"] if available.
     """
     if user_weights:
+        # Fallbacks mirror the Settings defaults in config.py — including
+        # volatility at 0.0, which is priced at the risk gate rather than in the
+        # score. A user who has explicitly saved a volatility weight keeps it;
+        # that is their choice, and it reinstates the double-count knowingly.
         class _W:
-            weight_technical        = user_weights.get("technical",        0.25)
-            weight_fundamental      = user_weights.get("fundamental",       0.15)
+            weight_technical        = user_weights.get("technical",        0.30)
+            weight_fundamental      = user_weights.get("fundamental",       0.20)
             weight_sentiment        = user_weights.get("sentiment",         0.20)
             weight_macro            = user_weights.get("macro",             0.15)
-            weight_volatility       = user_weights.get("volatility",        0.10)
+            weight_volatility       = user_weights.get("volatility",        0.00)
             weight_catalyst         = user_weights.get("catalyst",          0.15)
             weight_alternative_data = user_weights.get("alternative_data",  0.10)
         score = clamp(_weighted_score(feat, _W()))
