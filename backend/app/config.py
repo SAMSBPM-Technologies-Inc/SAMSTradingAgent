@@ -61,6 +61,21 @@ class Settings(BaseSettings):
     fred_api_key: str = Field(default="", description="FRED API key for macro data")
     anthropic_api_key: str = Field(default="", description="Anthropic API key for AI analyst (Claude)")
 
+    # ── Fundamentals providers ────────────────────────────────────────────────
+    # yfinance 429s from this host, which left fundamental_score pinned at its
+    # 0.5 fallback for every ticker. Massive (Polygon.io) supplies raw financial
+    # statements; Alpha Vantage supplies ready-made ratios and analyst consensus.
+    # BOTH cap at ~5 requests/minute and Alpha Vantage at 25/day, so neither can
+    # be called per pipeline cycle — see fundamentals.py for the cache.
+    massive_api_key: str = Field(default="", description="Massive (Polygon.io) API key for fundamentals")
+    alphavantage_api_key: str = Field(default="", description="Alpha Vantage API key for fundamentals")
+    # Fundamentals move quarterly; a day-old figure is not meaningfully staler
+    # than a fresh one, and the rate limits make anything shorter unworkable.
+    fundamentals_cache_hours: int = Field(default=24, description="Hours a cached fundamentals doc stays valid")
+    # Alpha Vantage's free tier allows 25 calls/day. Held below that so an
+    # ad-hoc refresh does not exhaust the budget the scheduled job needs.
+    alphavantage_daily_budget: int = Field(default=22, description="Max Alpha Vantage calls per day")
+
     # ── Broker / Automated Trading ────────────────────────────────────────────
     # Execution venue. "ibkr" = IB Gateway over TCP, "alpaca" = REST (no gateway).
     broker_provider: str = Field(default="ibkr", description="Execution venue: ibkr | alpaca")

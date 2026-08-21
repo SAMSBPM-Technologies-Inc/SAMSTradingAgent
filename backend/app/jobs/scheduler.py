@@ -121,6 +121,47 @@ async def _reconcile_trades_job() -> None:
         logger.error("reconcile_trades_job_failed", error=str(exc))
 
 
+async def _fundamentals_refresh_job() -> None:
+    """
+    Repopulate the fundamentals cache.
+
+    Runs pre-market and slowly: the providers allow ~5 requests a minute, so a
+    30-ticker universe takes roughly 15 minutes of mostly waiting. That is why
+    it is a separate job rather than part of the pipeline — the pipeline runs
+    every 5 minutes and cannot block on this.
+
+    Tickers with an open position are refreshed first, because Alpha Vantage's
+    daily allowance (25) is smaller than the watchlist and runs out partway
+    through; the ones that miss out still get Massive's statements, which cover
+    most of the fundamental score's weight.
+    """
+    try:
+        from app.services.fundamentals import refresh_all_fundamentals
+
+        tickers = await _get_all_tickers()
+        if not tickers:
+            return
+
+        # Prioritise held names — those are the ones carrying money.
+        db = await get_db()
+        held = set()
+        try:
+            from app.models.trade import TradeStatus
+            async for t in db["trades"].find(
+                {"status": {"$in": list(TradeStatus.OPEN)}, "closed_at": None},
+                {"ticker": 1},
+            ):
+                held.add(str(t.get("ticker", "")).upper())
+        except Exception as exc:
+            logger.warning("fundamentals_priority_lookup_failed", error=str(exc))
+
+        ordered = [t for t in tickers if t in held] + [t for t in tickers if t not in held]
+        logger.info("fundamentals_refresh_start", tickers=len(ordered), prioritised=len(held))
+        await refresh_all_fundamentals(ordered)
+    except Exception as exc:
+        logger.error("fundamentals_refresh_job_failed", error=str(exc))
+
+
 async def _premarket_sweep_job() -> None:
     """Pre-market sweep: full pipeline run before the open (refreshes news + macro)."""
     tickers = await _get_all_tickers()
@@ -307,6 +348,20 @@ def start_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
+    )
+
+    # 1c. Fundamentals refresh — 07:00 ET Mon–Fri, an hour before the sweep so
+    #     the cache is warm before signals are computed against it. Deliberately
+    #     daily: these figures change quarterly, and the providers' rate limits
+    #     make anything more frequent impossible anyway.
+    scheduler.add_job(
+        _fundamentals_refresh_job,
+        trigger=CronTrigger(hour=7, minute=0, day_of_week="mon-fri", timezone=ET),
+        id="fundamentals_refresh",
+        name="Fundamentals cache refresh",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=1800,
     )
 
     # 2. Pre-market sweep — 08:00 ET Mon–Fri
