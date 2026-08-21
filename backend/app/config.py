@@ -217,6 +217,23 @@ class Settings(BaseSettings):
     analyst_score_change_threshold: float = Field(default=0.12, description="Composite score shift that triggers re-analysis")
     analyst_vix_spike_threshold: float = Field(default=30.0, description="VIX level that forces re-analysis of all tickers")
 
+    # ── Technical stance ──────────────────────────────────────────────────────
+    # mean_reversion | momentum | blended
+    #
+    # Previously implicit. The original component weights blended two opposing
+    # philosophies without declaring either: RSI/Bollinger/Stochastic score
+    # higher as price weakens, MACD/MA-cross score higher as it strengthens, and
+    # at 60/40 the mean-reversion side silently held the majority. The model was
+    # a dip-buyer by accident rather than by decision.
+    #
+    # Defaults to mean_reversion because that is what the product already
+    # assumes — /alpha-radar is a dip-buy scanner. Under `momentum` the
+    # mean-reversion components are inverted, not merely reweighted.
+    technical_stance: str = Field(
+        default="mean_reversion",
+        description="How technical signals are read: mean_reversion | momentum | blended",
+    )
+
     # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────
     weight_technical:    float = Field(default=0.25)
     weight_fundamental:  float = Field(default=0.15)

@@ -4,7 +4,7 @@ Feature Engineering Service
 Reads raw price/fundamental/macro data from MongoDB and computes:
 
   Technical indicators  : RSI-14, MACD, Bollinger Bands, Stochastic RSI,
-                          ATR, MA-20/50, volume anomaly
+                          ATR, MA-20/50, volume anomaly, OBV, ADX-14, VWAP-20
   Sub-scores (all 0–1)  : technical, fundamental, sentiment, macro, volatility
   Composite             : delegated to scoring.py (not computed here)
 
@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import ta
 
+from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, get_db
 from app.services.catalyst import compute_catalyst_score
 from app.utils.helpers import clamp, utcnow
@@ -100,6 +101,10 @@ async def compute_features(ticker: str) -> dict:
         "ma_50":            tech["ma_50"],
         "ma_cross_bullish": tech["ma_cross_bullish"],
         "volatility_20d":   tech["volatility_20d"],
+        "obv":              tech["obv"],
+        "obv_rising":       tech["obv_rising"],
+        "adx_14":           tech["adx_14"],
+        "vwap_20":          tech["vwap_20"],
         # ── Raw macro fields (for XGBoost feature vector in scoring.py) ──────
         "vix":               macro_vix,
         "yield_curve_spread": macro_yield_spread,
@@ -197,6 +202,33 @@ def _compute_technical_indicators(
     vol_window = log_ret.iloc[-20:] if len(log_ret) >= 20 else log_ret
     volatility_20d = round(float(vol_window.std() * math.sqrt(252)), 6)
 
+    # OBV (On-Balance Volume): cumulative, so the raw level isn't
+    # comparable across tickers — track direction over the last 10 bars
+    # instead (rising = accumulation, falling = distribution).
+    obv_series = ta.volume.OnBalanceVolumeIndicator(close=closes, volume=volumes).on_balance_volume()
+    obv = last(obv_series)
+    obv_clean = obv_series.dropna()
+    obv_rising = bool(obv_clean.iloc[-1] > obv_clean.iloc[-11]) if len(obv_clean) >= 11 else None
+
+    # ADX-14 (trend strength, direction-agnostic). ta's ADXIndicator
+    # indexes into an internal array by `window` and raises IndexError
+    # on short series instead of returning NaN, so guard the length
+    # and swallow any failure rather than let one bad ticker crash the job.
+    adx_14 = None
+    if len(closes) >= 30:
+        try:
+            adx_14 = last(ta.trend.ADXIndicator(high=highs, low=lows, close=closes, window=14).adx())
+        except Exception:
+            adx_14 = None
+
+    # VWAP-20: rolling 20-day volume-weighted average price. Bars here are
+    # daily closes, not intraday ticks, so a same-day-reset VWAP isn't
+    # meaningful — this is the daily-bar analogue used instead.
+    typical_price = (highs + lows + closes) / 3.0
+    vwap_num = (typical_price * volumes).rolling(20).sum()
+    vwap_den = volumes.rolling(20).sum()
+    vwap_20 = last(vwap_num / vwap_den)
+
     return {
         "rsi_14": rsi_14,
         "macd": macd_val,
@@ -212,25 +244,57 @@ def _compute_technical_indicators(
         "ma_50": ma_50,
         "ma_cross_bullish": ma_cross_bullish,
         "volatility_20d": volatility_20d,
+        "obv": obv,
+        "obv_rising": obv_rising,
+        "adx_14": adx_14,
+        "vwap_20": vwap_20,
     }
 
 
 # ── Sub-score calculators ──────────────────────────────────────────────────────
 
+#: Component weights per technical stance, as (rsi, macd, bb, stoch, ma_cross).
+#:
+#: The stance is now declared rather than implied. The original weights blended
+#: two opposing philosophies without saying so: RSI, Bollinger and Stochastic
+#: are MEAN-REVERSION signals that score higher as price weakens, while MACD and
+#: the MA cross are TREND signals that score higher as it strengthens. At 60/40
+#: the mean-reversion side quietly held the majority, so the model was a
+#: dip-buyer by accident of weighting.
+#:
+#: Palantir showed the tension plainly: RSI 66, Bollinger 0.72 and Stochastic
+#: 0.71 all marked it down for being extended, while MACD and the MA cross both
+#: marked it up for trending — a stock penalised and rewarded for the same fact.
+_STANCE_WEIGHTS = {
+    # Buy weakness in sound companies. Trend signals act as confirmation only,
+    # which is what the Alpha Radar dip-buy scanner already assumes.
+    "mean_reversion": (0.30, 0.15, 0.25, 0.20, 0.10),
+    # Buy strength. The mean-reversion inputs are INVERTED below, so an extended
+    # RSI reads bullish rather than bearish.
+    "momentum":       (0.20, 0.30, 0.15, 0.10, 0.25),
+    # The historical blend — kept so results before this change stay reproducible.
+    "blended":        (0.25, 0.25, 0.20, 0.15, 0.15),
+}
+
+
 def _technical_score(tech: dict, price: float) -> float:
     """
     Combine 5 technical signals into a single 0–1 score.
 
-    Component weights:
-      RSI          25 %
-      MACD         25 %
-      Bollinger    20 %
-      Stoch RSI    15 %
-      MA cross     15 %
+    Direction and weighting both follow `technical_stance` (see
+    `_STANCE_WEIGHTS`). Under `momentum` the RSI, Bollinger and Stochastic
+    components are inverted, so the same indicator that reads bullish when
+    oversold under mean-reversion reads bullish when overbought instead.
     """
+    stance = get_settings().technical_stance
+    w_rsi, w_macd, w_bb, w_stoch, w_ma = _STANCE_WEIGHTS.get(
+        stance, _STANCE_WEIGHTS["mean_reversion"]
+    )
+    momentum = stance == "momentum"
+
     components: list[tuple[float, float]] = []   # (score, weight)
 
-    # 1. RSI
+    # 1. RSI — oversold is bullish under mean-reversion, bearish under momentum
     rsi = tech.get("rsi_14")
     if rsi is not None:
         if rsi <= 30:
@@ -239,30 +303,30 @@ def _technical_score(tech: dict, price: float) -> float:
             rsi_s = 0.0
         else:
             rsi_s = 1.0 - (rsi - 30) / 40.0
-        components.append((clamp(rsi_s), 0.25))
+        rsi_s = clamp(rsi_s)
+        components.append((1.0 - rsi_s if momentum else rsi_s, w_rsi))
 
-    # 2. MACD crossover
+    # 2. MACD crossover — a trend signal; reads the same under either stance
     macd_bull = tech.get("macd_bullish")
     if macd_bull is not None:
-        components.append((1.0 if macd_bull else 0.0, 0.25))
+        components.append((1.0 if macd_bull else 0.0, w_macd))
 
     # 3. Bollinger Band position (bb_pct: 0 = at lower band, 1 = at upper)
     bb_pct = tech.get("bb_pct")
     if bb_pct is not None:
-        # Near lower band (oversold) → bullish (1.0); near upper → bearish (0.0)
         bb_s = clamp(1.0 - float(bb_pct))
-        components.append((bb_s, 0.20))
+        components.append((1.0 - bb_s if momentum else bb_s, w_bb))
 
     # 4. Stochastic RSI (0 = oversold, 1 = overbought)
     stoch = tech.get("stoch_rsi")
     if stoch is not None:
         stoch_s = clamp(1.0 - float(stoch))
-        components.append((stoch_s, 0.15))
+        components.append((1.0 - stoch_s if momentum else stoch_s, w_stoch))
 
-    # 5. MA cross
+    # 5. MA cross — a trend signal; reads the same under either stance
     ma_cross = tech.get("ma_cross_bullish")
     if ma_cross is not None:
-        components.append((1.0 if ma_cross else 0.0, 0.15))
+        components.append((1.0 if ma_cross else 0.0, w_ma))
 
     if not components:
         return 0.5
@@ -320,14 +384,31 @@ def _fundamental_score(fund: dict) -> float:
     # 5. Debt/equity — lower = healthier (0 = best, 2+ = stressed)
     de = fund.get("debt_to_equity")
     if de is not None and float(de) >= 0:
-        de_score = clamp(1.0 - float(de) / 200.0)   # yfinance returns % (e.g. 45 = 45%)
+        de_score = clamp(1.0 - float(de) / 200.0)   # percentage scale (45 = 45%)
         components.append((de_score, 0.10))
 
     if not components:
         return 0.5
 
-    total_weight = sum(w for _, w in components)
-    score = sum(s * w for s, w in components) / total_weight
+    # Blend toward neutral in proportion to what is MISSING, rather than
+    # re-normalising over whatever happens to be present.
+    #
+    # Plain re-normalisation rewards absent data. Cerebras (CBRS) listed in May
+    # 2026 and has filed no annual report, so P/E, free cash flow and
+    # debt/equity — every valuation and balance-sheet check — were unavailable.
+    # The two that survived were analyst consensus and revenue growth, both
+    # bullish, and re-normalising over them scored it 0.918: the highest
+    # fundamental score in the watchlist, above NVDA's 0.864, which is measured
+    # on all five INCLUDING a P/E that counts against it.
+    #
+    # A company whose only available data is optimistic should not outrank one
+    # with a complete picture. Coverage-weighting pulls the unmeasured portion
+    # to 0.5, so a partial read lands nearer neutral and confidence tracks
+    # evidence. CBRS becomes ~0.73 at 55% coverage; full-coverage names are
+    # arithmetically unchanged.
+    coverage = sum(w for _, w in components)          # 0..1; 1.0 = all five
+    raw = sum(s * w for s, w in components) / coverage
+    score = raw * coverage + 0.5 * (1.0 - coverage)
     return clamp(score)
 
 
@@ -385,9 +466,27 @@ def _macro_score(macro: dict) -> float:
 
 
 def _volatility_score(volatility: float) -> float:
-    """Convert annualised volatility to 0–1 (lower vol → higher score)."""
+    """
+    Convert annualised volatility to 0–1 (lower vol → higher score).
+
+        ≤15%  → 1.00
+         80%  → 0.15
+        ≥150% → 0.00
+
+    Two segments rather than one, because the old curve bottomed out at 80% and
+    reported everything above it as an identical 0.0 — Cerebras at 143% and
+    Palantir at 106% were indistinguishable, though one is roughly a third more
+    volatile than the other. The 15–80% ramp is essentially unchanged, so names
+    in the normal range score as before; the second segment only restores
+    discrimination among the genuinely extreme, where it matters most.
+    """
     if volatility <= 0.15:
         return 1.0
-    if volatility >= 0.80:
+    if volatility >= 1.50:
         return 0.0
-    return clamp(1.0 - (volatility - 0.15) / (0.80 - 0.15))
+    if volatility <= 0.80:
+        # 1.00 at 15% down to 0.15 at 80% — the original slope, floored at 0.15
+        # instead of 0 so the tail below still has somewhere to go.
+        return clamp(1.0 - (volatility - 0.15) / (0.80 - 0.15) * 0.85)
+    # 0.15 at 80% down to 0.00 at 150%
+    return clamp(0.15 * (1.0 - (volatility - 0.80) / (1.50 - 0.80)))

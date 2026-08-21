@@ -31,10 +31,22 @@ def assess_risk(features: dict) -> dict:
     raw_score = 0.0  # accumulates, then normalised to 0–10
 
     # ── Factor 1: Volatility ─────────────────────────────────────────────────
+    # Two segments. The first is the original 0→4 points across 0–80%; the
+    # second adds up to 3 more between 80% and 160%.
+    #
+    # Capping the whole factor at 4 points meant volatility alone could never
+    # reach the 6.0 that blocks a BUY, no matter how extreme. Cerebras at 143%
+    # annualised — a stock that can move roughly ±9% on an ordinary day —
+    # scored 4.0 MEDIUM and passed the risk gate, identical to Palantir at
+    # 106%. A risk check that cannot fail on its worst input is not a check.
     vol = features.get("volatility_20d") or 0.0
-    vol_contribution = clamp(vol / 0.80) * 4.0  # max 4 pts from volatility
+    vol_contribution = clamp(vol / 0.80) * 4.0
+    if vol > 0.80:
+        vol_contribution += clamp((vol - 0.80) / 0.80) * 3.0
     raw_score += vol_contribution
-    if vol > 0.50:
+    if vol > 1.20:
+        factors.append(f"extreme annualised volatility ({vol:.0%}) — position risk is severe")
+    elif vol > 0.50:
         factors.append(f"very high annualised volatility ({vol:.0%})")
     elif vol > 0.30:
         factors.append(f"elevated volatility ({vol:.0%})")
