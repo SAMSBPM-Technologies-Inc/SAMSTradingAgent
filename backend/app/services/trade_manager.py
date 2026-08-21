@@ -10,10 +10,11 @@ Orchestrates signal → order flow:
 
 Called from pipeline._execute_trades() after a signal is generated.
 """
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.db import COLL_FEATURES, COLL_TRADES, COLL_USERS, get_db
+from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_TRADES, COLL_USERS, get_db
 from app.models.trade import AutoTradeSettings, TradeRecord, TradeStatus
 from app.services import broker as ibkr
 from app.utils.helpers import utcnow
@@ -262,6 +263,229 @@ async def _update_trade(trade_id: str, update: dict) -> None:
     await db[COLL_TRADES].update_one({"_id": ObjectId(trade_id)}, {"$set": update})
 
 
+@dataclass
+class EntryPlan:
+    """A validated, fundable, bracketed order — everything but the submission."""
+    ticker: str
+    qty: int
+    limit_price: float
+    stop_price: float
+    target_price: float
+    account_id: str
+    #: Set when the requested size was cut to what the account can actually fund.
+    adjustment: str | None = None
+
+
+async def _prepare_entry(
+    user_id: str,
+    ticker: str,
+    settings: AutoTradeSettings,
+    current_price: float | None,
+    analyst_stop_loss: float | None,
+    analyst_price_target: float | None,
+    *,
+    requested_qty: int | None = None,
+    enforce_whitelist: bool = True,
+) -> tuple[EntryPlan | None, str | None]:
+    """
+    Run every risk guard and size the order. Returns (plan, skip_reason).
+
+    Extracted so the automated and user-initiated paths cannot drift apart. A
+    manual order is a different *decision*, not a different set of guards: it
+    still may not breach the CIRO restriction, the position cap, the daily-loss
+    kill switch, the cash reserve, or the refusal to open an unprotected entry.
+
+    Only two things differ for a manual order, and both are passed in rather
+    than assumed here: the signal-score threshold does not apply (the human is
+    the signal), and the whitelist does not apply (it restricts what the *agent*
+    may pick, and the user has explicitly chosen this ticker).
+    """
+    # ── Guard: CIRO restriction ───────────────────────────────────────────────
+    if _is_canadian_listed(ticker):
+        return None, "Canadian-listed security — API trading prohibited (CIRO rule)"
+
+    # ── Guard: ticker whitelist ───────────────────────────────────────────────
+    if enforce_whitelist and settings.allowed_tickers:
+        if ticker.upper() not in [t.upper() for t in settings.allowed_tickers]:
+            return None, f"Ticker not in allowed list: {settings.allowed_tickers}"
+
+    # ── Guard: no duplicate open position ─────────────────────────────────────
+    if await _open_position_exists(user_id, ticker):
+        return None, "Position already open for this ticker"
+
+    # ── Guard: max open positions ─────────────────────────────────────────────
+    if await _count_open_positions(user_id) >= settings.max_open_positions:
+        return None, f"Max open positions reached ({settings.max_open_positions})"
+
+    # ── Guard: broker connectivity ────────────────────────────────────────────
+    if not ibkr.is_connected():
+        return None, "IB Gateway not connected"
+
+    account_id = await _get_user_account_id(user_id)
+
+    # ── Guard: daily loss limit ───────────────────────────────────────────────
+    acct = await ibkr.get_account_summary(account_id=account_id)
+    equity = acct.get("net_liquidation", 0.0)
+    if equity <= 0:
+        return None, "Could not read account equity from IBKR"
+
+    daily_loss = await _daily_realized_loss(user_id)
+    max_loss_dollars = equity * settings.max_daily_loss_pct
+    if daily_loss >= max_loss_dollars:
+        return None, f"Daily loss limit hit (${daily_loss:.2f} >= ${max_loss_dollars:.2f})"
+
+    # ── Calculate order ───────────────────────────────────────────────────────
+    price = current_price or 0.0
+    if price <= 0:
+        return None, "No current price available"
+
+    vol = await _ticker_volatility(ticker)
+    sized_qty = _calculate_qty(price, equity, settings.position_size_pct, vol)
+
+    adjustment: str | None = None
+    if requested_qty is not None:
+        # A client-supplied quantity is a request, never an instruction. Take
+        # the smaller of what was asked for and what the risk model sizes to,
+        # so the sizing rules cannot be escaped by editing a form field.
+        qty = min(int(requested_qty), sized_qty) if sized_qty >= 1 else 0
+        if qty < int(requested_qty):
+            adjustment = (
+                f"Requested {int(requested_qty)} shares; reduced to {qty} to stay "
+                f"within your {settings.position_size_pct:.0%} position size."
+            )
+    else:
+        qty = sized_qty
+
+    if qty < 1:
+        return None, "Calculated quantity < 1 share"
+
+    logger.info(
+        "position_sized",
+        ticker=ticker, qty=qty, volatility_20d=vol,
+        size_factor=round(_volatility_size_factor(vol), 3),
+        requested_qty=requested_qty,
+    )
+
+    limit_price = round(price, 2)
+
+    # ── Guard: fundable from available money ──────────────────────────────────
+    # position_size_pct is a fraction of EQUITY, which says nothing about
+    # whether the cash exists. Every position sizes off the same equity
+    # figure, so N positions commit N x pct of it and the account quietly
+    # borrows the difference. Size against real available funds instead.
+    env = get_settings()
+    available = (
+        acct.get("buying_power", 0.0) if env.allow_margin
+        else acct.get("total_cash", 0.0)
+    )
+    available -= equity * env.cash_reserve_pct
+
+    if available <= 0:
+        return None, (
+            f"No available funds "
+            f"(cash ${acct.get('total_cash', 0.0):,.2f}, "
+            f"reserve ${equity * env.cash_reserve_pct:,.2f}"
+            f"{'' if env.allow_margin else '; margin disabled'})"
+        )
+
+    if qty * limit_price > available:
+        reduced = int(available // limit_price)
+        if reduced < 1:
+            return None, (
+                f"Available funds ${available:,.2f} below one share at ${limit_price:,.2f}"
+            )
+        logger.info(
+            "position_size_reduced_to_available_funds",
+            user_id=user_id, ticker=ticker,
+            requested_qty=qty, funded_qty=reduced, available=round(available, 2),
+        )
+        adjustment = (
+            f"Reduced from {qty} to {reduced} shares — available funds "
+            f"${available:,.2f}."
+        )
+        qty = reduced
+
+    # ── Protective exits ──────────────────────────────────────────────────────
+    stop_price, target_price = _bracket_levels(
+        limit_price, analyst_stop_loss, analyst_price_target
+    )
+    if stop_price is None or target_price is None:
+        # Refuse rather than open a position nothing will ever close. The
+        # app only sells on a SELL signal, which requires it to be running.
+        return None, "Could not derive a valid stop-loss — refusing unprotected entry"
+
+    return EntryPlan(
+        ticker=ticker, qty=qty, limit_price=limit_price,
+        stop_price=stop_price, target_price=target_price,
+        account_id=account_id, adjustment=adjustment,
+    ), None
+
+
+async def _submit_entry(
+    user_id: str,
+    plan: EntryPlan,
+    *,
+    signal_score: float | None,
+    signal_type: str,
+    trigger: str,
+    extra: dict | None = None,
+) -> tuple[str, str, object | None]:
+    """
+    Log the trade, send it to the broker, record the outcome.
+
+    Returns (trade_id, final_status, order_id).
+    """
+    now = utcnow()
+    is_paper = not get_settings().is_live_trading
+
+    record = {
+        "user_id": user_id, "ticker": plan.ticker, "action": "BUY",
+        "qty": plan.qty, "limit_price": plan.limit_price,
+        "stop_loss": plan.stop_price, "take_profit": plan.target_price,
+        "status": TradeStatus.PENDING,
+        "signal_score": signal_score, "signal_type": signal_type,
+        # Reflects the gateway session actually in use, not the user's
+        # preference — the server's TRADING_MODE decides which account is hit.
+        "is_paper": is_paper,
+        "opened_at": now, "closed_at": None,
+    }
+    if plan.adjustment:
+        record["reason"] = plan.adjustment
+    record.update(extra or {})
+
+    trade_id = await _log_trade(record)
+
+    order_id = await ibkr.place_limit_order(
+        plan.ticker, "BUY", plan.qty, plan.limit_price,
+        account_id=plan.account_id,
+        stop_loss_price=plan.stop_price,
+        take_profit_price=plan.target_price,
+    )
+
+    if order_id is None:
+        await _update_trade(trade_id, {
+            "status": TradeStatus.REJECTED,
+            "reason": "IBKR rejected or did not return order ID",
+        })
+        return trade_id, TradeStatus.REJECTED, None
+
+    await _update_trade(trade_id, {"order_id": order_id})
+    logger.info(
+        "trade_entry_placed", user_id=user_id, ticker=plan.ticker,
+        qty=plan.qty, limit_price=plan.limit_price, order_id=order_id,
+        stop_loss=plan.stop_price, take_profit=plan.target_price,
+        paper=is_paper, trigger=trigger, signal_type=signal_type,
+    )
+    await _notify_trade(
+        user_id, action="BUY", ticker=plan.ticker, qty=plan.qty,
+        limit_price=plan.limit_price, order_id=order_id,
+        stop_loss=plan.stop_price, take_profit=plan.target_price,
+        is_paper=is_paper, account_id=plan.account_id, trigger=trigger,
+        signal_score=signal_score,
+    )
+    return trade_id, TradeStatus.PENDING, order_id
+
+
 async def execute_entry(
     user_id: str,
     ticker: str,
@@ -269,10 +493,17 @@ async def execute_entry(
     current_price: float | None,
     analyst_stop_loss: float | None = None,
     analyst_price_target: float | None = None,
+    conviction: str | None = None,
 ) -> None:
     """
-    Attempt to open a BUY position for this user+ticker if all risk guards pass.
-    Logs the outcome (including skips) to the trades collection.
+    Act on a BUY signal for this user+ticker, as far as their mode allows.
+
+    Under AUTO this places the order. Under MANUAL — and under SEMI_AUTO below
+    the conviction bar — it records a PROPOSED trade instead and stops there,
+    so the entry the agent wanted is preserved for a human decision rather than
+    silently dropped.
+
+    Logs the outcome (including skips) to the trades collection. Never raises.
     """
     try:
         settings = await _get_user_settings(user_id)
@@ -292,163 +523,137 @@ async def execute_entry(
             })
             logger.info("trade_skipped", user_id=user_id, ticker=ticker, reason=reason)
 
-        # ── Guard: CIRO restriction ───────────────────────────────────────────
-        if _is_canadian_listed(ticker):
-            await _skip("Canadian-listed security — API trading prohibited (CIRO rule)")
-            return
-
         # ── Guard: signal score threshold ─────────────────────────────────────
+        # Agent-only: a manual order has no signal score to test.
         if signal_score < settings.min_signal_score:
             await _skip(f"Score {signal_score:.2f} below threshold {settings.min_signal_score:.2f}")
             return
 
-        # ── Guard: ticker whitelist ───────────────────────────────────────────
-        if settings.allowed_tickers and ticker.upper() not in [t.upper() for t in settings.allowed_tickers]:
-            await _skip(f"Ticker not in allowed list: {settings.allowed_tickers}")
-            return
-
-        # ── Guard: no duplicate open position ─────────────────────────────────
-        if await _open_position_exists(user_id, ticker):
-            await _skip("Position already open for this ticker")
-            return
-
-        # ── Guard: max open positions ─────────────────────────────────────────
-        open_count = await _count_open_positions(user_id)
-        if open_count >= settings.max_open_positions:
-            await _skip(f"Max open positions reached ({settings.max_open_positions})")
-            return
-
-        # ── Guard: IBKR connectivity ──────────────────────────────────────────
-        if not ibkr.is_connected():
-            await _skip("IB Gateway not connected")
-            return
-
-        account_id = await _get_user_account_id(user_id)
-
-        # ── Guard: daily loss limit ───────────────────────────────────────────
-        acct = await ibkr.get_account_summary(account_id=account_id)
-        equity = acct.get("net_liquidation", 0.0)
-        if equity <= 0:
-            await _skip("Could not read account equity from IBKR")
-            return
-
-        daily_loss = await _daily_realized_loss(user_id)
-        max_loss_dollars = equity * settings.max_daily_loss_pct
-        if daily_loss >= max_loss_dollars:
-            await _skip(
-                f"Daily loss limit hit (${daily_loss:.2f} >= ${max_loss_dollars:.2f})"
-            )
-            return
-
-        # ── Calculate order ───────────────────────────────────────────────────
-        price = current_price or 0.0
-        if price <= 0:
-            await _skip("No current price available")
-            return
-
-        vol = await _ticker_volatility(ticker)
-        qty = _calculate_qty(price, equity, settings.position_size_pct, vol)
-        if qty < 1:
-            await _skip("Calculated quantity < 1 share")
-            return
-        logger.info(
-            "position_sized",
-            ticker=ticker, qty=qty, volatility_20d=vol,
-            size_factor=round(_volatility_size_factor(vol), 3),
+        plan, skip_reason = await _prepare_entry(
+            user_id, ticker, settings, current_price,
+            analyst_stop_loss, analyst_price_target,
         )
-
-        # Limit price: current price (will fill at or better)
-        limit_price = round(price, 2)
-
-        # ── Guard: fundable from available money ──────────────────────────────
-        # position_size_pct is a fraction of EQUITY, which says nothing about
-        # whether the cash exists. Every position sizes off the same equity
-        # figure, so N positions commit N x pct of it and the account quietly
-        # borrows the difference. Size against real available funds instead.
-        env = get_settings()
-        available = (
-            acct.get("buying_power", 0.0) if env.allow_margin
-            else acct.get("total_cash", 0.0)
-        )
-        available -= equity * env.cash_reserve_pct
-
-        if available <= 0:
-            await _skip(
-                f"No available funds "
-                f"(cash ${acct.get('total_cash', 0.0):,.2f}, "
-                f"reserve ${equity * env.cash_reserve_pct:,.2f}"
-                f"{'' if env.allow_margin else '; margin disabled'})"
-            )
+        if plan is None:
+            await _skip(skip_reason or "Entry refused")
             return
 
-        if qty * limit_price > available:
-            reduced = int(available // limit_price)
-            if reduced < 1:
-                await _skip(
-                    f"Available funds ${available:,.2f} below one share at ${limit_price:,.2f}"
-                )
-                return
-            logger.info(
-                "position_size_reduced_to_available_funds",
-                user_id=user_id, ticker=ticker,
-                requested_qty=qty, funded_qty=reduced, available=round(available, 2),
-            )
-            qty = reduced
-
-        # ── Protective exits ──────────────────────────────────────────────────
-        stop_price, target_price = _bracket_levels(
-            limit_price, analyst_stop_loss, analyst_price_target
-        )
-        if stop_price is None:
-            # Refuse rather than open a position nothing will ever close. The
-            # app only sells on a SELL signal, which requires it to be running.
-            await _skip("Could not derive a valid stop-loss — refusing unprotected entry")
-            return
-
-        # ── Log pending trade ─────────────────────────────────────────────────
-        trade_id = await _log_trade({
-            "user_id": user_id, "ticker": ticker, "action": "BUY",
-            "qty": qty, "limit_price": limit_price,
-            "stop_loss": stop_price, "take_profit": target_price,
-            "status": TradeStatus.PENDING,
-            "signal_score": signal_score, "signal_type": "BUY",
-            # Reflects the gateway session actually in use, not the user's
-            # preference — the server's TRADING_MODE decides which account is hit.
-            "is_paper": not get_settings().is_live_trading,
-            "opened_at": now, "closed_at": None,
-        })
-
-        # ── Place order ───────────────────────────────────────────────────────
-        order_id = await ibkr.place_limit_order(
-            ticker, "BUY", qty, limit_price,
-            account_id=account_id,
-            stop_loss_price=stop_price,
-            take_profit_price=target_price,
-        )
-        if order_id is not None:
-            await _update_trade(trade_id, {"order_id": order_id})
-            logger.info(
-                "trade_entry_placed", user_id=user_id, ticker=ticker,
-                qty=qty, limit_price=limit_price, order_id=order_id,
-                stop_loss=stop_price, take_profit=target_price,
-                paper=not get_settings().is_live_trading,
-            )
-            await _notify_trade(
-                user_id, action="BUY", ticker=ticker, qty=qty,
-                limit_price=limit_price, order_id=order_id,
-                stop_loss=stop_price, take_profit=target_price,
-                is_paper=not get_settings().is_live_trading,
-                account_id=account_id, trigger="BUY signal",
-                signal_score=signal_score,
-            )
-        else:
-            await _update_trade(trade_id, {
-                "status": TradeStatus.REJECTED,
-                "reason": "IBKR rejected or did not return order ID",
+        # ── Autonomy gate ─────────────────────────────────────────────────────
+        # Every risk guard has passed and the order is fully specified. The only
+        # remaining question is whether this user lets the agent send it alone.
+        if not settings.may_auto_execute(conviction):
+            await _log_trade({
+                "user_id": user_id, "ticker": plan.ticker, "action": "BUY",
+                "qty": plan.qty, "limit_price": plan.limit_price,
+                "stop_loss": plan.stop_price, "take_profit": plan.target_price,
+                "status": TradeStatus.PROPOSED,
+                "signal_score": signal_score, "signal_type": "BUY",
+                "conviction": conviction,
+                "reason": (
+                    f"{settings.mode.value} mode — awaiting your approval"
+                    + (f" (conviction {conviction} below "
+                       f"{settings.auto_execute_conviction})"
+                       if settings.mode.value == "SEMI_AUTO" else "")
+                ),
+                "is_paper": not get_settings().is_live_trading,
+                "opened_at": now, "closed_at": None,
             })
+            logger.info(
+                "trade_proposed",
+                user_id=user_id, ticker=ticker, mode=settings.mode.value,
+                conviction=conviction, qty=plan.qty,
+            )
+            return
+
+        await _submit_entry(
+            user_id, plan,
+            signal_score=signal_score, signal_type="BUY", trigger="BUY signal",
+            extra={"conviction": conviction} if conviction else None,
+        )
 
     except Exception as exc:
         logger.error("execute_entry_failed", user_id=user_id, ticker=ticker, error=str(exc))
+
+
+async def execute_manual_entry(
+    user_id: str,
+    ticker: str,
+    *,
+    requested_qty: int | None = None,
+    limit_price: float | None = None,
+    analyst_stop_loss: float | None = None,
+    analyst_price_target: float | None = None,
+    signal_score: float | None = None,
+    source: str = "MANUAL",
+) -> dict:
+    """
+    Place a user-initiated BUY. Raises nothing; returns a result dict.
+
+    Runs the same guards as the automated path — see `_prepare_entry`. A user
+    clicking Buy is choosing the ticker and the moment; it is not permission to
+    breach the position cap or the daily-loss kill switch.
+
+    `source` distinguishes a hand-placed order ("MANUAL") from an agent proposal
+    the user approved ("PROPOSAL_APPROVED"). They are kept apart because a
+    human-filtered set of the agent's picks is not a clean read of the agent.
+    """
+    ticker = ticker.upper().strip()
+
+    settings = await _get_user_settings(user_id) or AutoTradeSettings()
+    # Deliberately not gated on settings.enabled: that switch governs whether
+    # the *agent* may act. A user placing their own order is a different act,
+    # and requiring auto-trading to be on before you can press Buy would be
+    # exactly backwards.
+
+    price = limit_price
+    if price is None:
+        price = await _last_known_price(ticker)
+
+    plan, skip_reason = await _prepare_entry(
+        user_id, ticker, settings, price,
+        analyst_stop_loss, analyst_price_target,
+        requested_qty=requested_qty,
+        # The whitelist restricts what the agent may pick. The user picked this.
+        enforce_whitelist=False,
+    )
+    if plan is None:
+        logger.info(
+            "manual_order_refused",
+            user_id=user_id, ticker=ticker, reason=skip_reason, source=source,
+        )
+        return {"placed": False, "status": TradeStatus.SKIPPED,
+                "ticker": ticker, "reason": skip_reason}
+
+    trade_id, status, order_id = await _submit_entry(
+        user_id, plan,
+        signal_score=signal_score, signal_type=source,
+        trigger="manual order" if source == "MANUAL" else "approved proposal",
+    )
+
+    return {
+        "placed": order_id is not None,
+        "status": status,
+        "ticker": plan.ticker,
+        "qty": plan.qty,
+        "limit_price": plan.limit_price,
+        "order_id": order_id,
+        "stop_loss": plan.stop_price,
+        "take_profit": plan.target_price,
+        "is_paper": not get_settings().is_live_trading,
+        "trade_id": trade_id,
+        "reason": plan.adjustment or (
+            None if order_id is not None
+            else "Broker rejected or did not return an order ID"
+        ),
+    }
+
+
+async def _last_known_price(ticker: str) -> float | None:
+    """Most recent price the pipeline recorded for *ticker*."""
+    db = await get_db()
+    doc = await db[COLL_SIGNALS].find_one(
+        {"ticker": ticker.upper()}, {"current_price": 1}
+    )
+    return (doc or {}).get("current_price")
 
 
 async def execute_exit(
@@ -456,14 +661,23 @@ async def execute_exit(
     ticker: str,
     current_price: float | None,
     trigger: str = "EXIT_ALERT",
+    *,
+    require_enabled: bool = True,
 ) -> None:
     """
-    Close an open BUY position for this user+ticker (triggered by EXIT_ALERT).
+    Close an open BUY position for this user+ticker.
+
+    `require_enabled` gates the *agent's* exits on the auto-trade switch. A
+    user-initiated close passes False: refusing to let someone out of a position
+    because they had auto-trading switched off would trap them in it, and
+    `POST /trading/close/{ticker}` did exactly that — it returned success while
+    silently doing nothing for every manual-mode user.
+
     No-op if no open position exists.
     """
     try:
         settings = await _get_user_settings(user_id)
-        if not settings or not settings.enabled:
+        if require_enabled and (not settings or not settings.enabled):
             return
 
         db = await get_db()

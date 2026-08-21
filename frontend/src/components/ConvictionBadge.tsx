@@ -12,9 +12,9 @@ const label: Record<Conviction, string> = {
 }
 
 const color: Record<Conviction, string> = {
-  HIGH:   'text-[#f2600c]',
-  MEDIUM: 'text-[#83786a]',
-  LOW:    'text-[#83786a]',
+  HIGH:   'text-brand-500',
+  MEDIUM: 'text-[var(--color-fg-muted)]',
+  LOW:    'text-[var(--color-fg-muted)]',
 }
 
 export default function ConvictionBadge({ conviction, size = 'sm' }: ConvictionBadgeProps) {

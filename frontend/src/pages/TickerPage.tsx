@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   Activity,
@@ -23,6 +23,13 @@ import Layout from '../components/Layout'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
 import LoadingSpinner from '../components/LoadingSpinner'
+import FactorBreakdown from '../components/FactorBreakdown'
+import RiskPanel from '../components/RiskPanel'
+import OrderTicket from '../components/OrderTicket'
+
+// Split out: the charting library is ~200 kB and this is the only page that
+// draws one. Bundled eagerly it loaded on the dashboard too, which has no chart.
+const PriceChart = lazy(() => import('../components/PriceChart'))
 
 // ── Score gauge ───────────────────────────────────────────────────────────────
 
@@ -539,6 +546,63 @@ function ExportMenu({ data }: { data: AnalyzeResponse }) {
   )
 }
 
+// ── Analysis sources ──────────────────────────────────────────────────────────
+//
+// Three states, not two. "Dev data" exists because yfinance is licensed for
+// personal and development use only — badging it Live claimed a production
+// data pipeline this deployment does not have, which is a licensing question
+// rather than a cosmetic one. Anything sourced from yfinance is Dev until a
+// commercial provider replaces it.
+
+type SourceStatus = 'live' | 'dev' | 'planned'
+
+const SOURCE_LABEL: Record<SourceStatus, string> = {
+  live: 'Live',
+  dev: 'Dev data',
+  planned: 'Soon',
+}
+
+const SOURCE_BADGE: Record<SourceStatus, string> = {
+  live: 'bg-green-500/10 text-green-600 dark:text-green-400',
+  dev: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  planned: 'bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]',
+}
+
+function analystSource(data: AnalyzeResponse): { label: string; value: string; status: SourceStatus } {
+  // Read from the response rather than hardcoded here — the previous literal
+  // said "Claude Sonnet 4.6" while the server was calling something else.
+  if (!data.analyst_model) {
+    return {
+      label: 'AI Analyst',
+      value: 'Disabled on this server — signals come from the rule-based scoring path.',
+      status: 'planned',
+    }
+  }
+  return {
+    label: 'AI Analyst',
+    value: `${data.analyst_model} (Anthropic) — synthesises all the above into signal, thesis, price target, and research note.`
+      + (data.analyst_used
+        ? ''
+        : ' Not used for this report: the rule-based path produced it.'),
+    status: data.analyst_used ? 'live' : 'planned',
+  }
+}
+
+const SOURCES = (data: AnalyzeResponse): { label: string; value: string; status: SourceStatus }[] => [
+  { label: 'Price & Market Data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', status: 'dev' },
+  { label: 'Fundamentals', value: 'Yahoo Finance (yfinance) — P/E, revenue growth, FCF, debt/equity, analyst consensus', status: 'dev' },
+  { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines, scored locally with VADER NLP', status: 'live' },
+  { label: 'Macro Environment', value: 'FRED (Federal Reserve) — Fed funds rate, 10Y/2Y Treasuries, CPI, unemployment, VIX', status: 'live' },
+  { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call ratio across the full chain', status: 'dev' },
+  { label: 'Short Interest', value: 'Yahoo Finance — % of float shorted, days-to-cover, squeeze risk', status: 'dev' },
+  { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days', status: 'dev' },
+  analystSource(data),
+  { label: 'Real-time News NLP', value: 'NewsAPI + Reddit sentiment — broader news search and retail sentiment', status: 'planned' },
+  { label: 'SEC Filings', value: 'EDGAR — 10-K/10-Q filings and earnings call transcripts', status: 'planned' },
+  { label: 'Intraday & Options', value: 'Polygon.io — intraday price data and live options flow', status: 'planned' },
+  { label: 'ML Scoring Model', value: 'XGBoost — trained on signal history with real fundamental + sentiment features', status: 'planned' },
+]
+
 // ── Ticker Page ───────────────────────────────────────────────────────────────
 
 export default function TickerPage() {
@@ -630,6 +694,12 @@ export default function TickerPage() {
               </div>
             </div>
 
+            {/* Act on it. A verdict with no action was a dead end — you read
+                BUY, then went to the broker in another tab. */}
+            <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
+              <OrderTicket data={data} />
+            </div>
+
             {/* Refresh + Export */}
             <div className="mt-4 pt-4 border-t border-[var(--color-border)] flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 text-xs text-[var(--color-fg-muted)]">
@@ -687,6 +757,41 @@ export default function TickerPage() {
                 'text-red-500'
               }
             />
+          </div>
+
+          {/* Price action. Directly under the header because it is the first
+              thing anyone looks for on a stock page, and the product had no
+              chart at all until now. */}
+          <Section title="Price">
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center h-[320px]">
+                  <LoadingSpinner size="md" />
+                </div>
+              }
+            >
+              <PriceChart ticker={data.ticker} />
+            </Suspense>
+          </Section>
+
+          {/* Why this score, and why this verdict. These two answer the
+              questions the composite number raises and previously could not. */}
+          <div className="grid lg:grid-cols-2 gap-4">
+            {data.breakdown && (
+              <Section title="Score Breakdown">
+                <FactorBreakdown breakdown={data.breakdown} />
+              </Section>
+            )}
+            {data.risk && (
+              <Section title="Risk & Signal Gate">
+                <RiskPanel
+                  risk={data.risk}
+                  gate={data.gate}
+                  signal={data.signal}
+                  score={data.score}
+                />
+              </Section>
+            )}
           </div>
 
           {/* Thesis */}
@@ -788,75 +893,10 @@ export default function TickerPage() {
               Analysis Sources
             </h3>
             <div className="flex flex-col gap-3">
-              {[
-                {
-                  label: 'Price & Market Data',
-                  value: 'Yahoo Finance — 90 days OHLCV, current price, day change',
-                  status: 'live',
-                },
-                {
-                  label: 'Fundamentals',
-                  value: 'Yahoo Finance (yfinance) — P/E, revenue growth, FCF, debt/equity, analyst consensus',
-                  status: 'live',
-                },
-                {
-                  label: 'News & Sentiment',
-                  value: 'Finnhub API — last 7 days of headlines, scored locally with VADER NLP',
-                  status: 'live',
-                },
-                {
-                  label: 'Macro Environment',
-                  value: 'FRED (Federal Reserve) — Fed funds rate, 10Y/2Y Treasuries, CPI, unemployment, VIX',
-                  status: 'live',
-                },
-                {
-                  label: 'Options Flow',
-                  value: 'Yahoo Finance — nearest-expiry put/call ratio across the full chain',
-                  status: 'live',
-                },
-                {
-                  label: 'Short Interest',
-                  value: 'Yahoo Finance — % of float shorted, days-to-cover, squeeze risk',
-                  status: 'live',
-                },
-                {
-                  label: 'Insider Activity',
-                  value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days',
-                  status: 'live',
-                },
-                {
-                  label: 'AI Analyst',
-                  value: 'Claude Sonnet 4.6 (Anthropic) — synthesises all the above into signal, thesis, price target, and research note',
-                  status: 'live',
-                },
-                {
-                  label: 'Real-time News NLP',
-                  value: 'NewsAPI + Reddit sentiment — broader news search and retail sentiment',
-                  status: 'planned',
-                },
-                {
-                  label: 'SEC Filings',
-                  value: 'EDGAR — 10-K/10-Q filings and earnings call transcripts',
-                  status: 'planned',
-                },
-                {
-                  label: 'Intraday & Options',
-                  value: 'Polygon.io — intraday price data and live options flow',
-                  status: 'planned',
-                },
-                {
-                  label: 'ML Scoring Model',
-                  value: 'XGBoost — trained on signal history with real fundamental + sentiment features',
-                  status: 'planned',
-                },
-              ].map(({ label, value, status }) => (
+              {SOURCES(data).map(({ label, value, status }) => (
                 <div key={label} className="flex items-start gap-3">
-                  <span className={`mt-0.5 flex-shrink-0 text-[0.6rem] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${
-                    status === 'live'
-                      ? 'bg-green-500/10 text-green-500'
-                      : 'bg-[var(--color-border)]/60 text-[var(--color-fg-muted)]'
-                  }`}>
-                    {status === 'live' ? 'Live' : 'Soon'}
+                  <span className={`mt-0.5 flex-shrink-0 text-[0.6rem] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded ${SOURCE_BADGE[status]}`}>
+                    {SOURCE_LABEL[status]}
                   </span>
                   <div className="min-w-0">
                     <span className="text-xs font-medium text-[var(--color-fg)]">{label}</span>
@@ -865,9 +905,16 @@ export default function TickerPage() {
                 </div>
               ))}
             </div>
-            <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-4 pt-3 border-t border-[var(--color-border)]">
-              Scoring is a weighted composite of technical, fundamental, sentiment, macro, volatility, and alternative data sub-scores. When the AI analyst is enabled, Claude synthesises all inputs and may override the rule-based signal. See <code className="font-mono">docs/09-analysis-sources.md</code> for full methodology.
-            </p>
+            <div className="mt-4 pt-3 border-t border-[var(--color-border)] flex flex-col gap-2">
+              <p className="text-[0.65rem] text-[var(--color-fg-muted)]">
+                Scoring is a weighted composite of technical, fundamental, sentiment, macro, volatility, and alternative data sub-scores. When the AI analyst is enabled, Claude synthesises all inputs and may override the rule-based signal. See <code className="font-mono">docs/09-analysis-sources.md</code> for full methodology.
+              </p>
+              <p className="text-[0.65rem] text-amber-600 dark:text-amber-400">
+                <strong>Evaluation data.</strong> Rows marked <em>Dev data</em> are sourced from
+                yfinance, which is licensed for personal and development use only. Production
+                deployment requires a commercial market-data provider.
+              </p>
+            </div>
           </div>
         </div>
       ) : null}

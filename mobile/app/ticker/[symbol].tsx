@@ -13,6 +13,7 @@ import type { AnalyzeResponse, AlternativeData } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
+import Disclaimer from '../../src/components/Disclaimer'
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
@@ -559,32 +560,51 @@ export default function TickerScreen() {
             Analysis Sources
           </Text>
           <View style={{ gap: 10 }}>
-            {[
-              { label: 'Price & Market Data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', live: true },
-              { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines, VADER NLP', live: true },
-              { label: 'Macro Environment', value: 'FRED — Fed funds rate, Treasuries, CPI, unemployment, VIX', live: true },
-              { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call ratio', live: true },
-              { label: 'Short Interest', value: 'Yahoo Finance — % of float shorted, days-to-cover', live: true },
-              { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days', live: true },
-              { label: 'AI Analyst', value: 'Claude Sonnet 4.6 — synthesises all above into signal and thesis', live: true },
-              { label: 'SEC Filings', value: 'EDGAR — 10-K/10-Q filings', live: false },
-              { label: 'ML Scoring Model', value: 'XGBoost — trained on signal history', live: false },
-            ].map(({ label, value, live }) => (
-              <View key={label} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
-                <View style={{
-                  paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginTop: 1,
-                  backgroundColor: live ? 'rgba(34,197,94,0.1)' : `${C.border}80`,
-                }}>
-                  <Text style={{ fontSize: 8, fontWeight: '700', color: live ? '#16a34a' : C.fgMuted }}>
-                    {live ? 'Live' : 'Soon'}
-                  </Text>
+            {([
+              { label: 'Price & Market Data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', status: 'dev' },
+              { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines, VADER NLP', status: 'live' },
+              { label: 'Macro Environment', value: 'FRED — Fed funds rate, Treasuries, CPI, unemployment, VIX', status: 'live' },
+              { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call ratio', status: 'dev' },
+              { label: 'Short Interest', value: 'Yahoo Finance — % of float shorted, days-to-cover', status: 'dev' },
+              { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days', status: 'dev' },
+              // Model name comes from the response, not a literal — the old
+              // hardcoded string had drifted from what the server calls.
+              data.analyst_model
+                ? {
+                    label: 'AI Analyst',
+                    value: `${data.analyst_model} — synthesises all above into signal and thesis`,
+                    status: data.analyst_used ? 'live' : 'planned',
+                  }
+                : {
+                    label: 'AI Analyst',
+                    value: 'Disabled on this server — signals come from the rule-based path',
+                    status: 'planned',
+                  },
+              { label: 'SEC Filings', value: 'EDGAR — 10-K/10-Q filings', status: 'planned' },
+              { label: 'ML Scoring Model', value: 'XGBoost — trained on signal history', status: 'planned' },
+            ] as { label: string; value: string; status: 'live' | 'dev' | 'planned' }[]).map(({ label, value, status }) => {
+              const badge = {
+                live: { bg: 'rgba(34,197,94,0.12)', fg: '#16a34a', text: 'Live' },
+                dev: { bg: 'rgba(245,158,11,0.12)', fg: '#d97706', text: 'Dev data' },
+                planned: { bg: `${C.border}80`, fg: C.fgMuted, text: 'Soon' },
+              }[status]
+              return (
+                <View key={label} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                  <View style={{
+                    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginTop: 1,
+                    backgroundColor: badge.bg,
+                  }}>
+                    <Text style={{ fontSize: 8, fontWeight: '700', color: badge.fg }}>
+                      {badge.text}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: C.fg }}>{label}</Text>
+                    <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 1 }}>{value}</Text>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ fontSize: 12, fontWeight: '600', color: C.fg }}>{label}</Text>
-                  <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 1 }}>{value}</Text>
-                </View>
-              </View>
-            ))}
+              )
+            })}
           </View>
           <Text style={{
             fontSize: 10, color: C.fgMuted, marginTop: 12, paddingTop: 10,
@@ -592,7 +612,12 @@ export default function TickerScreen() {
           }}>
             Scoring is a weighted composite of technical, fundamental, sentiment, macro, volatility, and alternative data. See docs/09-analysis-sources.md for full methodology.
           </Text>
+          <Text style={{ fontSize: 10, color: '#d97706', marginTop: 6, lineHeight: 14 }}>
+            Evaluation data. Rows marked Dev data come from yfinance, licensed for personal
+            and development use only. Production requires a commercial data provider.
+          </Text>
         </View>
+        <Disclaimer />
       </ScrollView>
     </View>
   )

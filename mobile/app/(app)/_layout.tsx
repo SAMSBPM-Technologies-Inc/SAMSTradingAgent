@@ -1,21 +1,29 @@
 import React from 'react'
 import { Tabs } from 'expo-router'
 import { Home, BarChart2, User } from 'lucide-react-native'
+import { useTheme } from '../../src/lib/theme-context'
 
 const BRAND = '#f2600c'
-const MUTED = '#83786a'
-const BG = '#f5f2ed'
+
+/** Mirrors the web tokens in frontend/src/index.css — keep the two in step. */
+const PALETTE = {
+  light: { muted: '#83786a', surface: '#f5f2ed', border: '#e7e2d8' },
+  dark:  { muted: '#9a8f82', surface: '#141109', border: '#2a2420' },
+} as const
 
 export default function AppLayout() {
+  const { theme } = useTheme()
+  const c = PALETTE[theme]
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: BRAND,
-        tabBarInactiveTintColor: MUTED,
+        tabBarInactiveTintColor: c.muted,
         tabBarStyle: {
-          backgroundColor: BG,
-          borderTopColor: '#e7e2d8',
+          backgroundColor: c.surface,
+          borderTopColor: c.border,
           borderTopWidth: 1,
           height: 60,
           paddingBottom: 8,

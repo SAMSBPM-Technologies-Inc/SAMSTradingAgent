@@ -380,6 +380,10 @@ async def _execute_trades(ticker: str, signal: dict) -> None:
                     w["user_id"], ticker, score, current_price,
                     analyst_stop_loss=ao.get("stop_loss"),
                     analyst_price_target=ao.get("price_target"),
+                    # Drives the SEMI_AUTO gate: how strongly the analyst
+                    # believed this setup decides whether the agent may act
+                    # unattended or has to ask.
+                    conviction=ao.get("conviction"),
                 )
             return
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, Sliders, User, Wifi, WifiOff, X } from 'lucide-react'
 import { alertsApi, authApi, tradingApi } from '../lib/api'
-import type { AlertSettings, AutoTradeSettings, ScoringWeights } from '../types'
+import type { AlertSettings, AutoTradeSettings, ScoringWeights, TradingMode } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -205,6 +205,8 @@ function AlertSettingsCard() {
 
 const DEFAULT_TRADE_SETTINGS: AutoTradeSettings = {
   enabled: false,
+  mode: 'MANUAL',
+  auto_execute_conviction: 'HIGH',
   paper_trading: true,
   min_signal_score: 0.75,
   position_size_pct: 0.05,
@@ -212,6 +214,29 @@ const DEFAULT_TRADE_SETTINGS: AutoTradeSettings = {
   max_daily_loss_pct: 0.02,
   allowed_tickers: [],
 }
+
+/**
+ * How much autonomy the agent gets. Presented as a ladder rather than a
+ * switch — the product previously offered only the top rung, and nobody funds
+ * an account to a fully autonomous agent on day one.
+ */
+const MODE_OPTIONS: { value: TradingMode; label: string; blurb: string }[] = [
+  {
+    value: 'MANUAL',
+    label: 'Manual',
+    blurb: 'The agent proposes every entry and places none. You approve each one.',
+  },
+  {
+    value: 'SEMI_AUTO',
+    label: 'Semi-auto',
+    blurb: 'The agent places high-conviction entries itself and queues the rest for you.',
+  },
+  {
+    value: 'AUTO',
+    label: 'Auto',
+    blurb: 'The agent places every entry that clears its risk guards, unattended.',
+  },
+]
 
 function AutoTradingCard() {
   const [settings, setSettings] = useState<AutoTradeSettings>(DEFAULT_TRADE_SETTINGS)
@@ -299,6 +324,66 @@ function AutoTradingCard() {
 
         {settings.enabled && (
           <>
+            {/* Autonomy ladder */}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-[var(--color-fg)]">Autonomy</span>
+              <div className="flex flex-col gap-2">
+                {MODE_OPTIONS.map((opt) => (
+                  <label
+                    key={opt.value}
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer
+                                transition-colors ${
+                      settings.mode === opt.value
+                        ? 'border-brand-500 bg-brand-500/5'
+                        : 'border-[var(--color-border)] hover:bg-[var(--color-bg)]'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="trading-mode"
+                      checked={settings.mode === opt.value}
+                      onChange={() => setSettings((s) => ({ ...s, mode: opt.value }))}
+                      className="accent-brand-500 mt-0.5"
+                    />
+                    <div className="min-w-0">
+                      <span className="text-sm text-[var(--color-fg)]">{opt.label}</span>
+                      <p className="text-xs text-[var(--color-fg-muted)] mt-0.5 leading-relaxed">
+                        {opt.blurb}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {settings.mode === 'SEMI_AUTO' && (
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="auto-conviction"
+                  className="text-sm font-medium text-[var(--color-fg)]"
+                >
+                  Place unattended at conviction
+                </label>
+                <select
+                  id="auto-conviction"
+                  value={settings.auto_execute_conviction}
+                  onChange={(e) => setSettings((s) => ({
+                    ...s,
+                    auto_execute_conviction: e.target.value as AutoTradeSettings['auto_execute_conviction'],
+                  }))}
+                  className="input text-sm"
+                >
+                  <option value="HIGH">High only</option>
+                  <option value="MEDIUM">Medium and above</option>
+                  <option value="LOW">Any conviction</option>
+                </select>
+                <p className="text-xs text-[var(--color-fg-muted)]">
+                  Anything weaker goes to your approval queue on the Orders page. An entry
+                  with no conviction attached — the analyst may not have run — always queues.
+                </p>
+              </div>
+            )}
+
             {/* Paper / Live */}
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-[var(--color-fg)]">Trading mode</span>
@@ -423,12 +508,18 @@ function AutoTradingCard() {
 
 // ── Scoring Weights section ────────────────────────────────────────────────────
 
+/**
+ * Must mirror `backend/app/config.py` (weight_technical … weight_alternative_data).
+ * These used to disagree — Reset handed out 0.25/0.15/0.20/0.15/0.10/0.15 while
+ * the server ran 0.30/0.20/0.20/0.15/0.00/0.15 — so "Reset" silently moved the
+ * user off the engine's own defaults.
+ */
 const DEFAULT_WEIGHTS: ScoringWeights = {
-  technical: 0.25,
-  fundamental: 0.15,
+  technical: 0.30,
+  fundamental: 0.20,
   sentiment: 0.20,
   macro: 0.15,
-  volatility: 0.10,
+  volatility: 0.00,
   catalyst: 0.15,
   alternative_data: 0.10,
 }
@@ -441,6 +532,13 @@ const WEIGHT_LABELS: Record<keyof ScoringWeights, string> = {
   volatility: 'Volatility',
   catalyst: 'Catalyst',
   alternative_data: 'Alternative Data',
+}
+
+/** Only where the number needs defending. Most weights are self-explanatory. */
+const WEIGHT_HINTS: Partial<Record<keyof ScoringWeights, string>> = {
+  volatility:
+    'Defaults to 0 — volatility is priced at the risk gate, which vetoes BUY above a '
+    + 'risk score of 6. Raising this charges volatility twice.',
 }
 
 function ScoringWeightsCard() {
@@ -498,15 +596,21 @@ function ScoringWeightsCard() {
         {BASE_KEYS.map((key) => (
           <div key={key} className="flex flex-col gap-1">
             <div className="flex justify-between text-sm">
-              <label className="text-[var(--color-fg)]">{WEIGHT_LABELS[key]}</label>
+              <label htmlFor={`weight-${key}`} className="text-[var(--color-fg)]">
+                {WEIGHT_LABELS[key]}
+              </label>
               <span className="font-semibold text-brand-500">{(weights[key] * 100).toFixed(0)}%</span>
             </div>
             <input
+              id={`weight-${key}`}
               type="range" min={0} max={1} step={0.01}
               value={weights[key]}
               onChange={(e) => update(key, parseFloat(e.target.value))}
               className="w-full accent-brand-500"
             />
+            {WEIGHT_HINTS[key] && (
+              <p className="text-xs text-[var(--color-fg-muted)]">{WEIGHT_HINTS[key]}</p>
+            )}
           </div>
         ))}
 

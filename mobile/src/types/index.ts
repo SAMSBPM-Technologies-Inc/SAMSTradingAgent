@@ -106,6 +106,10 @@ export interface AnalyzeResponse {
   alternative_data?: AlternativeData
   current_price?: number
   day_change_pct?: number
+  /** Whether the AI analyst actually ran for this document, or the rule-based path did. */
+  analyst_used?: boolean
+  /** The model this server is configured to call. Null when the analyst is disabled. */
+  analyst_model?: string | null
 }
 
 export interface PerformanceResponse {

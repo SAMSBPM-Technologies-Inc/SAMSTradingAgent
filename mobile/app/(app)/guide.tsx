@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { View, Text, Pressable, ScrollView } from 'react-native'
 import { ChevronDown, ChevronUp } from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import Disclaimer from '../../src/components/Disclaimer'
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
@@ -230,6 +231,7 @@ export default function GuideScreen() {
             </Section>
           </>
         )}
+        <Disclaimer />
       </ScrollView>
     </SafeAreaView>
   )

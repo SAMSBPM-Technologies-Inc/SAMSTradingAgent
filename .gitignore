@@ -55,3 +55,7 @@ mobile/.expo
 docs/
 PLAN.md
 logo-assets/
+
+# Claude Code local settings (machine-specific, not shared)
+.claude/settings.local.json
+.claude/settings.local*.json

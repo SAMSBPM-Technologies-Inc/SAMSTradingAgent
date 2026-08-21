@@ -13,17 +13,23 @@ from datetime import datetime
 from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.db import COLL_TRADES, COLL_USERS, get_db
+# Aliased: this module defines a route handler called `get_settings` (the
+# auto-trade settings endpoint), which shadows the config accessor otherwise.
+from app.config import get_settings as get_env_settings
+from app.db import COLL_SIGNALS, COLL_TRADES, COLL_USERS, get_db
 from app.dependencies import get_current_user
 from app.models.trade import (
     AccountSummaryResponse,
     AutoTradeSettings,
     AutoTradeSettingsResponse,
+    ManualOrderRequest,
+    OrderPlacementResponse,
+    ProposalResponse,
     TradeResponse,
     TradeStatus,
 )
 from app.services import broker as ibkr
-from app.services.trade_manager import execute_exit
+from app.services.trade_manager import execute_exit, execute_manual_entry
 from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/trading", tags=["trading"])
@@ -271,5 +277,253 @@ async def close_position(
             avg_cost = pos.get("avg_cost")
             current_price = avg_cost  # best estimate without live quote
 
-    await execute_exit(user_id, ticker.upper(), current_price, trigger="MANUAL_CLOSE")
+    # require_enabled=False: this is the user asking to get out, not the agent
+    # acting. Gating it on the auto-trade switch meant every manual-mode user
+    # got "close_order_submitted" while nothing was submitted.
+    await execute_exit(
+        user_id, ticker.upper(), current_price,
+        trigger="MANUAL_CLOSE", require_enabled=False,
+    )
+    logger.info("manual_close_requested", user_id=user_id, ticker=ticker.upper())
     return {"status": "close_order_submitted", "ticker": ticker.upper()}
+
+
+# ── Manual orders ─────────────────────────────────────────────────────────────
+
+@router.post("/order", response_model=OrderPlacementResponse, summary="Place a user-initiated order")
+async def place_order(
+    body: ManualOrderRequest,
+    current_user: dict = Depends(get_current_user),
+) -> OrderPlacementResponse:
+    """
+    Place an order the user chose, subject to every guard the agent obeys.
+
+    The client's `qty` and `limit_price` are treated as requests. The server
+    re-derives the fundable quantity from live account state and takes the
+    smaller of the two, so position sizing and the cash reserve cannot be
+    escaped by editing a form field.
+
+    Live-money orders additionally require `confirm_live`, which the UI only
+    sets after a typed confirmation.
+    """
+    user_id = str(current_user["_id"])
+    ticker = body.ticker.upper().strip()
+    env = get_env_settings()
+
+    if body.action != "BUY":
+        # SELL is a position close, and closing is not symmetrical with opening:
+        # it must cancel the working bracket first and size to what the broker
+        # actually holds. /trading/close/{ticker} does that.
+        raise HTTPException(
+            status_code=400,
+            detail="Use POST /trading/close/{ticker} to exit a position.",
+        )
+
+    # ── Guard: live-money confirmation ────────────────────────────────────────
+    if env.is_live_trading and not body.confirm_live:
+        raise HTTPException(
+            status_code=428,
+            detail="This account trades live money. Re-submit with confirm_live=true.",
+        )
+
+    db = await get_db()
+
+    # ── Idempotency ───────────────────────────────────────────────────────────
+    # A double-clicked Buy button must not buy twice. The unique index on
+    # (user_id, idempotency_key) is the real guarantee; this lookup just turns
+    # the second request into a friendly answer instead of a 500.
+    if body.idempotency_key:
+        prior = await db[COLL_TRADES].find_one({
+            "user_id": user_id, "idempotency_key": body.idempotency_key,
+        })
+        if prior:
+            logger.info(
+                "manual_order_deduplicated",
+                user_id=user_id, ticker=ticker, key=body.idempotency_key,
+            )
+            return OrderPlacementResponse(
+                placed=prior.get("status") in TradeStatus.OPEN,
+                status=prior.get("status", TradeStatus.PENDING),
+                ticker=prior.get("ticker", ticker),
+                action=prior.get("action", "BUY"),
+                qty=prior.get("qty", 0),
+                limit_price=prior.get("limit_price", 0.0),
+                order_id=prior.get("order_id"),
+                stop_loss=prior.get("stop_loss"),
+                take_profit=prior.get("take_profit"),
+                is_paper=prior.get("is_paper", True),
+                trade_id=str(prior["_id"]),
+                reason="Already submitted — returning the original order.",
+                duplicate=True,
+            )
+
+    # Reuse the analyst's own protective levels when we have them, exactly as
+    # the automated path does, rather than always falling back to percentages.
+    signal_doc = await db[COLL_SIGNALS].find_one(
+        {"ticker": ticker}, {"analyst_output": 1, "score": 1}
+    ) or {}
+    ao = signal_doc.get("analyst_output") or {}
+
+    result = await execute_manual_entry(
+        user_id, ticker,
+        requested_qty=body.qty,
+        limit_price=body.limit_price,
+        analyst_stop_loss=ao.get("stop_loss"),
+        analyst_price_target=ao.get("price_target"),
+        signal_score=signal_doc.get("score"),
+    )
+
+    if result.get("trade_id") and body.idempotency_key:
+        await db[COLL_TRADES].update_one(
+            {"_id": ObjectId(result["trade_id"])},
+            {"$set": {"idempotency_key": body.idempotency_key}},
+        )
+
+    logger.info(
+        "manual_order_result",
+        user_id=user_id, ticker=ticker, placed=result.get("placed"),
+        qty=result.get("qty"), status=result.get("status"),
+        live=env.is_live_trading,
+    )
+    return OrderPlacementResponse(action="BUY", **{
+        k: v for k, v in result.items() if k != "action"
+    })
+
+
+# ── Proposals ─────────────────────────────────────────────────────────────────
+
+@router.get("/proposals", response_model=list[ProposalResponse], summary="Entries awaiting your approval")
+async def list_proposals(current_user: dict = Depends(get_current_user)) -> list[ProposalResponse]:
+    """
+    Entries the agent wanted to take but its mode does not let it take alone.
+
+    Nothing here is committed and none of it consumes a position slot — a
+    proposal is a recommendation with the arithmetic already done.
+    """
+    db = await get_db()
+    docs = await db[COLL_TRADES].find({
+        "user_id": str(current_user["_id"]),
+        "status": TradeStatus.PROPOSED,
+    }).sort("opened_at", -1).to_list(length=100)
+
+    return [
+        ProposalResponse(
+            id=str(d["_id"]),
+            ticker=d.get("ticker", ""),
+            action=d.get("action", "BUY"),
+            qty=d.get("qty", 0),
+            limit_price=d.get("limit_price", 0.0),
+            stop_loss=d.get("stop_loss"),
+            take_profit=d.get("take_profit"),
+            signal_score=d.get("signal_score"),
+            conviction=d.get("conviction"),
+            reason=d.get("reason"),
+            proposed_at=d.get("opened_at", datetime.utcnow()),
+            is_paper=d.get("is_paper", True),
+        )
+        for d in docs
+    ]
+
+
+@router.post(
+    "/proposals/{proposal_id}/approve",
+    response_model=OrderPlacementResponse,
+    summary="Approve a proposed entry and place it",
+)
+async def approve_proposal(
+    proposal_id: str,
+    confirm_live: bool = False,
+    current_user: dict = Depends(get_current_user),
+) -> OrderPlacementResponse:
+    """
+    Place a proposed entry.
+
+    The stored quantity and price are re-validated rather than replayed: a
+    proposal can sit for hours, and the account, the price, and the position
+    count may all have moved since it was written.
+    """
+    user_id = str(current_user["_id"])
+    env = get_env_settings()
+
+    if env.is_live_trading and not confirm_live:
+        raise HTTPException(
+            status_code=428,
+            detail="This account trades live money. Re-submit with confirm_live=true.",
+        )
+
+    db = await get_db()
+    try:
+        oid = ObjectId(proposal_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid proposal id.")
+
+    # Claim it atomically. Two clicks on Approve must not place two orders, and
+    # a status check followed by an update leaves exactly that window open.
+    claimed = await db[COLL_TRADES].find_one_and_update(
+        {"_id": oid, "user_id": user_id, "status": TradeStatus.PROPOSED},
+        {"$set": {"status": TradeStatus.CANCELLED,
+                  "reason": "Superseded by the approved order",
+                  "closed_at": datetime.utcnow()}},
+    )
+    if not claimed:
+        raise HTTPException(
+            status_code=404,
+            detail="Proposal not found, or it has already been acted on.",
+        )
+
+    result = await execute_manual_entry(
+        user_id, claimed.get("ticker", ""),
+        requested_qty=claimed.get("qty"),
+        analyst_stop_loss=claimed.get("stop_loss"),
+        analyst_price_target=claimed.get("take_profit"),
+        signal_score=claimed.get("signal_score"),
+        # Kept distinct from a hand-picked order: the agent chose this ticker,
+        # but a human filtered the set, so it is not a clean read of either.
+        source="PROPOSAL_APPROVED",
+    )
+
+    if not result.get("placed"):
+        # Put it back — a refused approval should leave the proposal actionable
+        # rather than quietly consuming it.
+        await db[COLL_TRADES].update_one(
+            {"_id": oid},
+            {"$set": {"status": TradeStatus.PROPOSED, "closed_at": None,
+                      "reason": result.get("reason") or "Could not be placed"}},
+        )
+
+    logger.info(
+        "proposal_approved",
+        user_id=user_id, proposal_id=proposal_id,
+        ticker=claimed.get("ticker"), placed=result.get("placed"),
+    )
+    return OrderPlacementResponse(action="BUY", **{
+        k: v for k, v in result.items() if k != "action"
+    })
+
+
+@router.post("/proposals/{proposal_id}/decline", summary="Decline a proposed entry")
+async def decline_proposal(
+    proposal_id: str,
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    """Reject a proposal. Terminal, and explicitly not a trade outcome."""
+    db = await get_db()
+    try:
+        oid = ObjectId(proposal_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid proposal id.")
+
+    updated = await db[COLL_TRADES].find_one_and_update(
+        {"_id": oid, "user_id": str(current_user["_id"]), "status": TradeStatus.PROPOSED},
+        {"$set": {"status": TradeStatus.DECLINED, "closed_at": datetime.utcnow(),
+                  "reason": "Declined by user"}},
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Proposal not found, or already acted on.")
+
+    logger.info(
+        "proposal_declined",
+        user_id=str(current_user["_id"]), proposal_id=proposal_id,
+        ticker=updated.get("ticker"),
+    )
+    return {"status": "declined", "ticker": updated.get("ticker", "")}

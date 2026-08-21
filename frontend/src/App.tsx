@@ -9,6 +9,10 @@ import PerformancePage from './pages/PerformancePage'
 import ProfilePage from './pages/ProfilePage'
 import GuidePage from './pages/GuidePage'
 import HoldingsPage from './pages/HoldingsPage'
+import SearchPage from './pages/SearchPage'
+import CalibrationPage from './pages/CalibrationPage'
+import OrdersPage from './pages/OrdersPage'
+import { ToastProvider } from './lib/toast-context'
 import LoadingSpinner from './components/LoadingSpinner'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -49,6 +53,17 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      {/* Declared before /ticker/:symbol so the mobile "Analyze" tab resolves
+          to the lookup screen rather than being read as a symbol named
+          "search" — which is exactly what it used to do. */}
+      <Route
+        path="/search"
+        element={
+          <ProtectedRoute>
+            <SearchPage />
+          </ProtectedRoute>
+        }
+      />
       <Route
         path="/ticker/:symbol"
         element={
@@ -62,6 +77,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <PerformancePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/calibration"
+        element={
+          <ProtectedRoute>
+            <CalibrationPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/orders"
+        element={
+          <ProtectedRoute>
+            <OrdersPage />
           </ProtectedRoute>
         }
       />
@@ -93,7 +124,9 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <AppRoutes />
+        <ToastProvider>
+          <AppRoutes />
+        </ToastProvider>
       </AuthProvider>
     </ThemeProvider>
   )

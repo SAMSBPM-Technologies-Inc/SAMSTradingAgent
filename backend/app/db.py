@@ -26,6 +26,38 @@ async def connect_db() -> None:
     await _client.admin.command("ping")
     logger.info("mongodb_connected", db=settings.mongodb_db_name)
     await _ensure_indexes()
+    await _migrate_trading_mode()
+
+
+async def _migrate_trading_mode() -> None:
+    """
+    Preserve existing autonomy when `mode` was introduced.
+
+    `AutoTradeSettings.mode` defaults to MANUAL, which is the right default for
+    a new account but the wrong outcome for an existing one: anybody already
+    running with `enabled=True` was running unattended, and letting them load as
+    MANUAL would stop their trading silently — the worst way for a live system
+    to change behaviour.
+
+    Writing AUTO explicitly for those accounts keeps them exactly as they were
+    and leaves the safe default in place for everyone new. Idempotent: the
+    filter only matches documents that have no `mode` yet.
+    """
+    db = await get_db()
+    result = await db[COLL_USERS].update_many(
+        {
+            "auto_trade_settings.enabled": True,
+            "auto_trade_settings.mode": {"$exists": False},
+        },
+        {"$set": {"auto_trade_settings.mode": "AUTO"}},
+    )
+    if result.modified_count:
+        logger.info(
+            "trading_mode_migrated",
+            accounts=result.modified_count,
+            mode="AUTO",
+            reason="preserved pre-existing unattended trading",
+        )
 
 
 async def _ensure_indexes() -> None:
@@ -59,6 +91,14 @@ async def _ensure_indexes() -> None:
     await db[COLL_TRADES].create_index([("user_id", 1), ("ticker", 1)], background=True)
     await db[COLL_TRADES].create_index("opened_at", background=True)
     await db[COLL_TRADES].create_index("status", background=True)
+    # Idempotency for user-initiated orders. This index — not the lookup in the
+    # route — is what actually prevents a double-clicked Buy from buying twice:
+    # two concurrent requests can both read "no prior order" before either
+    # writes. Sparse so the automated path, which carries no key, is unaffected.
+    await db[COLL_TRADES].create_index(
+        [("user_id", 1), ("idempotency_key", 1)],
+        unique=True, sparse=True, background=True,
+    )
     logger.info("mongodb_indexes_ensured")
 
 

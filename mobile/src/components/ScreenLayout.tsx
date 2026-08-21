@@ -1,6 +1,7 @@
 import React from 'react'
 import { ScrollView, KeyboardAvoidingView, Platform } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import Disclaimer from './Disclaimer'
 
 interface Props {
   children: React.ReactNode
@@ -18,6 +19,7 @@ export default function ScreenLayout({ children, avoidKeyboard = false }: Props)
         showsVerticalScrollIndicator={false}
       >
         {children}
+        <Disclaimer />
       </ScrollView>
     </SafeAreaView>
   )

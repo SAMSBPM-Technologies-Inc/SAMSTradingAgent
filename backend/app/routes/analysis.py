@@ -4,6 +4,7 @@ GET /ticker/search?q=     — search ticker symbols via Finnhub
 GET /backtest             — backtest stub
 """
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,9 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_SIGNALS, get_db
 from app.dependencies import get_current_user
-from app.models.stock import AnalyzeResponse
+from app.models.stock import AnalyzeResponse, ScoreBreakdown, SignalGate
 from app.services.pipeline import run_pipeline
-from app.services.scoring import compute_personalized_score
+from app.services.risk_engine import RISK_MAX_FOR_BUY
+from app.services.scoring import compute_personalized_score, explain_score
+from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["analysis"])
@@ -102,18 +105,45 @@ async def backtest(
 
 
 async def _personalized_response(doc: dict, current_user: dict, db) -> AnalyzeResponse:
-    """Apply per-user weights before converting signal doc to response."""
+    """
+    Apply per-user weights, then attach the attribution behind the number.
+
+    The feature document is now fetched unconditionally. It used to be read only
+    when the user had custom weights, which meant the default-weight majority
+    got a bare composite score with nothing explaining it.
+    """
     user_weights = current_user.get("scoring_weights")
-    if user_weights:
-        feat = await db[COLL_FEATURES].find_one({"ticker": doc["ticker"]})
-        if feat:
-            feat["risk"] = doc.get("risk", {})
-            score, signal = compute_personalized_score(feat, user_weights)
-            doc = {**doc, "score": score, "signal": signal}
-    return _doc_to_response(doc)
+    feat = await db[COLL_FEATURES].find_one({"ticker": doc["ticker"]})
+
+    if feat and user_weights:
+        feat["risk"] = doc.get("risk", {})
+        score, signal = compute_personalized_score(feat, user_weights)
+        doc = {**doc, "score": score, "signal": signal}
+
+    breakdown = explain_score(feat, user_weights) if feat else None
+    return _doc_to_response(doc, breakdown=breakdown)
 
 
-def _doc_to_response(doc: dict) -> AnalyzeResponse:
+def _build_gate(doc: dict) -> SignalGate:
+    """
+    The thresholds behind the verdict, read from the engine rather than restated.
+
+    The dashboard's setup legend hardcodes its thresholds in TSX and will drift;
+    this exists so the ticker page does not repeat that mistake.
+    """
+    score = float(doc.get("score", 0.0) or 0.0)
+    risk = doc.get("risk") or {}
+    risk_score = float(risk.get("risk_score", 10.0) or 0.0)
+    return SignalGate(
+        buy_threshold=BUY_THRESHOLD,
+        sell_threshold=SELL_THRESHOLD,
+        risk_max_for_buy=RISK_MAX_FOR_BUY,
+        score_passes_buy=score > BUY_THRESHOLD,
+        risk_passes_buy=risk_score < RISK_MAX_FOR_BUY,
+    )
+
+
+def _doc_to_response(doc: dict, breakdown: Optional[dict] = None) -> AnalyzeResponse:
     risk = doc.get("risk", {})
     generated_at = doc.get("generated_at", datetime.now(tz=timezone.utc))
     if isinstance(generated_at, datetime) and generated_at.tzinfo is None:
@@ -142,4 +172,22 @@ def _doc_to_response(doc: dict) -> AnalyzeResponse:
         alternative_data=doc.get("alternative_data"),
         current_price=doc.get("current_price"),
         day_change_pct=doc.get("day_change_pct"),
+        analyst_used=bool(doc.get("analyst_used", False)),
+        analyst_model=_analyst_model(),
+        breakdown=ScoreBreakdown(**breakdown) if breakdown else None,
+        gate=_build_gate(doc),
     )
+
+
+def _analyst_model() -> Optional[str]:
+    """
+    The model this server would call, or None when the analyst is switched off.
+
+    Reported from config rather than from the stored document: the pipeline
+    never persisted which model produced a given report, and a stale name is
+    worse than an honest "the analyst did not run" (`analyst_used`).
+    """
+    settings = get_settings()
+    if not settings.enable_ai_analyst:
+        return None
+    return settings.analyst_model

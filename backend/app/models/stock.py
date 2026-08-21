@@ -63,6 +63,52 @@ class RiskAssessment(BaseModel):
     explanation: str
 
 
+# ── Score attribution ─────────────────────────────────────────────────────────
+
+class FactorContribution(BaseModel):
+    """One sub-score and the share of the composite it supplied."""
+    key: str
+    label: str
+    score: float = Field(..., description="Sub-score, 0–1")
+    weight: float
+    contribution: float = Field(
+        ...,
+        description="Points of the composite from this factor. Signed for the "
+                    "alternative-data modifier, which can drag the score down.",
+    )
+
+
+class ScoreBreakdown(BaseModel):
+    """
+    Where the composite came from. The sub-scores were always computed and
+    stored; nothing returned them until this model existed.
+    """
+    method: str = Field(..., description="'weighted' or 'xgboost'")
+    attributable: bool = Field(
+        ...,
+        description="False on the XGBoost path, where the weights did not "
+                    "produce the score and a weighted decomposition would be "
+                    "a fabrication.",
+    )
+    personalized: bool = Field(..., description="Whether the user's own weights were applied")
+    factors: list[FactorContribution]
+    alternative_data: Optional[FactorContribution] = None
+    base_total: float
+    composite: float
+
+
+class SignalGate(BaseModel):
+    """
+    The thresholds behind the verdict, so the UI can explain a signal instead of
+    restating the rule in its own hardcoded copy.
+    """
+    buy_threshold: float
+    sell_threshold: float
+    risk_max_for_buy: float
+    score_passes_buy: bool
+    risk_passes_buy: bool
+
+
 # ── Signal ────────────────────────────────────────────────────────────────────
 
 SignalType = Literal["BUY", "SELL", "HOLD"]
@@ -113,6 +159,17 @@ class AnalyzeResponse(BaseModel):
     # Current price snapshot
     current_price: Optional[float] = None
     day_change_pct: Optional[float] = None
+    # Provenance. The UI used to hardcode a model name in TSX and drifted from
+    # what the server actually calls; these two carry the truth instead.
+    # analyst_used is per-document (the analyst is gated and falls back to the
+    # rule-based path), analyst_model is this server's configured model.
+    analyst_used: bool = False
+    analyst_model: Optional[str] = None
+    # Score attribution and the gate behind the verdict. Optional because the
+    # feature document is not always reachable (a signal can outlive the
+    # features it was built from), and a missing breakdown is not an error.
+    breakdown: Optional[ScoreBreakdown] = None
+    gate: Optional[SignalGate] = None
 
 
 class AnalystReport(BaseModel):

@@ -13,6 +13,7 @@ import { alertsApi, authApi, tradingApi } from '../../src/lib/api'
 import type { AlertSettings, AutoTradeSettings } from '../../src/types'
 import { useAuth } from '../../src/lib/auth-context'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
+import Disclaimer from '../../src/components/Disclaimer'
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
@@ -516,7 +517,7 @@ export default function ProfileScreen() {
     if (!trimmed || trimmed === user?.display_name) { cancelEdit(); return }
     setIsSaving(true); setSaveError(null)
     try {
-      await authApi.updateProfile(trimmed)
+      await authApi.updateProfile({ display_name: trimmed })
       setSavedOk(true)
       setIsEditing(false)
       setTimeout(() => setSavedOk(false), 2500)
@@ -670,6 +671,7 @@ export default function ProfileScreen() {
             <Text style={{ color: '#ef4444', fontWeight: '600', fontSize: 14 }}>Sign Out</Text>
           </Pressable>
         </View>
+        <Disclaimer />
       </ScrollView>
     </SafeAreaView>
   )

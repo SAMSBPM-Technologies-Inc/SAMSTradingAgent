@@ -7,6 +7,7 @@ import type { PerformanceResponse, Signal, SignalRecord, Conviction } from '../.
 import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
+import Disclaimer from '../../src/components/Disclaimer'
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
@@ -375,6 +376,7 @@ export default function PerformanceScreen() {
             )}
           </>
         )}
+        <Disclaimer />
       </ScrollView>
     </SafeAreaView>
   )
