@@ -228,8 +228,16 @@ def compute_features_for_df(df: pd.DataFrame, macro: dict) -> pd.DataFrame:
         # Catalyst sub-score: volume spike only — must match catalyst.py inference logic.
         # catalyst.py deliberately uses the same formula. If catalyst.py is updated
         # to multi-component scoring, retrain this model first.
-        vol_spike = _clamp((volume_anomaly - 1.0) / 2.0) if volume_anomaly > 1 else 0.0
-        catalyst_score = vol_spike
+        # Must stay identical to services/catalyst.py::compute_catalyst_score —
+        # training on a differently-shaped feature than inference sees would
+        # mislabel every row. Average volume pivots at NEUTRAL (0.5), not zero:
+        # the previous curve scored an ordinary trading day as maximally
+        # bearish, worse than having no volume data at all.
+        if volume_anomaly >= 1.0:
+            catalyst_score = 0.5 + _clamp((volume_anomaly - 1.0) / 4.0, 0.0, 0.5)
+        else:
+            catalyst_score = 0.4 + 0.1 * _clamp(volume_anomaly, 0.0, 1.0)
+        catalyst_score = _clamp(catalyst_score)
 
         # Macro from FRED (look up nearest historical value)
         vix_val   = _get_macro_val(macro, "vix",  idx, default=20.0)
