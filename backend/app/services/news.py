@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app.config import get_settings
+from app.services.finance_lexicon import build_analyzer, phrase_adjustment
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -106,20 +107,54 @@ async def _fetch_raw_articles(ticker: str, api_key: str, days: int) -> list[dict
     return resp.json() or []
 
 
-def _vader_sentiment(ticker: str, headlines: list[str]) -> dict:
-    """Run VADER on the headline list and return a sentiment dict."""
-    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+#: Headline count at which the score is trusted in full. Below it the result is
+#: pulled toward neutral in proportion to the evidence behind it — see below.
+_FULL_COVERAGE_ARTICLES = 6
 
-    sia = SentimentIntensityAnalyzer()
-    scores = [sia.polarity_scores(h)["compound"] for h in headlines]
+
+def _headline_compound(analyzer, headline: str) -> float:
+    """
+    VADER's compound for one headline, corrected for financial phrasing.
+
+    VADER scores token by token, so it cannot see that "raises guidance" and
+    "cuts guidance" are opposites, or that "profit warning" is bearish despite
+    containing "profit". The phrase adjustment supplies that, and the sum is
+    re-clamped to VADER's own [-1, 1] range so downstream maths is unchanged.
+    """
+    base = analyzer.polarity_scores(headline)["compound"]
+    adjusted = base + phrase_adjustment(headline) / 4.0   # phrases are on the ±4 valence scale
+    return max(-1.0, min(1.0, adjusted))
+
+
+def _vader_sentiment(ticker: str, headlines: list[str]) -> dict:
+    """
+    Sentiment for *ticker* from its headlines, with a financial vocabulary and
+    coverage weighting.
+
+    Coverage weighting
+    ──────────────────
+    `article_count` and `buzz` were computed here and then never consumed, so a
+    score derived from a single headline was trusted exactly as much as one
+    derived from thirty. On a thin news day one stray headline could set 0.20 of
+    a ticker's composite on its own.
+
+    `_fundamental_score` already solved this: blend the measured value toward
+    0.5 in proportion to how much evidence supports it. The same treatment
+    applies here, so confidence tracks evidence rather than luck.
+    """
+    analyzer = build_analyzer()
+    scores = [_headline_compound(analyzer, h) for h in headlines]
 
     # compound is -1 to +1; normalise to 0–1
     avg_compound = sum(scores) / len(scores)
-    normalised = round((avg_compound + 1) / 2, 4)   # -1→0, 0→0.5, +1→1
+    raw = (avg_compound + 1) / 2                      # -1→0, 0→0.5, +1→1
+
+    total = len(scores)
+    coverage = min(total / _FULL_COVERAGE_ARTICLES, 1.0)
+    normalised = round(raw * coverage + 0.5 * (1.0 - coverage), 4)
 
     bullish = sum(1 for s in scores if s > 0.05)
     bearish = sum(1 for s in scores if s < -0.05)
-    total = len(scores)
 
     bullish_pct = round(bullish / total, 4)
     bearish_pct = round(bearish / total, 4)
@@ -129,17 +164,21 @@ def _vader_sentiment(ticker: str, headlines: list[str]) -> dict:
         "vader_sentiment_ok",
         ticker=ticker,
         score=normalised,
+        raw_score=round(raw, 4),
+        coverage=round(coverage, 4),
         articles=total,
         bullish_pct=bullish_pct,
         bearish_pct=bearish_pct,
     )
     return {
         "score": normalised,
+        "raw_score": round(raw, 4),      # pre-coverage, for diagnosis
+        "coverage": round(coverage, 4),
         "article_count": total,
         "bullish_pct": bullish_pct,
         "bearish_pct": bearish_pct,
         "buzz": buzz,
-        "source": "finnhub+vader",
+        "source": "finnhub+vader+finlex",
     }
 
 
