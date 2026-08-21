@@ -15,6 +15,12 @@ or stall the pipeline; it is what produced the constant 429s under yfinance.
 So `fetch_fundamentals` serves whatever is cached and `refresh_fundamentals`
 repopulates it slowly in the background (see the daily scheduler job).
 
+One exception, and only one: a ticker with a *completely empty* cache schedules
+a detached background fetch (`_schedule_cold_start_backfill`). It still returns
+the neutral stub to its caller — nothing is awaited — so the read stays
+non-blocking. This fires once per ticker rather than once per read, and is
+cooldown-guarded, so it cannot become the per-read fetching described above.
+
 The consequence of getting this wrong is not an outage but a silent one: a
 missing fundamentals doc scores 0.5 rather than raising, which is exactly how
 fundamental_score came to be a flat 0.5 across every ticker while looking
@@ -64,6 +70,10 @@ async def fetch_fundamentals(ticker: str) -> dict:
         return {"ticker": ticker, "source": "unavailable", "error": str(exc)}
 
     if not doc:
+        # Cold cache. Schedule a one-off background fetch so the *next* pipeline
+        # run has real data, instead of waiting up to 24h for the daily job.
+        # This run still scores neutral — the fetch is far too slow to block on.
+        _schedule_cold_start_backfill(ticker)
         return {"ticker": ticker, "source": "pending"}
 
     # Served past its TTL rather than withheld. Quarterly figures a few days old
@@ -144,6 +154,68 @@ async def refresh_all_fundamentals(tickers: list[str]) -> dict:
 
     logger.info("fundamentals_refresh_all_done", **summary, tickers=len(tickers))
     return summary
+
+
+#: Tickers with a cold-start backfill currently running. Guards against the
+#: 5-minute pipeline stacking a second fetch on top of one already in flight.
+_backfill_inflight: set[str] = set()
+#: Last attempt per ticker, so a symbol the providers simply do not cover is not
+#: retried on every pipeline run for ever.
+_backfill_attempted: dict[str, datetime] = {}
+#: Strong references to running tasks. asyncio only holds weak ones, so a task
+#: that is not referenced anywhere can be garbage-collected mid-flight.
+_backfill_tasks: set = set()
+
+
+def _schedule_cold_start_backfill(ticker: str) -> None:
+    """
+    Fire a one-off background fundamentals fetch for a ticker with no cache.
+
+    Deliberately fire-and-forget. `refresh_fundamentals` takes ~13s per provider
+    because of the rate limiters, and `fetch_fundamentals` is called inside the
+    5-minute pipeline for every ticker — awaiting here would stall the whole
+    cycle and is precisely the inline-fetch pattern that 429'd under yfinance.
+    The caller still gets the neutral stub; the benefit lands on the next run.
+    """
+    settings = get_settings()
+    if not settings.fundamentals_cold_start_backfill:
+        return
+
+    ticker = ticker.upper()
+    if ticker in _backfill_inflight:
+        return
+
+    last = _backfill_attempted.get(ticker)
+    cooldown = timedelta(minutes=settings.fundamentals_cold_start_retry_minutes)
+    if last is not None and datetime.now(tz=timezone.utc) - last < cooldown:
+        return
+
+    try:
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No event loop (e.g. a synchronous unit test). Nothing to schedule onto.
+        return
+
+    _backfill_inflight.add(ticker)
+    _backfill_attempted[ticker] = datetime.now(tz=timezone.utc)
+
+    async def _run() -> None:
+        try:
+            logger.info("fundamentals_cold_start_backfill", ticker=ticker)
+            await refresh_fundamentals(ticker)
+        except Exception as exc:
+            # Never propagate: this runs detached from any request.
+            logger.warning(
+                "fundamentals_cold_start_backfill_failed", ticker=ticker, error=str(exc)
+            )
+        finally:
+            _backfill_inflight.discard(ticker)
+
+    task = loop.create_task(_run())
+    _backfill_tasks.add(task)
+    task.add_done_callback(_backfill_tasks.discard)
 
 
 def _age_hours(doc: dict) -> float:

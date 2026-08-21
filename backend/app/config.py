@@ -75,6 +75,22 @@ class Settings(BaseSettings):
     # Alpha Vantage's free tier allows 25 calls/day. Held below that so an
     # ad-hoc refresh does not exhaust the budget the scheduled job needs.
     alphavantage_daily_budget: int = Field(default=22, description="Max Alpha Vantage calls per day")
+    # A newly watched ticker has no cached fundamentals until the daily job next
+    # runs, so up to 24h of its scores carry a flat 0.5 for 0.15 of the
+    # composite. ADBE was added on 21 Aug 2026 and scored with 0 of 5
+    # fundamental components present — a mega-cap whose P/E, revenue growth and
+    # cash flow are all public. The backfill closes that window without
+    # reinstating per-read fetching, which is what produced the 429 storms.
+    fundamentals_cold_start_backfill: bool = Field(
+        default=True,
+        description="Fetch fundamentals in the background the first time a ticker is seen with an empty cache",
+    )
+    # Providers legitimately have nothing for some symbols. Without a cooldown a
+    # permanently empty ticker would re-fetch on every 5-minute pipeline run.
+    fundamentals_cold_start_retry_minutes: int = Field(
+        default=60,
+        description="Minimum gap between cold-start backfill attempts for the same ticker",
+    )
 
     # ── Broker / Automated Trading ────────────────────────────────────────────
     # Execution venue. "ibkr" = IB Gateway over TCP, "alpaca" = REST (no gateway).
