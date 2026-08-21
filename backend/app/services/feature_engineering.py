@@ -67,15 +67,26 @@ async def compute_features(ticker: str) -> dict:
     fundamental_score = _fundamental_score(fundamentals)
 
     macro           = raw_doc.get("macro", {})
-    macro_score     = _macro_score(macro)
+    # Sector and realised volatility scale the market-wide reading to this
+    # ticker's actual exposure — see _macro_sensitivity.
+    macro_sensitivity = _macro_sensitivity(
+        fundamentals.get("sector"), tech["volatility_20d"]
+    )
+    macro_score     = _macro_score(
+        macro, fundamentals.get("sector"), tech["volatility_20d"]
+    )
 
     # Store raw macro values needed by scoring.py XGBoost feature vector
     macro_vix          = macro.get("vix")
     macro_yield_spread = macro.get("yield_curve_spread")
     macro_cpi_yoy      = macro.get("cpi_yoy_pct")
 
-    # catalyst_score needs both raw_doc and the partially-built feat dict
-    _partial_feat = {"volume_anomaly": tech["volume_anomaly"]}
+    # catalyst_score needs both raw_doc and the partially-built feat dict.
+    # current_price is required for the analyst-upside component.
+    _partial_feat = {
+        "volume_anomaly": tech["volume_anomaly"],
+        "current_price": current_price,
+    }
     catalyst_score = compute_catalyst_score(raw_doc, _partial_feat)
 
     from app.services.alternative_data import compute_alternative_score
@@ -109,6 +120,9 @@ async def compute_features(ticker: str) -> dict:
         "vix":               macro_vix,
         "yield_curve_spread": macro_yield_spread,
         "cpi_yoy_pct":       macro_cpi_yoy,
+        # Why this ticker's macro_score differs from the market-wide reading.
+        "macro_sensitivity": round(macro_sensitivity, 4),
+        "sector":            fundamentals.get("sector"),
         # ── Sub-scores (all 0–1) ─────────────────────────────────────────────
         "technical_score":    round(technical_score,   4),
         "fundamental_score":  round(fundamental_score, 4),
@@ -267,7 +281,7 @@ def _compute_technical_indicators(
 #: marked it up for trending — a stock penalised and rewarded for the same fact.
 _STANCE_WEIGHTS = {
     # Buy weakness in sound companies. Trend signals act as confirmation only,
-    # which is what the Alpha Radar dip-buy scanner already assumes.
+    # which is what the dip-buy setup scan already assumes.
     "mean_reversion": (0.30, 0.15, 0.25, 0.20, 0.10),
     # Buy strength. The mean-reversion inputs are INVERTED below, so an extended
     # RSI reads bullish rather than bearish.
@@ -275,6 +289,34 @@ _STANCE_WEIGHTS = {
     # The historical blend — kept so results before this change stay reproducible.
     "blended":        (0.25, 0.25, 0.20, 0.15, 0.15),
 }
+
+#: Relative weights of the three oscillators *within* the reversion signal,
+#: renormalised from the stance weights above so the split stays recognisable.
+_OSC_WEIGHTS = (0.40, 0.33, 0.27)   # (rsi, bb, stoch)
+
+#: How much trend confirmation can suppress an oscillator reading, as
+#: `gate = _TREND_FLOOR + (1 - _TREND_FLOOR) * trend`.
+#:
+#: 0.40 rather than 0.0 because an oscillator extreme against the trend is a
+#: discounted signal, not a meaningless one — a genuine capitulation low still
+#: deserves to outrank a mid-range drift. It is the *ranking* that matters here,
+#: not the absolute level.
+_TREND_FLOOR = 0.40
+
+
+def _trend_confirmation(tech: dict) -> Optional[float]:
+    """
+    0–1 reading of whether price structure supports the oscillators.
+
+    Returns None when neither trend input is available, so the caller can fall
+    back to the additive blend rather than inventing a gate from nothing.
+    """
+    parts = [
+        1.0 if v else 0.0
+        for v in (tech.get("macd_bullish"), tech.get("ma_cross_bullish"))
+        if v is not None
+    ]
+    return sum(parts) / len(parts) if parts else None
 
 
 def _technical_score(tech: dict, price: float) -> float:
@@ -285,6 +327,28 @@ def _technical_score(tech: dict, price: float) -> float:
     `_STANCE_WEIGHTS`). Under `momentum` the RSI, Bollinger and Stochastic
     components are inverted, so the same indicator that reads bullish when
     oversold under mean-reversion reads bullish when overbought instead.
+
+    Trend GATES the oscillators rather than being averaged against them
+    ────────────────────────────────────────────────────────────────────
+    Averaging made the two halves cancel, and the casualty was the distinction
+    that matters most to a dip-buyer: a pullback within an uptrend versus a
+    stock in free fall. Both look oversold on RSI, Bollinger and Stochastic;
+    only the first is worth buying. Under the old additive blend, a deep
+    selloff with MACD and the MA cross both bearish scored 0.728 while the
+    textbook pullback-in-uptrend scored 0.772 — a separation of 0.045, well
+    inside the noise. The engine was, in effect, indifferent between catching
+    a falling knife and buying a dip.
+
+    Multiplying instead of averaging restores the conditional the strategy
+    always implied: *oversold is a reason to buy only when the trend is still
+    intact*. The same two cases now score 0.388 and 0.697 — a separation of
+    0.309, roughly seven times wider. The ceiling also improves: a shallow
+    pullback in a strong uptrend can now approach 1.0, which the additive form
+    made unreachable, because a perfect oscillator reading forced the trend
+    components to 0.
+
+    `blended` keeps the additive path unchanged, as its name promises, so
+    historical results stay reproducible.
     """
     stance = get_settings().technical_stance
     w_rsi, w_macd, w_bb, w_stoch, w_ma = _STANCE_WEIGHTS.get(
@@ -292,7 +356,14 @@ def _technical_score(tech: dict, price: float) -> float:
     )
     momentum = stance == "momentum"
 
-    components: list[tuple[float, float]] = []   # (score, weight)
+    # ── Oscillator readings, oriented so 1.0 always means "bullish" ──────────
+    # Each carries both weightings: the within-signal weight used by the gated
+    # path, and the stance weight used by the additive fallback.
+    oscillators: list[tuple[float, float, float]] = []   # (score, osc_w, stance_w)
+    w_osc_rsi, w_osc_bb, w_osc_stoch = _OSC_WEIGHTS
+
+    def _orient(bullish_when_weak: float) -> float:
+        return 1.0 - bullish_when_weak if momentum else bullish_when_weak
 
     # 1. RSI — oversold is bullish under mean-reversion, bearish under momentum
     rsi = tech.get("rsi_14")
@@ -303,27 +374,35 @@ def _technical_score(tech: dict, price: float) -> float:
             rsi_s = 0.0
         else:
             rsi_s = 1.0 - (rsi - 30) / 40.0
-        rsi_s = clamp(rsi_s)
-        components.append((1.0 - rsi_s if momentum else rsi_s, w_rsi))
+        oscillators.append((_orient(clamp(rsi_s)), w_osc_rsi, w_rsi))
 
-    # 2. MACD crossover — a trend signal; reads the same under either stance
+    # 2. Bollinger Band position (bb_pct: 0 = at lower band, 1 = at upper)
+    bb_pct = tech.get("bb_pct")
+    if bb_pct is not None:
+        oscillators.append((_orient(clamp(1.0 - float(bb_pct))), w_osc_bb, w_bb))
+
+    # 3. Stochastic RSI (0 = oversold, 1 = overbought)
+    stoch = tech.get("stoch_rsi")
+    if stoch is not None:
+        oscillators.append((_orient(clamp(1.0 - float(stoch))), w_osc_stoch, w_stoch))
+
+    trend = _trend_confirmation(tech)
+
+    # ── Gated path (mean_reversion / momentum) ───────────────────────────────
+    if stance != "blended" and oscillators and trend is not None:
+        osc = sum(s * w for s, w, _ in oscillators) / sum(w for _, w, _ in oscillators)
+        return clamp(osc * (_TREND_FLOOR + (1.0 - _TREND_FLOOR) * trend))
+
+    # ── Additive path — `blended`, or whenever a trend input is missing ──────
+    # Without a trend reading there is nothing to gate on, and gating against an
+    # invented neutral would silently scale every score down. Falling back to
+    # the stance weights keeps that case identical to the previous behaviour.
+    components: list[tuple[float, float]] = [(s, sw) for s, _, sw in oscillators]
+
     macd_bull = tech.get("macd_bullish")
     if macd_bull is not None:
         components.append((1.0 if macd_bull else 0.0, w_macd))
 
-    # 3. Bollinger Band position (bb_pct: 0 = at lower band, 1 = at upper)
-    bb_pct = tech.get("bb_pct")
-    if bb_pct is not None:
-        bb_s = clamp(1.0 - float(bb_pct))
-        components.append((1.0 - bb_s if momentum else bb_s, w_bb))
-
-    # 4. Stochastic RSI (0 = oversold, 1 = overbought)
-    stoch = tech.get("stoch_rsi")
-    if stoch is not None:
-        stoch_s = clamp(1.0 - float(stoch))
-        components.append((1.0 - stoch_s if momentum else stoch_s, w_stoch))
-
-    # 5. MA cross — a trend signal; reads the same under either stance
     ma_cross = tech.get("ma_cross_bullish")
     if ma_cross is not None:
         components.append((1.0 if ma_cross else 0.0, w_ma))
@@ -412,10 +491,81 @@ def _fundamental_score(fund: dict) -> float:
     return clamp(score)
 
 
-def _macro_score(macro: dict) -> float:
+#: How hard each sector reacts to the macro regime, as a multiplier on the
+#: market-wide reading. Long-duration cash flows and discretionary demand swing
+#: with rates and risk appetite; inelastic demand does not.
+#:
+#: Utilities sit high despite stable demand because they trade as bond proxies —
+#: it is the rates leg of the macro score they respond to, not the growth leg.
+#: Names are matched case-insensitively and cover both the yfinance and Alpha
+#: Vantage spellings, which differ ("Consumer Cyclical" vs "Consumer Discretionary").
+_SECTOR_MACRO_BETA = {
+    "real estate":             1.25,
+    "technology":              1.15,
+    "information technology":  1.15,
+    "consumer cyclical":       1.15,
+    "consumer discretionary":  1.15,
+    "financial services":      1.10,
+    "financials":              1.10,
+    "industrials":             1.05,
+    "communication services":  1.00,
+    "basic materials":         1.00,
+    "materials":               1.00,
+    "energy":                  0.95,
+    "utilities":               0.85,
+    "health care":             0.75,
+    "healthcare":              0.75,
+    "consumer defensive":      0.65,
+    "consumer staples":        0.65,
+}
+
+
+def _macro_sensitivity(sector: Optional[str], volatility_20d: Optional[float]) -> float:
+    """
+    How much *this* ticker should care about the market-wide macro reading.
+
+    1.0 means "feels the macro exactly as scored"; below 1.0 damps it toward
+    neutral. Derived from sector plus realised volatility, the latter standing in
+    for beta, which no provider in the stack currently supplies.
+
+    Volatility is used only as a ±30% adjustment, not as the primary term, so a
+    quiet month in a cyclical name does not turn it into a defensive one.
+    """
+    base = _SECTOR_MACRO_BETA.get((sector or "").strip().lower(), 1.0)
+
+    # 30% annualised is the pivot: at that level the adjustment is neutral.
+    if volatility_20d is not None and volatility_20d > 0:
+        vol_factor = clamp(0.70 + (float(volatility_20d) / 0.30) * 0.30, 0.70, 1.30)
+    else:
+        vol_factor = 1.0
+
+    return clamp(base * vol_factor, 0.0, 1.5)
+
+
+def _macro_score(
+    macro: dict,
+    sector: Optional[str] = None,
+    volatility_20d: Optional[float] = None,
+) -> float:
     """
     Derive a 0–1 macro environment score from FRED data.
     Higher = more macro-supportive for equities.
+
+    Scaled by per-ticker sensitivity
+    ────────────────────────────────
+    VIX, the yield curve and CPI are properties of the market, not of a stock,
+    so the raw reading is identical for every ticker in the watchlist. Carrying
+    0.15 of the composite weight, and ranging 0.32 (stress) to 1.00 (benign) in
+    practice, it moved every score by up to 0.10 in the same direction at the
+    same time — a market-timing overlay sitting inside a stock-picking score. It
+    could not rank two tickers against each other, only raise or lower the whole
+    book, which meant the BUY count tracked the regime rather than the names.
+
+    Sensitivity restores the discrimination: the market reading is damped toward
+    neutral for tickers that are genuinely less exposed to it. A utility and a
+    high-beta software name no longer receive the same macro verdict. With
+    sensitivity 1.0 the behaviour is exactly as before.
+
     Returns 0.5 (neutral) when data is absent.
 
     Components:
@@ -428,18 +578,27 @@ def _macro_score(macro: dict) -> float:
 
     components: list[tuple[float, float]] = []
 
+    # Each band below is wider than it was, because all three used to saturate
+    # in ordinary conditions: VIX 14, a +0.8 curve and 2.3% CPI each hit their
+    # ceiling, so a perfectly unremarkable bull market scored a flat 1.000 for
+    # every ticker and the component stopped distinguishing "fine" from
+    # "exceptional". Gradation in the normal range is where a macro score earns
+    # its weight; the extremes were never the hard part.
+
     # 1. VIX — low fear is bullish
     vix = macro.get("vix")
     if vix is not None:
-        # VIX ≤ 15 = calm (1.0), VIX ≥ 35 = fearful (0.0)
-        vix_score = clamp(1.0 - (float(vix) - 15) / 20.0)
+        # VIX ≤ 10 = exceptionally calm (1.0), VIX ≥ 38 = fearful (0.0).
+        # 14 now reads 0.86 rather than a saturated 1.0.
+        vix_score = clamp(1.0 - (float(vix) - 10) / 28.0)
         components.append((vix_score, 0.35))
 
     # 2. Yield curve spread (10Y − 2Y)
     spread = macro.get("yield_curve_spread")
     if spread is not None:
-        # Spread ≥ +0.5% = healthy (1.0), Spread ≤ −0.5% = inverted (0.0)
-        spread_score = clamp((float(spread) + 0.5) / 1.0)
+        # Spread ≥ +1.5% = steep (1.0), ≤ −0.75% = deeply inverted (0.0).
+        # A +0.8 curve is healthy but not maximal, and now scores as such.
+        spread_score = clamp((float(spread) + 0.75) / 2.25)
         components.append((spread_score, 0.35))
 
     # 3. CPI YoY inflation
@@ -449,10 +608,12 @@ def _macro_score(macro: dict) -> float:
         cpi = float(cpi_yoy)
         if cpi < 0:
             cpi_score = 0.3         # deflation risk
-        elif cpi <= 2.5:
+        elif cpi <= 2.0:
+            # On target. Only genuinely at-target inflation earns the ceiling;
+            # 2.5% used to, which put most of the last two years at 1.0.
             cpi_score = 1.0
-        elif cpi <= 6.0:
-            cpi_score = clamp(1.0 - (cpi - 2.5) / 3.5)
+        elif cpi <= 7.0:
+            cpi_score = clamp(1.0 - (cpi - 2.0) / 5.0)
         else:
             cpi_score = 0.0
         components.append((cpi_score, 0.30))
@@ -462,7 +623,10 @@ def _macro_score(macro: dict) -> float:
 
     total_weight = sum(w for _, w in components)
     score = sum(s * w for s, w in components) / total_weight
-    return clamp(score)
+
+    # Damp the market-wide reading toward neutral by this ticker's exposure.
+    sensitivity = _macro_sensitivity(sector, volatility_20d)
+    return clamp(0.5 + sensitivity * (clamp(score) - 0.5))
 
 
 def _volatility_score(volatility: float) -> float:

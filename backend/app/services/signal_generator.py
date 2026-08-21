@@ -15,15 +15,38 @@ scaled to [0, 1].
 from datetime import datetime, timezone
 
 from app.db import COLL_FEATURES, COLL_SIGNALS, get_db
-from app.services.risk_engine import assess_risk
+from app.services.risk_engine import RISK_MAX_FOR_BUY, assess_risk
 from app.utils.helpers import clamp, utcnow
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+#: Canonical signal thresholds. `scoring.compute_personalized_score` imports
+#: these rather than restating them: it used to hold its own copies, so tuning
+#: one place left any user with custom weights on a different model from the
+#: stored signal, silently. RISK_MAX_FOR_BUY comes from risk_engine, which owns
+#: the risk scale it belongs to.
 BUY_THRESHOLD = 0.70
 SELL_THRESHOLD = 0.30
-RISK_MAX_FOR_BUY = 6.0
+
+__all__ = ["BUY_THRESHOLD", "SELL_THRESHOLD", "RISK_MAX_FOR_BUY",
+           "generate_signal", "generate_signals_all", "classify_signal"]
+
+
+def classify_signal(score: float, risk_score: float) -> str:
+    """
+    The BUY / SELL / HOLD rule, in one place.
+
+    BUY is the only verdict gated on risk. That asymmetry is deliberate: the
+    gate answers "is it safe to take on this exposure", which has no bearing on
+    whether to leave one you already hold. Refusing to exit a position because
+    conditions are dangerous would be exactly backwards.
+    """
+    if score > BUY_THRESHOLD and risk_score < RISK_MAX_FOR_BUY:
+        return "BUY"
+    if score < SELL_THRESHOLD:
+        return "SELL"
+    return "HOLD"
 
 
 async def generate_signal(ticker: str) -> dict:
@@ -42,15 +65,19 @@ async def generate_signal(ticker: str) -> dict:
     risk_score: float = risk_dict["risk_score"]
 
     # ── Signal decision ───────────────────────────────────────────────────────
-    if score > BUY_THRESHOLD and risk_score < RISK_MAX_FOR_BUY:
-        signal = "BUY"
+    signal = classify_signal(score, risk_score)
+
+    # Confidence is DISTANCE FROM THE DECISION BOUNDARY, not a probability.
+    # It says how far from flipping the verdict is, which is not the same as how
+    # often verdicts at this level have been right — nothing has ever compared
+    # it against stocks_signal_history. Read it as conviction in the arithmetic,
+    # not as a hit rate.
+    if signal == "BUY":
         confidence = clamp((score - BUY_THRESHOLD) / (1.0 - BUY_THRESHOLD))
-    elif score < SELL_THRESHOLD:
-        signal = "SELL"
+    elif signal == "SELL":
         confidence = clamp((SELL_THRESHOLD - score) / SELL_THRESHOLD)
     else:
-        signal = "HOLD"
-        # Confidence = certainty of being in the middle band
+        # Certainty of being in the middle band
         dist_from_buy = abs(score - BUY_THRESHOLD)
         dist_from_sell = abs(score - SELL_THRESHOLD)
         confidence = clamp(min(dist_from_buy, dist_from_sell) / 0.40)
@@ -122,11 +149,17 @@ def _price_suggestions(signal: str, price: float, feat: dict):
         return entry, exit_s
 
     if signal == "SELL":
-        entry = f"Short entry near ${price:.2f}"
-        cover = price - 3 * atr_approx
-        stop = price + 2 * atr_approx
-        exit_s = f"Cover ~${cover:.2f} | Stop ~${stop:.2f}"
-        return entry, exit_s
+        # SELL means "exit the position", never "open a short". It previously
+        # read "Short entry near $X | Cover ~$Y", which contradicted both the
+        # account and the code: shorting is not permitted in a TFSA, and
+        # trade_manager only ever sells to close what the broker actually holds
+        # — it has no path that opens a short.
+        limit = price * 1.005
+        exit_s = (
+            f"Exit at ${price:.2f} (current) or limit near ${limit:.2f}. "
+            f"No position — no action; this is not a short signal."
+        )
+        return None, exit_s
 
     return None, f"Monitor; consider re-evaluating if price moves ±5% from ${price:.2f}"
 

@@ -1,16 +1,19 @@
 """
 GET /performance — historical signal accuracy scoped to the current user's watchlist.
 GET /performance/signals — last 100 individual signal history records for watchlist tickers.
+GET /performance/calibration — were the thresholds in the right place?
 """
 from collections import defaultdict
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.db import COLL_SIGNAL_HISTORY, COLL_TRADES, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import PerformanceResponse, SignalPerformanceRecord
 from app.models.trade import TradeStatus
+from app.services.calibration import summarise as calibration_summary
+from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["performance"])
@@ -212,3 +215,60 @@ async def get_signal_history(current_user: dict = Depends(get_current_user)) -> 
 
     logger.info("signal_history_fetched", count=len(result), user_id=user_id)
     return result
+
+
+@router.get(
+    "/performance/calibration",
+    summary="Were the signal thresholds in the right place?",
+)
+async def get_calibration(
+    ticker: Optional[str] = Query(None, description="Restrict to one ticker."),
+    apply_risk_gate: bool = Query(
+        True, description="Also apply the BUY risk veto when sweeping thresholds."
+    ),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    Compare emitted signals against their realised 20-day returns.
+
+    The engine has always written this history and never read it, so
+    BUY_THRESHOLD has stayed where it was originally guessed while the evidence
+    to place it accumulated unused.
+
+    Read `score_ranks_outcomes` first. If the composite does not rank outcomes,
+    no threshold is the right threshold and the answer is to fix the score, not
+    move the line. Every row carries `n` and a `significant` flag — under
+    `min_samples_for_signal` settled records a win rate is anecdote, and the
+    endpoint says so rather than returning a confident-looking percentage.
+    """
+    user_id = str(current_user["_id"])
+    db = await get_db()
+
+    watched = await db[COLL_WATCHED].find({"user_id": user_id}, {"ticker": 1}).to_list(length=2000)
+    tickers = [d["ticker"] for d in watched]
+
+    query: dict[str, Any] = {"return_20d": {"$ne": None}}
+    if ticker:
+        query["ticker"] = ticker.upper()
+    elif tickers:
+        query["ticker"] = {"$in": tickers}
+
+    records = await db[COLL_SIGNAL_HISTORY].find(
+        query,
+        {"ticker": 1, "score": 1, "signal": 1, "confidence": 1,
+         "risk_score": 1, "return_20d": 1, "generated_at": 1},
+    ).to_list(length=100_000)
+
+    report = calibration_summary(
+        records, risk_max=RISK_MAX_FOR_BUY if apply_risk_gate else None
+    )
+    report["ticker"] = ticker.upper() if ticker else None
+
+    logger.info(
+        "calibration_report",
+        user_id=user_id,
+        ticker=ticker or "watchlist",
+        settled=report["settled_records"],
+        ranks=report["score_ranks_outcomes"],
+    )
+    return report

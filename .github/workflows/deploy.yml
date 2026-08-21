@@ -277,12 +277,28 @@ jobs:
             inject_key_guarded ALPHAVANTAGE_API_KEY "$ALPHAVANTAGE_API_KEY" \
               "the secondary fundamentals source is unavailable."
             set_if_missing_or_empty INGESTION_INTERVAL_MINUTES     5
-            set_if_missing_or_empty WEIGHT_TECHNICAL               0.25
-            set_if_missing_or_empty WEIGHT_FUNDAMENTAL             0.15
-            set_if_missing_or_empty WEIGHT_SENTIMENT               0.20
-            set_if_missing_or_empty WEIGHT_MACRO                   0.15
-            set_if_missing_or_empty WEIGHT_VOLATILITY              0.10
-            set_if_missing_or_empty WEIGHT_CATALYST                0.15
+
+            # ── Scoring weights: written every deploy, not set-if-missing ─────
+            # These are a model decision that belongs to the code, not an
+            # operator setting. Under set_if_missing_or_empty the first deploy
+            # pinned them into .env.production and no later change could ever
+            # reach the box — rebalancing the model in config.py would build a
+            # new image that then read the old weights from disk and behave
+            # exactly as before, silently. Same defect the file already carries
+            # scars from with AUTO_TRADE_LIVE_ALLOWED and AUTO_TRADE_ENABLED.
+            #
+            # Values must match the Settings defaults in backend/app/config.py
+            # and sum to 1.0, or the API refuses to start (validate_weights_sum).
+            # WEIGHT_VOLATILITY is 0.0 deliberately: volatility is priced at the
+            # risk gate, and scoring it again double-counted it.
+            #
+            # Per-user tuning is unaffected — that lives in users.scoring_weights.
+            inject_secret WEIGHT_TECHNICAL               0.30
+            inject_secret WEIGHT_FUNDAMENTAL             0.20
+            inject_secret WEIGHT_SENTIMENT               0.20
+            inject_secret WEIGHT_MACRO                   0.15
+            inject_secret WEIGHT_VOLATILITY              0.00
+            inject_secret WEIGHT_CATALYST                0.15
 
             COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.production"
 

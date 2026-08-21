@@ -253,11 +253,30 @@ class Settings(BaseSettings):
     )
 
     # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────
-    weight_technical:    float = Field(default=0.25)
-    weight_fundamental:  float = Field(default=0.15)
+    #
+    # weight_volatility defaults to 0.0 — volatility is priced at the risk gate,
+    # not in the alpha score.
+    #
+    # It used to be counted twice. `volatility_score` took 0.10 of the composite
+    # (quieter = higher), and volatility separately supplies up to 7 of the 10
+    # risk points, where risk_score >= 6 vetoes a BUY outright. A high-beta name
+    # was marked down in the ranking and then blocked at the gate for the same
+    # fact. The two are not redundant by accident: the gate is the correct place
+    # for it, because it answers "is this too dangerous to hold", whereas the
+    # composite answers "is this the better opportunity" — and a stock is not a
+    # better opportunity for being quiet. Scoring it as one imported a standing
+    # bias toward low-volatility names that says nothing about expected return.
+    #
+    # The freed 0.10 goes to the two dimensions that do express opportunity:
+    # +0.05 technical (the timing edge, now that the trend gate makes it
+    # discriminate) and +0.05 fundamental (quality). The knob is kept rather than
+    # deleted so the behaviour stays recoverable, and per-user tuning is
+    # unaffected — that lives in users.scoring_weights, not here.
+    weight_technical:    float = Field(default=0.30)
+    weight_fundamental:  float = Field(default=0.20)
     weight_sentiment:    float = Field(default=0.20)
     weight_macro:        float = Field(default=0.15)
-    weight_volatility:   float = Field(default=0.10)
+    weight_volatility:   float = Field(default=0.00)
     weight_catalyst:     float = Field(default=0.15)
     # Alternative data weight: additive modifier applied on top of the 6-weight
     # base score, so it does NOT participate in the sum-to-1.0 constraint.

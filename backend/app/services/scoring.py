@@ -38,12 +38,16 @@ def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[f
     Risk score is expected in feat["risk"]["score"] if available.
     """
     if user_weights:
+        # Fallbacks mirror the Settings defaults in config.py — including
+        # volatility at 0.0, which is priced at the risk gate rather than in the
+        # score. A user who has explicitly saved a volatility weight keeps it;
+        # that is their choice, and it reinstates the double-count knowingly.
         class _W:
-            weight_technical        = user_weights.get("technical",        0.25)
-            weight_fundamental      = user_weights.get("fundamental",       0.15)
+            weight_technical        = user_weights.get("technical",        0.30)
+            weight_fundamental      = user_weights.get("fundamental",       0.20)
             weight_sentiment        = user_weights.get("sentiment",         0.20)
             weight_macro            = user_weights.get("macro",             0.15)
-            weight_volatility       = user_weights.get("volatility",        0.10)
+            weight_volatility       = user_weights.get("volatility",        0.00)
             weight_catalyst         = user_weights.get("catalyst",          0.15)
             weight_alternative_data = user_weights.get("alternative_data",  0.10)
         score = clamp(_weighted_score(feat, _W()))
@@ -51,15 +55,14 @@ def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[f
         settings = get_settings()
         score = clamp(_weighted_score(feat, settings))
 
-    risk_score = feat.get("risk", {}).get("score", 5) if isinstance(feat.get("risk"), dict) else 5
-    if score > 0.70 and risk_score < 6:
-        signal = "BUY"
-    elif score < 0.30:
-        signal = "SELL"
-    else:
-        signal = "HOLD"
+    # Imported, not restated. This function used to hold its own copies of the
+    # thresholds, so tuning signal_generator left any user with custom weights
+    # scored on a different model from the stored signal, with nothing to
+    # surface the disagreement.
+    from app.services.signal_generator import classify_signal
 
-    return round(score, 4), signal
+    risk_score = feat.get("risk", {}).get("score", 5) if isinstance(feat.get("risk"), dict) else 5
+    return round(score, 4), classify_signal(score, risk_score)
 
 
 async def score_ticker(ticker: str) -> dict:
@@ -132,7 +135,18 @@ def _ml_score(feat: dict) -> float:
 
     if _xgb_model is None:
         if not os.path.exists(_MODEL_PATH):
-            logger.warning("xgb_model_not_found", path=_MODEL_PATH, fallback="weighted")
+            # ERROR, not warning: ENABLE_ML_MODEL=true is an explicit statement
+            # that the ML path should be running, and it silently is not. The
+            # model file is gitignored, so it never reaches a deployed box no
+            # matter what the flag says — every production run lands here and
+            # scores on the weighted path while the config claims otherwise.
+            logger.error(
+                "xgb_model_missing_scoring_weighted_instead",
+                path=_MODEL_PATH,
+                enable_ml_model=True,
+                hint="model/*.json is gitignored and never ships; set "
+                     "ENABLE_ML_MODEL=false or commit and retrain the model",
+            )
             return _weighted_score(feat, get_settings())
         try:
             import xgboost as xgb

@@ -13,7 +13,7 @@ Called from pipeline._execute_trades() after a signal is generated.
 from datetime import datetime, timezone
 
 from app.config import get_settings
-from app.db import COLL_TRADES, COLL_USERS, get_db
+from app.db import COLL_FEATURES, COLL_TRADES, COLL_USERS, get_db
 from app.models.trade import AutoTradeSettings, TradeRecord, TradeStatus
 from app.services import broker as ibkr
 from app.utils.helpers import utcnow
@@ -66,12 +66,63 @@ def _bracket_levels(
     return stop, target
 
 
-def _calculate_qty(price: float, equity: float, position_size_pct: float) -> int:
-    """Calculate whole-share quantity for a given position size."""
+#: Annualised volatility that `position_size_pct` is calibrated for. A name at
+#: this level gets exactly the configured size; quieter names get more, wilder
+#: names less, so each position carries comparable risk rather than comparable
+#: dollars.
+_SIZING_PIVOT_VOL = 0.35
+
+#: Bounds on the scaling factor. Without a floor, a 150%-volatility name sizes
+#: to almost nothing and the fill is dominated by commission; without a ceiling,
+#: a very quiet name could take a position several times the intended size and
+#: quietly concentrate the book.
+_SIZING_MIN_FACTOR = 0.35
+_SIZING_MAX_FACTOR = 1.50
+
+
+def _volatility_size_factor(volatility_20d: float | None) -> float:
+    """
+    Scale the configured position size by how violent the name is.
+
+    A flat percentage of equity gives a 15%-volatility utility and a
+    130%-volatility growth name the same dollar exposure and therefore wildly
+    different risk — the quiet one can barely move the account and the wild one
+    can halve the position in a week.
+
+    This matters more since volatility was removed from the composite score,
+    which is correct — a stock is not a better opportunity for being quiet — but
+    left sizing as the place where volatility SHOULD be expressed, and it wasn't
+    expressed there either.
+
+    Returns 1.0 when volatility is unknown, so a missing feature document
+    reproduces the previous flat behaviour rather than guessing.
+    """
+    if not volatility_20d or volatility_20d <= 0:
+        return 1.0
+    factor = _SIZING_PIVOT_VOL / float(volatility_20d)
+    return max(_SIZING_MIN_FACTOR, min(_SIZING_MAX_FACTOR, factor))
+
+
+def _calculate_qty(
+    price: float,
+    equity: float,
+    position_size_pct: float,
+    volatility_20d: float | None = None,
+) -> int:
+    """Whole-share quantity for a given position size, scaled by volatility."""
     if price <= 0 or equity <= 0:
         return 0
-    dollar_amount = equity * position_size_pct
+    dollar_amount = equity * position_size_pct * _volatility_size_factor(volatility_20d)
     return max(1, int(dollar_amount / price))
+
+
+async def _ticker_volatility(ticker: str) -> float | None:
+    """Latest realised volatility for *ticker*, or None if not yet computed."""
+    db = await get_db()
+    doc = await db[COLL_FEATURES].find_one(
+        {"ticker": ticker.upper()}, {"volatility_20d": 1}
+    )
+    return (doc or {}).get("volatility_20d")
 
 
 async def _get_user_settings(user_id) -> AutoTradeSettings | None:
@@ -295,10 +346,16 @@ async def execute_entry(
             await _skip("No current price available")
             return
 
-        qty = _calculate_qty(price, equity, settings.position_size_pct)
+        vol = await _ticker_volatility(ticker)
+        qty = _calculate_qty(price, equity, settings.position_size_pct, vol)
         if qty < 1:
             await _skip("Calculated quantity < 1 share")
             return
+        logger.info(
+            "position_sized",
+            ticker=ticker, qty=qty, volatility_20d=vol,
+            size_factor=round(_volatility_size_factor(vol), 3),
+        )
 
         # Limit price: current price (will fill at or better)
         limit_price = round(price, 2)

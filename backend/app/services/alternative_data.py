@@ -100,12 +100,34 @@ def compute_alternative_score(alt_data: dict) -> float:
 # ── Internal helpers (sync — called via asyncio.to_thread) ────────────────────
 
 def _fetch_short_interest(ticker: str) -> dict:
-    """Short interest data from yfinance.Ticker.info."""
+    """
+    Short interest from yfinance.Ticker.info.
+
+    ⚠️  yfinance is development-only per CLAUDE.md, and deploy.yml separately
+    records that it rate-limits from the Hetzner host — which is why
+    fundamentals were moved to Massive and Alpha Vantage. This path was left
+    behind on it. When the host is throttled the call returns nothing, the
+    component drops out of alternative_data_score, and the score silently
+    degrades toward neutral with no indication that a signal is missing.
+
+    The degradation is now logged rather than silent. Moving short interest to
+    a licensed provider is the actual fix; until then, treat squeeze_risk as
+    absent in production rather than as a reading of LOW.
+    """
     import yfinance as yf
     info: dict = yf.Ticker(ticker).info or {}
 
     short_ratio = _sf(info.get("shortRatio"))          # days to cover
     short_pct   = _sf(info.get("shortPercentOfFloat"))  # fraction e.g. 0.12
+
+    if short_ratio is None and short_pct is None:
+        logger.warning(
+            "short_interest_unavailable",
+            ticker=ticker,
+            source="yfinance",
+            hint="yfinance is dev-only and rate-limits from the deploy host; "
+                 "squeeze_risk is absent, not LOW",
+        )
 
     squeeze_risk: Optional[str] = None
     if short_pct is not None and short_ratio is not None:

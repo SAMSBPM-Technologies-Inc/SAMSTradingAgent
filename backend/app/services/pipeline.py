@@ -326,6 +326,10 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
             "signal":          signal.get("signal", "HOLD"),
             "score":           signal.get("score", 0.0),
             "confidence":      signal.get("confidence", 0.0),
+            # Stored so calibration can replay the BUY gate, not just the score
+            # threshold. Without it a threshold sweep silently models a rule the
+            # engine does not actually use.
+            "risk_score":      (signal.get("risk") or {}).get("risk_score"),
             "conviction":      ao.get("conviction"),
             "price_at_signal": raw_doc.get("current_price"),
             "data_sources":    signal.get("data_sources", {}),
