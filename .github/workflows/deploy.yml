@@ -44,6 +44,12 @@ jobs:
           # the macro block stayed unpopulated.
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          # Fundamentals providers, replacing yfinance — which 429s from this
+          # server's IP and leaves fundamental_score pinned at its 0.5 fallback.
+          # Massive is Polygon.io rebranded, i.e. one of the licensed providers
+          # CLAUDE.md names for production use.
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
           # IB Gateway login — required for the ibgateway container to authenticate.
           # Without these IBC exits at startup and nothing listens on the API port.
           # IBKR issues SEPARATE credentials for paper and live; the deploy script
@@ -89,7 +95,7 @@ jobs:
           # the names listed here. A variable set above and omitted here arrives
           # as an empty string, with no error from either side — which is how
           # ANTHROPIC_API_KEY reached the server blank. Add to BOTH places.
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,MASSIVE_API_KEY,ALPHAVANTAGE_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
           command_timeout: 30m
           script: |
             set -e
@@ -266,6 +272,10 @@ jobs:
               "news sentiment will read no_api_key and sentiment_score goes flat."
             inject_key_guarded FRED_API_KEY "$FRED_API_KEY" \
               "macro data will be empty and macro_score becomes a constant."
+            inject_key_guarded MASSIVE_API_KEY "$MASSIVE_API_KEY" \
+              "fundamentals fall back to yfinance, which rate-limits from this host."
+            inject_key_guarded ALPHAVANTAGE_API_KEY "$ALPHAVANTAGE_API_KEY" \
+              "the secondary fundamentals source is unavailable."
             set_if_missing_or_empty INGESTION_INTERVAL_MINUTES     5
             set_if_missing_or_empty WEIGHT_TECHNICAL               0.25
             set_if_missing_or_empty WEIGHT_FUNDAMENTAL             0.15
