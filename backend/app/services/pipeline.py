@@ -88,9 +88,25 @@ async def run_pipeline(ticker: str) -> dict:
             logger.debug("analyst_gated", ticker=ticker, reason=gate_reason)
 
         needs_refresh, cache_reason = await _needs_analyst_refresh(ticker, raw_doc, feat_doc)
-        needs_refresh = needs_refresh and worth_calling
 
-        if not needs_refresh:
+        # Only an *analyst* signal can be served from the analyst cache. A
+        # gated ticker has no live analyst verdict to reuse, so it must fall
+        # through to the rule-based path and be re-scored this cycle.
+        #
+        # Previously this read `needs_refresh and worth_calling`, which made a
+        # gated ticker look like a cache hit: `not needs_refresh` was then true
+        # and the branch below returned the existing document unchanged. The
+        # fall-through at `if worth_calling` was therefore unreachable whenever
+        # a signal document already existed, and the rule-based path never ran.
+        #
+        # The effect was silent and permanent. Once a ticker's composite fell
+        # below the gate its score, signal and explanation froze for good —
+        # only the price fields kept updating, so it still looked alive. On
+        # 21 Aug 2026 five of eleven tickers (SOFI, RKLB, PLTR, NBIS, CBRS) had
+        # been stuck for 19.5 hours on pre-fix arithmetic, still carrying
+        # macro=0.50 and the retired catalyst-at-zero curve, while the six
+        # above the gate updated normally.
+        if worth_calling and not needs_refresh:
             # Serve cached signal — just refresh live price on the existing doc.
             existing = await db[COLL_SIGNALS].find_one({"ticker": ticker})
             if existing:
@@ -101,14 +117,15 @@ async def run_pipeline(ticker: str) -> dict:
                 existing["current_price"] = current_price
                 existing["day_change_pct"] = day_change_pct
                 logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst_cached",
-                            signal=existing.get("signal"),
-                            cache_reason=cache_reason if worth_calling else gate_reason)
+                            signal=existing.get("signal"), cache_reason=cache_reason)
                 return existing
 
-        # No cached doc to serve. Falling through to run_analysis here would
-        # call Claude for a ticker the gate just rejected — the gate has to
-        # send it to the rule-based path instead, which reaches the same
-        # verdict away from the thresholds.
+        # Reached when the analyst cache is stale, when there is no cached doc,
+        # or when the gate rejected this ticker. Calling run_analysis for a
+        # rejected ticker would defeat the gate, so only the first two cases
+        # take the analyst; the rest fall through to the rule-based path, which
+        # reaches the same verdict away from the thresholds — and, unlike the
+        # cached document, reflects the current cycle's features.
         if worth_calling:
             try:
                 signal = await run_analysis(ticker)
