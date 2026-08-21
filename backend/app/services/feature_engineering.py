@@ -81,8 +81,12 @@ async def compute_features(ticker: str) -> dict:
     macro_yield_spread = macro.get("yield_curve_spread")
     macro_cpi_yoy      = macro.get("cpi_yoy_pct")
 
-    # catalyst_score needs both raw_doc and the partially-built feat dict
-    _partial_feat = {"volume_anomaly": tech["volume_anomaly"]}
+    # catalyst_score needs both raw_doc and the partially-built feat dict.
+    # current_price is required for the analyst-upside component.
+    _partial_feat = {
+        "volume_anomaly": tech["volume_anomaly"],
+        "current_price": current_price,
+    }
     catalyst_score = compute_catalyst_score(raw_doc, _partial_feat)
 
     from app.services.alternative_data import compute_alternative_score
