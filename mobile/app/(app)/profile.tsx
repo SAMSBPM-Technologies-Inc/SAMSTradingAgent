@@ -10,7 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { alertsApi, authApi, tradingApi } from '../../src/lib/api'
-import type { AlertSettings, AutoTradeSettings } from '../../src/types'
+import type { AlertSettings, AutoTradeSettings, TradingMode } from '../../src/types'
 import { useAuth } from '../../src/lib/auth-context'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
@@ -215,9 +215,32 @@ function AlertSettingsCard() {
 // ── Auto trading card ─────────────────────────────────────────────────────────
 
 const DEFAULT_TRADE_SETTINGS: AutoTradeSettings = {
-  enabled: false, paper_trading: true, min_signal_score: 0.75,
+  enabled: false, mode: 'MANUAL', auto_execute_conviction: 'HIGH',
+  paper_trading: true, min_signal_score: 0.75,
   position_size_pct: 0.05, max_open_positions: 5, max_daily_loss_pct: 0.02, allowed_tickers: [],
 }
+
+/**
+ * How much autonomy the agent gets. Presented as a ladder rather than a switch —
+ * nobody funds an account to a fully autonomous agent on day one.
+ */
+const MODE_OPTIONS: { value: TradingMode; label: string; blurb: string }[] = [
+  {
+    value: 'MANUAL',
+    label: 'Manual',
+    blurb: 'The agent proposes every entry and places none. You approve each one.',
+  },
+  {
+    value: 'SEMI_AUTO',
+    label: 'Semi-auto',
+    blurb: 'The agent places high-conviction entries itself and queues the rest for you.',
+  },
+  {
+    value: 'AUTO',
+    label: 'Auto',
+    blurb: 'The agent places every entry that clears its risk guards, unattended.',
+  },
+]
 
 function AutoTradingCard() {
   const [settings, setSettings] = useState<AutoTradeSettings>(DEFAULT_TRADE_SETTINGS)
@@ -307,6 +330,85 @@ function AutoTradingCard() {
 
       {settings.enabled && (
         <>
+          {/* Autonomy ladder — suggest → confirm → automate. */}
+          <View style={{ marginBottom: 16 }}>
+            <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg, marginBottom: 8 }}>
+              Autonomy
+            </Text>
+            <View style={{ gap: 8 }}>
+              {MODE_OPTIONS.map((opt) => {
+                const active = settings.mode === opt.value
+                return (
+                  <Pressable
+                    key={opt.value}
+                    onPress={() => setSettings((s) => ({ ...s, mode: opt.value }))}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected: active }}
+                    style={{
+                      flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+                      borderWidth: 1, borderRadius: 10, padding: 12,
+                      borderColor: active ? C.brand : C.border,
+                      backgroundColor: active ? 'rgba(242,96,12,0.05)' : 'transparent',
+                    }}
+                  >
+                    <View style={{
+                      width: 18, height: 18, borderRadius: 9, marginTop: 1,
+                      borderWidth: 2, borderColor: active ? C.brand : C.border,
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      {active && (
+                        <View style={{ width: 9, height: 9, borderRadius: 5, backgroundColor: C.brand }} />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 13, color: C.fg }}>{opt.label}</Text>
+                      <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 2, lineHeight: 16 }}>
+                        {opt.blurb}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )
+              })}
+            </View>
+          </View>
+
+          {settings.mode === 'SEMI_AUTO' && (
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg, marginBottom: 8 }}>
+                Place unattended at conviction
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {(['HIGH', 'MEDIUM', 'LOW'] as const).map((level) => {
+                  const active = settings.auto_execute_conviction === level
+                  return (
+                    <Pressable
+                      key={level}
+                      onPress={() => setSettings((s) => ({ ...s, auto_execute_conviction: level }))}
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected: active }}
+                      style={{
+                        flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 8,
+                        borderWidth: 1, borderColor: active ? C.brand : C.border,
+                        backgroundColor: active ? C.brand : 'transparent',
+                      }}
+                    >
+                      <Text style={{
+                        fontSize: 12, fontWeight: '600',
+                        color: active ? '#fff' : C.fgMuted,
+                      }}>
+                        {level === 'HIGH' ? 'High only' : level === 'MEDIUM' ? 'Medium+' : 'Any'}
+                      </Text>
+                    </Pressable>
+                  )
+                })}
+              </View>
+              <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 6, lineHeight: 16 }}>
+                Anything weaker goes to your approval queue on the Orders tab. An entry with
+                no conviction attached — the analyst may not have run — always queues.
+              </Text>
+            </View>
+          )}
+
           {/* Paper / Live radio */}
           <View style={{ marginBottom: 16 }}>
             <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg, marginBottom: 8 }}>Trading mode</Text>

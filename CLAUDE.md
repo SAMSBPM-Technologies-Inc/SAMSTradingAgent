@@ -182,6 +182,13 @@ them.
 
 Key shared infrastructure: `AuthContext` (JWT persistence), `ThemeContext` (light/dark), `ToastContext` (`toast` / `toastWithUndo` — destructive actions defer their request for the length of the undo window), `lib/api.ts` (Axios with bearer token). The mobile app mirrors this structure using Expo Router.
 
+**Mobile trading parity.** The order ticket, proposal queue, and Orders tab
+exist on both clients and must stay in step — particularly the two safety
+behaviours: the displayed quantity is never authoritative (the server clamps
+it), and a live-money order or approval requires the user to type the ticker
+back. Mobile still lacks the chart, calibration, factor breakdown, and
+holdings screens.
+
 **Colours are tokens, never hexes.** Every colour lives in both `:root` and
 `.dark` in `frontend/src/index.css`. A raw hex in a component is a light-mode-only
 colour — that is how the Performance page ended up painting `#14110c` on a

@@ -159,8 +159,18 @@ export interface AlertSettings {
   daily_digest: boolean
 }
 
+/**
+ * How much autonomy the agent has. The ladder is suggest → confirm → automate;
+ * new accounts start at MANUAL because an agent that can move money should be
+ * opted into rather than defaulted into.
+ */
+export type TradingMode = 'MANUAL' | 'SEMI_AUTO' | 'AUTO'
+
 export interface AutoTradeSettings {
   enabled: boolean
+  mode: TradingMode
+  /** SEMI_AUTO only: weakest conviction the agent may act on unattended. */
+  auto_execute_conviction: Conviction
   paper_trading: boolean
   min_signal_score: number
   position_size_pct: number
@@ -173,6 +183,51 @@ export interface AutoTradeSettingsResponse extends AutoTradeSettings {
   connected: boolean
 }
 
+export interface ManualOrderRequest {
+  ticker: string
+  action: 'BUY' | 'SELL'
+  /** A request, not an instruction — the server clamps to what it can fund. */
+  qty?: number
+  limit_price?: number
+  /** Required when the server routes to a live-money account. */
+  confirm_live?: boolean
+  idempotency_key?: string
+}
+
+export interface OrderPlacementResponse {
+  placed: boolean
+  status: string
+  ticker: string
+  action: string
+  qty: number
+  limit_price: number
+  order_id?: number | string | null
+  stop_loss?: number | null
+  take_profit?: number | null
+  is_paper: boolean
+  trade_id?: string | null
+  /** Why it wasn't placed, or how the quantity was adjusted. */
+  reason?: string | null
+  /** True when this matched an earlier request and no new order was sent. */
+  duplicate: boolean
+}
+
+/** An entry the agent wanted to take but was not permitted to take alone. */
+export interface Proposal {
+  id: string
+  ticker: string
+  action: string
+  qty: number
+  limit_price: number
+  stop_loss?: number | null
+  take_profit?: number | null
+  signal_score?: number | null
+  conviction?: Conviction | null
+  reason?: string | null
+  proposed_at: string
+  is_paper: boolean
+}
+
 export interface AccountSummaryResponse {
   net_liquidation: number
   total_cash: number
@@ -180,6 +235,8 @@ export interface AccountSummaryResponse {
   realized_pnl: number
   buying_power: number
   connected: boolean
+  account_id: string
+  gross_position_value: number
 }
 
 export interface TradeRecord {
@@ -189,7 +246,11 @@ export interface TradeRecord {
   action: string
   qty: number
   limit_price: number
-  order_id?: number
+  /** IBKR emits ints, Alpaca emits UUID strings. */
+  order_id?: number | string
+  /** Protective legs submitted with the entry. */
+  stop_loss?: number | null
+  take_profit?: number | null
   status: string
   reason?: string
   signal_score?: number
@@ -200,6 +261,10 @@ export interface TradeRecord {
   is_paper: boolean
   opened_at: string
   closed_at?: string
+  /** Written by reconciliation — may be less than qty on a partial fill. */
+  filled_qty?: number | null
+  filled_at?: string | null
+  exit_reason?: string | null
 }
 
 export interface AuthResponse {

@@ -1,6 +1,6 @@
 import React from 'react'
 import { Tabs } from 'expo-router'
-import { Home, BarChart2, User } from 'lucide-react-native'
+import { Home, BarChart2, ClipboardList, User } from 'lucide-react-native'
 import { useTheme } from '../../src/lib/theme-context'
 
 const BRAND = '#f2600c'
@@ -39,6 +39,16 @@ export default function AppLayout() {
         options={{
           title: 'Watchlist',
           tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
+        }}
+      />
+      {/* Second tab deliberately: approving a proposal is the thing you want
+          to do from wherever you are, where the watchlist is what you read at
+          a desk. */}
+      <Tabs.Screen
+        name="orders"
+        options={{
+          title: 'Orders',
+          tabBarIcon: ({ color, size }) => <ClipboardList size={size} color={color} />,
         }}
       />
       <Tabs.Screen

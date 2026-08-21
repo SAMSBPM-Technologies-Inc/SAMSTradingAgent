@@ -14,6 +14,7 @@ import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
+import OrderTicket from '../../src/components/OrderTicket'
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
@@ -403,6 +404,12 @@ export default function TickerScreen() {
             </View>
 
             <ScoreGauge score={data.score} />
+          </View>
+
+          {/* Act on it. A verdict with no action was a dead end — you read BUY,
+              then switched to the broker app. */}
+          <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.border }}>
+            <OrderTicket data={data} />
           </View>
 
           {/* Actions row */}

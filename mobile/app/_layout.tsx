@@ -6,6 +6,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { StatusBar } from 'expo-status-bar'
 import { AuthProvider, useAuth } from '../src/lib/auth-context'
 import { ThemeProvider } from '../src/lib/theme-context'
+import { ToastProvider } from '../src/lib/toast-context'
 
 function RootNavigator() {
   const { token, isLoading } = useAuth()
@@ -42,8 +43,12 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ThemeProvider>
         <AuthProvider>
-          <StatusBar style="dark" />
-          <RootNavigator />
+          {/* Inside SafeAreaProvider — the toast stack positions itself above
+              the tab bar using the safe-area insets. */}
+          <ToastProvider>
+            <StatusBar style="dark" />
+            <RootNavigator />
+          </ToastProvider>
         </AuthProvider>
       </ThemeProvider>
     </SafeAreaProvider>
