@@ -1,6 +1,6 @@
 import React from 'react'
 import { Tabs } from 'expo-router'
-import { Home, Crosshair, BarChart2, User } from 'lucide-react-native'
+import { Home, BarChart2, User } from 'lucide-react-native'
 
 const BRAND = '#f2600c'
 const MUTED = '#83786a'
@@ -31,13 +31,6 @@ export default function AppLayout() {
         options={{
           title: 'Watchlist',
           tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="radar"
-        options={{
-          title: 'Radar',
-          tabBarIcon: ({ color, size }) => <Crosshair size={size} color={color} />,
         }}
       />
       <Tabs.Screen

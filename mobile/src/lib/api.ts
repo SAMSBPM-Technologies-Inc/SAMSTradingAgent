@@ -64,7 +64,7 @@ export const authApi = {
 }
 
 export const watchlistApi = {
-  get: () => api.get('/watchlist'),
+  get: () => api.get<import('../types').WatchlistResponse>('/watchlist'),
   add: (ticker: string) => api.post('/ticker', { ticker }),
   remove: (ticker: string) => api.delete(`/ticker/${ticker}`),
 }
@@ -79,10 +79,6 @@ export const analyzeApi = {
 export const performanceApi = {
   get: () => api.get('/performance'),
   signals: () => api.get<import('../types').SignalRecord[]>('/performance/signals'),
-}
-
-export const radarApi = {
-  scan: () => api.get<import('../types').DipBuyScanResponse>('/signals/dip-buy'),
 }
 
 export const alertsApi = {

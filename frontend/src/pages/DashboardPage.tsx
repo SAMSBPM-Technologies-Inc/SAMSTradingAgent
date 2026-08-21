@@ -1,62 +1,245 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { flushSync } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
-import { AlertCircle, ArrowRight, Plus, Search, Trash2, TrendingUp } from 'lucide-react'
+import {
+  AlertCircle,
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Minus,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react'
 import { watchlistApi, analyzeApi } from '../lib/api'
-import type { Signal, WatchlistItem } from '../types'
+import { relativeTime } from '../lib/format'
+import type { Signal, Trigger, WatchlistItem, WatchlistSetupCounts } from '../types'
 import Layout from '../components/Layout'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
 import LoadingSpinner from '../components/LoadingSpinner'
 
-// ── Filter bar ────────────────────────────────────────────────────────────────
+// ── Filters ───────────────────────────────────────────────────────────────────
+//
+// One bar mixes two axes deliberately: the verdict (BUY/HOLD/SELL, "is this a
+// good business at this price") and the setup (DIP/PROFIT, "is now the moment").
+// They were separate pages answering the same question about the same tickers.
 
-type Filter = 'ALL' | Signal
+type Filter = 'ALL' | Signal | 'ENTRY' | 'EXIT_ALERT'
+
+const SETUP_FILTERS: Filter[] = ['ENTRY', 'EXIT_ALERT']
+
+const FILTER_LABEL: Record<Filter, string> = {
+  ALL: 'All',
+  ENTRY: 'Dip entry',
+  EXIT_ALERT: 'Take profit',
+  BUY: 'Buy',
+  HOLD: 'Hold',
+  SELL: 'Sell',
+}
+
+function matchesFilter(item: WatchlistItem, f: Filter): boolean {
+  if (f === 'ALL') return true
+  if (f === 'ENTRY' || f === 'EXIT_ALERT') return item.trigger === f
+  return item.signal === f
+}
 
 function FilterBar({ active, onChange, counts }: {
   active: Filter
   onChange: (f: Filter) => void
   counts: Record<Filter, number>
 }) {
-  const options: Filter[] = ['ALL', 'BUY', 'HOLD', 'SELL']
+  const options: Filter[] = ['ALL', 'ENTRY', 'EXIT_ALERT', 'BUY', 'HOLD', 'SELL']
   return (
     <div className="flex items-center gap-1 flex-wrap">
-      {options.map((f) => (
-        <button
-          key={f}
-          onClick={() => onChange(f)}
-          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
-            active === f
-              ? 'bg-brand-500 text-white'
-              : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
-          }`}
-        >
-          {f}
-          <span className={`ml-1.5 tabular-nums ${active === f ? 'opacity-80' : 'opacity-60'}`}>
-            {counts[f]}
-          </span>
-        </button>
-      ))}
+      {options.map((f) => {
+        const isSetup = SETUP_FILTERS.includes(f)
+        return (
+          <button
+            key={f}
+            onClick={() => onChange(f)}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+              active === f
+                ? isSetup
+                  ? f === 'ENTRY' ? 'bg-green-600 text-white' : 'bg-amber-500 text-white'
+                  : 'bg-brand-500 text-white'
+                : isSetup && counts[f] > 0
+                  ? f === 'ENTRY'
+                    ? 'bg-green-500/10 text-green-600 dark:text-green-400 hover:bg-green-500/20'
+                    : 'bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20'
+                  : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
+            }`}
+          >
+            {FILTER_LABEL[f]}
+            <span className={`ml-1.5 tabular-nums ${active === f ? 'opacity-80' : 'opacity-60'}`}>
+              {counts[f]}
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }
 
-// ── Skeleton row ──────────────────────────────────────────────────────────────
+// ── Setup badge ───────────────────────────────────────────────────────────────
 
-function SkeletonRow() {
+function SetupBadge({ trigger }: { trigger: Trigger }) {
+  if (trigger === 'ENTRY') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold
+                       bg-green-500/15 text-green-600 dark:text-green-400 whitespace-nowrap">
+        <TrendingDown className="w-3 h-3" />
+        DIP ENTRY
+      </span>
+    )
+  }
+  if (trigger === 'EXIT_ALERT') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold
+                       bg-amber-500/15 text-amber-600 dark:text-amber-400 whitespace-nowrap">
+        <TrendingUp className="w-3 h-3" />
+        TAKE PROFIT
+      </span>
+    )
+  }
+  if (trigger === 'PENDING') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium
+                       bg-[var(--color-border)]/60 text-[var(--color-fg-muted)] whitespace-nowrap">
+        <Clock className="w-3 h-3" />
+        PENDING
+      </span>
+    )
+  }
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] animate-pulse">
-      <div className="h-4 w-14 rounded bg-[var(--color-border)]" />
-      <div className="h-5 w-12 rounded-full bg-[var(--color-border)]" />
-      <div className="h-3 flex-1 max-w-24 rounded bg-[var(--color-border)]" />
-      <div className="h-4 w-16 rounded bg-[var(--color-border)] ml-auto" />
+    <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-fg-muted)]">
+      <Minus className="w-3 h-3" />
+    </span>
+  )
+}
+
+// ── Indicator bar (from the old radar cards) ─────────────────────────────────
+
+function IndicatorBar({ label, value, danger, format }: {
+  label: string
+  value?: number
+  /** Which end of 0–100 is the danger zone. */
+  danger: 'low' | 'high'
+  format?: (v: number) => string
+}) {
+  if (value == null) return null
+  const pct = Math.min(100, Math.max(0, value))
+
+  const barColor = danger === 'high'
+    ? pct > 75 ? 'bg-red-500' : pct > 50 ? 'bg-amber-400' : 'bg-green-500'
+    : pct < 25 ? 'bg-brand-500' : pct < 50 ? 'bg-amber-400' : 'bg-green-500'
+
+  return (
+    <div className="space-y-0.5">
+      <div className="flex justify-between text-xs">
+        <span className="text-[var(--color-fg-muted)]">{label}</span>
+        <span className="font-medium text-[var(--color-fg)] tabular-nums">
+          {format ? format(value) : value.toFixed(1)}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-[var(--color-border)] overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-500 ${barColor}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ── Expanded row detail ───────────────────────────────────────────────────────
+
+function RowDetail({ item }: { item: WatchlistItem }) {
+  const hasIndicators = item.rsi_14 != null || item.stoch_rsi != null || item.bb_pct != null
+
+  return (
+    <div className="px-4 py-4 bg-[var(--color-bg)] border-b border-[var(--color-border)]">
+      {!hasIndicators ? (
+        <p className="text-xs text-[var(--color-fg-muted)]">
+          No indicator data yet — analysis is still running in the background.
+        </p>
+      ) : (
+        <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3">
+          <div className="space-y-2">
+            <IndicatorBar label="RSI-14" value={item.rsi_14} danger="high" />
+            <IndicatorBar
+              label="Stoch RSI"
+              value={item.stoch_rsi != null ? item.stoch_rsi * 100 : undefined}
+              danger="high"
+              format={(v) => `${v.toFixed(0)}%`}
+            />
+            <IndicatorBar
+              label="BB Position"
+              value={item.bb_pct != null ? item.bb_pct * 100 : undefined}
+              danger="high"
+              format={(v) => `${v.toFixed(0)}%`}
+            />
+          </div>
+
+          <div className="space-y-2 text-xs">
+            {item.pct_from_ma20 != null && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-fg-muted)]">Distance from MA-20</span>
+                <span className={`font-medium tabular-nums ${
+                  item.pct_from_ma20 >= 0 ? 'text-amber-500' : 'text-green-500'
+                }`}>
+                  {item.pct_from_ma20 > 0 ? '+' : ''}{item.pct_from_ma20.toFixed(1)}%
+                </span>
+              </div>
+            )}
+            {item.volume_anomaly != null && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-fg-muted)]">Volume vs avg</span>
+                <span className={`font-medium tabular-nums ${
+                  item.volume_anomaly >= 1.2 ? 'text-green-500' : 'text-[var(--color-fg)]'
+                }`}>
+                  {item.volume_anomaly.toFixed(2)}x
+                </span>
+              </div>
+            )}
+            {item.price_target != null && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-fg-muted)]">Price target</span>
+                <span className="font-medium tabular-nums text-[var(--color-fg)]">
+                  ${item.price_target.toFixed(2)}
+                </span>
+              </div>
+            )}
+            {item.computed_at && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-fg-muted)]">Indicators computed</span>
+                <span className="text-[var(--color-fg-muted)]">{relativeTime(item.computed_at)}</span>
+              </div>
+            )}
+            {item.thesis && (
+              <p className="text-[var(--color-fg-muted)] leading-relaxed pt-1 lg:hidden">
+                {item.thesis}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Watchlist row ─────────────────────────────────────────────────────────────
 
-function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: string) => void }) {
+function WatchlistRow({ item, expanded, onToggle, onRemove }: {
+  item: WatchlistItem
+  expanded: boolean
+  onToggle: () => void
+  onRemove: (t: string) => void
+}) {
   const navigate = useNavigate()
   const [removing, setRemoving] = useState(false)
   const scorePct = Math.round(item.score * 100)
@@ -73,87 +256,121 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
     }
   }
 
+  const accent =
+    item.trigger === 'ENTRY' ? 'border-l-2 border-l-green-500'
+    : item.trigger === 'EXIT_ALERT' ? 'border-l-2 border-l-amber-500'
+    : 'border-l-2 border-l-transparent'
+
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] hover:bg-[var(--color-bg)] transition-colors group">
-      {/* Ticker */}
-      <button
-        onClick={() => navigate(`/ticker/${item.ticker}`)}
-        className="font-semibold text-sm text-[var(--color-fg)] w-14 flex-shrink-0 text-left hover:text-brand-500 transition-colors"
-        style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
+    <>
+      <div
+        onClick={onToggle}
+        className={`flex items-center gap-3 pl-3 pr-4 py-3 border-b border-[var(--color-border)]
+                    hover:bg-[var(--color-bg)] transition-colors group cursor-pointer ${accent}`}
       >
-        {item.ticker}
-      </button>
+        {/* Ticker */}
+        <button
+          onClick={(e) => { e.stopPropagation(); navigate(`/ticker/${item.ticker}`) }}
+          className="font-semibold text-sm text-[var(--color-fg)] w-14 flex-shrink-0 text-left hover:text-brand-500 transition-colors"
+          style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
+        >
+          {item.ticker}
+        </button>
 
-      {/* Signal */}
-      <div className="w-20 flex-shrink-0">
-        <SignalBadge signal={item.signal} />
-      </div>
-
-      {/* Score bar + number */}
-      <div className="flex items-center gap-1.5 w-16 sm:w-24 flex-shrink-0">
-        <div className="flex-1 h-1.5 rounded-sm bg-[var(--color-border)] overflow-hidden hidden sm:block">
-          <div
-            className="h-full transition-all duration-500"
-            style={{ width: `${scorePct}%`, background: '#f2600c', borderRadius: '2px' }}
-          />
+        {/* Signal */}
+        <div className="w-20 flex-shrink-0">
+          <SignalBadge signal={item.signal} />
         </div>
-        <span className="text-xs tabular-nums text-[var(--color-fg-muted)] w-6 text-right">{scorePct}</span>
-      </div>
 
-      {/* Price + change */}
-      <div className="flex items-baseline gap-1 flex-shrink-0 min-w-0">
-        {item.current_price != null ? (
-          <>
-            <span className="text-sm tabular-nums font-medium text-[var(--color-fg)]">
-              ${item.current_price.toFixed(2)}
-            </span>
-            {item.day_change_pct != null && (
-              <span className={`text-xs tabular-nums ${item.day_change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
+        {/* Score bar + number */}
+        <div className="flex items-center gap-1.5 w-16 sm:w-24 flex-shrink-0">
+          <div className="flex-1 h-1.5 rounded-sm bg-[var(--color-border)] overflow-hidden hidden sm:block">
+            <div
+              className="h-full transition-all duration-500"
+              style={{ width: `${scorePct}%`, background: '#f2600c', borderRadius: '2px' }}
+            />
+          </div>
+          <span className="text-xs tabular-nums text-[var(--color-fg-muted)] w-6 text-right">{scorePct}</span>
+        </div>
+
+        {/* Price + change */}
+        <div className="flex items-baseline gap-1 flex-shrink-0 min-w-0">
+          {item.current_price != null ? (
+            <>
+              <span className="text-sm tabular-nums font-medium text-[var(--color-fg)]">
+                ${item.current_price.toFixed(2)}
               </span>
-            )}
-          </>
-        ) : (
-          <span className="text-xs text-[var(--color-fg-muted)]">—</span>
-        )}
-      </div>
+              {item.day_change_pct != null && (
+                <span className={`text-xs tabular-nums ${item.day_change_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="text-xs text-[var(--color-fg-muted)]">—</span>
+          )}
+        </div>
 
-      {/* Conviction */}
-      <div className="hidden md:block flex-shrink-0">
-        {item.conviction
-          ? <ConvictionBadge conviction={item.conviction} />
-          : <span className="text-xs text-[var(--color-fg-muted)]">—</span>
-        }
-      </div>
+        {/* Setup */}
+        <div className="w-28 flex-shrink-0 hidden sm:block">
+          <SetupBadge trigger={item.trigger} />
+        </div>
 
-      {/* Thesis snippet */}
-      {item.thesis && (
-        <p className="hidden lg:block flex-1 text-xs text-[var(--color-fg-muted)] truncate min-w-0">
-          {item.thesis}
-        </p>
-      )}
-
-      {/* Actions */}
-      <div className="flex items-center gap-1 ml-auto flex-shrink-0">
-        <button
-          onClick={() => navigate(`/ticker/${item.ticker}`)}
-          className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-brand-500 hover:bg-brand-500/10 transition-colors opacity-0 group-hover:opacity-100"
-          title="View analysis"
-        >
-          View <ArrowRight className="w-3 h-3" />
-        </button>
-        <button
-          onClick={handleRemove}
-          disabled={removing}
-          className="p-1.5 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors"
-          title="Remove from watchlist"
-        >
-          {removing
-            ? <LoadingSpinner size="sm" />
-            : <Trash2 className="w-3.5 h-3.5" />
+        {/* Conviction */}
+        <div className="hidden md:block flex-shrink-0">
+          {item.conviction
+            ? <ConvictionBadge conviction={item.conviction} />
+            : <span className="text-xs text-[var(--color-fg-muted)]">—</span>
           }
-        </button>
+        </div>
+
+        {/* Thesis snippet */}
+        {item.thesis && (
+          <p className="hidden lg:block flex-1 text-xs text-[var(--color-fg-muted)] truncate min-w-0">
+            {item.thesis}
+          </p>
+        )}
+
+        {/* Actions */}
+        <div className="flex items-center gap-1 ml-auto flex-shrink-0">
+          <button
+            onClick={(e) => { e.stopPropagation(); navigate(`/ticker/${item.ticker}`) }}
+            className="hidden sm:flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-brand-500 hover:bg-brand-500/10 transition-colors opacity-0 group-hover:opacity-100"
+            title="View analysis"
+          >
+            View <ArrowRight className="w-3 h-3" />
+          </button>
+          <button
+            onClick={handleRemove}
+            disabled={removing}
+            className="p-1.5 rounded-lg text-[var(--color-fg-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors"
+            title="Remove from watchlist"
+          >
+            {removing
+              ? <LoadingSpinner size="sm" />
+              : <Trash2 className="w-3.5 h-3.5" />
+            }
+          </button>
+          <span className="text-[var(--color-fg-muted)]" title={expanded ? 'Hide indicators' : 'Show indicators'}>
+            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </span>
+        </div>
       </div>
+
+      {expanded && <RowDetail item={item} />}
+    </>
+  )
+}
+
+// ── Skeleton row ──────────────────────────────────────────────────────────────
+
+function SkeletonRow() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)] animate-pulse">
+      <div className="h-4 w-14 rounded bg-[var(--color-border)]" />
+      <div className="h-5 w-12 rounded-full bg-[var(--color-border)]" />
+      <div className="h-3 flex-1 max-w-24 rounded bg-[var(--color-border)]" />
+      <div className="h-4 w-16 rounded bg-[var(--color-border)] ml-auto" />
     </div>
   )
 }
@@ -325,6 +542,47 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
   )
 }
 
+// ── Criteria legend ───────────────────────────────────────────────────────────
+
+function CriteriaLegend() {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="mb-6">
+      <button
+        onClick={() => setShow((v) => !v)}
+        className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors"
+      >
+        {show ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        How setups are detected
+      </button>
+
+      {show && (
+        <div className="card grid sm:grid-cols-2 gap-4 text-xs text-[var(--color-fg-muted)] mt-3">
+          <div>
+            <div className="flex items-center gap-1.5 font-semibold text-green-600 dark:text-green-400 mb-2">
+              <TrendingDown className="w-3.5 h-3.5" /> Dip entry (all must hold)
+            </div>
+            <ul className="space-y-1">
+              <li>RSI-14 ≤ 45 — not yet overbought</li>
+              <li>Stochastic RSI ≤ 20% — oversold</li>
+              <li>Bollinger Band position ≤ 35% — near lower band</li>
+            </ul>
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5 font-semibold text-amber-600 dark:text-amber-400 mb-2">
+              <TrendingUp className="w-3.5 h-3.5" /> Take profit (either fires)
+            </div>
+            <ul className="space-y-1">
+              <li>RSI-14 ≥ 70 — overbought territory</li>
+              <li>Bollinger Band position ≥ 90% — near upper band</li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 function EmptyState() {
@@ -340,7 +598,7 @@ function EmptyState() {
         Your watchlist is empty
       </h3>
       <p className="text-sm text-[var(--color-fg-muted)] max-w-xs">
-        Add tickers above to get AI-powered signal analysis.
+        Add tickers above to get AI-powered signals and dip-buy timing.
       </p>
     </div>
   )
@@ -348,28 +606,38 @@ function EmptyState() {
 
 // ── Dashboard Page ────────────────────────────────────────────────────────────
 
+const EMPTY_SETUPS: WatchlistSetupCounts = { entry: 0, exit_alert: 0, neutral: 0, pending: 0 }
+
 export default function DashboardPage() {
   const [items, setItems] = useState<WatchlistItem[]>([])
+  const [setups, setSetups] = useState<WatchlistSetupCounts>(EMPTY_SETUPS)
   const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('ALL')
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
-  const fetchWatchlist = async () => {
+  const fetchWatchlist = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setIsRefreshing(true)
     setError(null)
     try {
       const res = await watchlistApi.get()
       const data = res.data
       setItems(Array.isArray(data) ? data : (data.items ?? []))
+      setSetups(Array.isArray(data) ? EMPTY_SETUPS : (data.setups ?? EMPTY_SETUPS))
+      setLastUpdated(new Date().toISOString())
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })
         ?.response?.data?.detail
       setError(msg ?? 'Failed to load watchlist.')
     } finally {
       setIsLoading(false)
+      setIsRefreshing(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { fetchWatchlist() }, [])
+  useEffect(() => { fetchWatchlist() }, [fetchWatchlist])
 
   const handleRemove = (ticker: string) => {
     setItems((prev) => prev.filter((i) => i.ticker !== ticker))
@@ -377,17 +645,21 @@ export default function DashboardPage() {
 
   const counts: Record<Filter, number> = {
     ALL: items.length,
+    ENTRY: setups.entry,
+    EXIT_ALERT: setups.exit_alert,
     BUY: items.filter((i) => i.signal === 'BUY').length,
     HOLD: items.filter((i) => i.signal === 'HOLD').length,
     SELL: items.filter((i) => i.signal === 'SELL').length,
   }
 
-  const filtered = filter === 'ALL' ? items : items.filter((i) => i.signal === filter)
+  const filtered = items.filter((i) => matchesFilter(i, filter))
+
+  const actionable = setups.entry + setups.exit_alert
 
   return (
     <Layout>
       {/* Page header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
         <div>
           <h1
             className="text-2xl font-light text-[var(--color-fg)]"
@@ -398,15 +670,41 @@ export default function DashboardPage() {
           {!isLoading && (
             <p className="text-sm text-[var(--color-fg-muted)] mt-0.5">
               {items.length} {items.length === 1 ? 'ticker' : 'tickers'} tracked
+              {actionable > 0 && (
+                <>
+                  {' · '}
+                  <span className="text-[var(--color-fg)] font-medium">
+                    {actionable} {actionable === 1 ? 'setup' : 'setups'} live
+                  </span>
+                </>
+              )}
             </p>
           )}
+        </div>
+
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {lastUpdated && (
+            <span className="text-xs text-[var(--color-fg-muted)]">
+              Updated {relativeTime(lastUpdated)}
+            </span>
+          )}
+          <button
+            onClick={() => fetchWatchlist(true)}
+            disabled={isRefreshing || isLoading}
+            className="btn-secondary flex items-center gap-1.5"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
       </div>
 
       {/* Add ticker */}
-      <div className="mb-6">
+      <div className="mb-4">
         <AddTickerForm onAdded={fetchWatchlist} />
       </div>
+
+      <CriteriaLegend />
 
       {/* Error */}
       {error && (
@@ -432,21 +730,32 @@ export default function DashboardPage() {
           </div>
 
           {/* Column headers — must mirror WatchlistRow layout exactly */}
-          <div className="hidden sm:flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)] text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none">
+          <div className="hidden sm:flex items-center gap-3 pl-3 pr-4 py-2 border-b border-[var(--color-border)] text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none border-l-2 border-l-transparent">
             <span className="w-14 flex-shrink-0">Ticker</span>
             <span className="w-20 flex-shrink-0">Signal</span>
             <span className="w-24 flex-shrink-0">Score</span>
             <span className="flex-shrink-0">Price</span>
+            <span className="w-28 flex-shrink-0">Setup</span>
             <span className="hidden md:block flex-shrink-0">Conviction</span>
           </div>
 
           {filtered.length === 0 ? (
             <div className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
-              No {filter} signals in your watchlist.
+              {filter === 'ENTRY'
+                ? 'No dip-buy setups right now. Add more tickers or wait for a pullback.'
+                : filter === 'EXIT_ALERT'
+                  ? 'Nothing overbought on your watchlist.'
+                  : `No ${FILTER_LABEL[filter].toLowerCase()} signals in your watchlist.`}
             </div>
           ) : (
             filtered.map((item) => (
-              <WatchlistRow key={item.ticker} item={item} onRemove={handleRemove} />
+              <WatchlistRow
+                key={item.ticker}
+                item={item}
+                expanded={expanded === item.ticker}
+                onToggle={() => setExpanded((cur) => (cur === item.ticker ? null : item.ticker))}
+                onRemove={handleRemove}
+              />
             ))
           )}
         </div>

@@ -2,14 +2,16 @@ import React from 'react'
 import { View, Text } from 'react-native'
 import type { Signal } from '../types'
 
-const config: Record<Signal, { bg: string; text: string; label: string }> = {
+const config: Record<Signal | 'PENDING', { bg: string; text: string; label: string }> = {
   BUY:  { bg: '#eaf6ee', text: '#15803d', label: 'BUY' },
   SELL: { bg: '#fbebeb', text: '#b91c1c', label: 'SELL' },
   HOLD: { bg: '#fbf1e2', text: '#b45309', label: 'HOLD' },
+  PENDING: { bg: '#ece8e0', text: '#83786a', label: '—' },
 }
 
 interface Props {
-  signal: Signal
+  /** PENDING covers a watched ticker the pipeline has not scored yet. */
+  signal: Signal | 'PENDING'
   size?: 'sm' | 'lg'
 }
 

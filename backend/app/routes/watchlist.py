@@ -15,8 +15,10 @@ from app.models.stock import (
     TickerAddResponse,
     WatchlistItem,
     WatchlistResponse,
+    WatchlistSetupCounts,
 )
 from app.services.scoring import compute_personalized_score
+from app.services.setup_scan import TRIGGER_RANK, setup_from_feature_doc
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["watchlist"])
@@ -25,52 +27,75 @@ logger = get_logger(__name__)
 _CONVICTION_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, None: 0}
 
 
-@router.get("/watchlist", response_model=WatchlistResponse, summary="Current user's watchlist ranked by conviction")
+@router.get(
+    "/watchlist",
+    response_model=WatchlistResponse,
+    summary="Current user's watchlist — verdict and timing setup per ticker",
+)
 async def get_watchlist(current_user: dict = Depends(get_current_user)) -> WatchlistResponse:
+    """
+    One row per watched ticker, carrying both the scored verdict
+    (signal/score/conviction/thesis, from stocks_signals) and the timing setup
+    (ENTRY/EXIT_ALERT/NEUTRAL plus its indicators, from stocks_features).
+
+    This is the single source for the merged home page; the dip-buy scan that
+    used to back /alpha-radar is the same data under a different projection.
+    Tickers with no signal document yet are returned as signal="PENDING" so a
+    freshly-added ticker is visible while the pipeline runs.
+    """
     user_id = str(current_user["_id"])
     db = await get_db()
 
     watched = await db[COLL_WATCHED].find({"user_id": user_id}, {"ticker": 1}).to_list(length=2000)
     tickers = [d["ticker"] for d in watched]
     if not tickers:
-        return WatchlistResponse(count=0, items=[])
+        return WatchlistResponse(count=0, items=[], setups=WatchlistSetupCounts())
 
     user_weights = current_user.get("scoring_weights")
 
-    # Fetch signals + raw prices always; features only when user has custom weights
-    if user_weights:
-        docs, raw_docs, feat_docs = await asyncio.gather(
-            db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
-            db[COLL_RAW].find(
-                {"ticker": {"$in": tickers}},
-                {"ticker": 1, "current_price": 1, "day_change_pct": 1},
-            ).to_list(length=2000),
-            db[COLL_FEATURES].find({"ticker": {"$in": tickers}}).to_list(length=2000),
-        )
-        feat_by_ticker = {f["ticker"]: f for f in feat_docs}
-    else:
-        docs, raw_docs = await asyncio.gather(
-            db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
-            db[COLL_RAW].find(
-                {"ticker": {"$in": tickers}},
-                {"ticker": 1, "current_price": 1, "day_change_pct": 1},
-            ).to_list(length=2000),
-        )
-        feat_by_ticker = {}
-
+    # Features are now always needed — they carry the timing setup, not just the
+    # inputs to a personalised re-score.
+    docs, raw_docs, feat_docs = await asyncio.gather(
+        db[COLL_SIGNALS].find({"ticker": {"$in": tickers}}).to_list(length=2000),
+        db[COLL_RAW].find(
+            {"ticker": {"$in": tickers}},
+            {"ticker": 1, "current_price": 1, "day_change_pct": 1},
+        ).to_list(length=2000),
+        db[COLL_FEATURES].find({"ticker": {"$in": tickers}}).to_list(length=2000),
+    )
+    feat_by_ticker = {f["ticker"]: f for f in feat_docs}
     raw_by_ticker = {r["ticker"]: r for r in raw_docs}
+    signal_by_ticker = {d["ticker"]: d for d in docs}
 
-    items = []
-    for doc in docs:
+    items: list[WatchlistItem] = []
+    for ticker in tickers:
+        feat = feat_by_ticker.get(ticker)
+        raw = raw_by_ticker.get(ticker, {})
+        setup = setup_from_feature_doc(feat) if feat else {"trigger": "PENDING"}
+
+        doc = signal_by_ticker.get(ticker)
+        if doc is None:
+            # Watched but never scored — the pipeline has not produced a signal
+            # document yet. Previously these vanished from the list entirely.
+            items.append(WatchlistItem(
+                ticker=ticker,
+                signal="PENDING",
+                score=0.0,
+                confidence=0.0,
+                current_price=raw.get("current_price") or (feat or {}).get("current_price"),
+                day_change_pct=raw.get("day_change_pct"),
+                generated_at=datetime.now(tz=timezone.utc),
+                **setup,
+            ))
+            continue
+
         ao = doc.get("analyst_output") or {}
         generated_at = doc.get("generated_at", datetime.now(tz=timezone.utc))
         if isinstance(generated_at, datetime) and generated_at.tzinfo is None:
             generated_at = generated_at.replace(tzinfo=timezone.utc)
-        raw = raw_by_ticker.get(doc["ticker"], {})
 
         # Apply per-user weights if set, otherwise use stored global score/signal
-        if user_weights and doc["ticker"] in feat_by_ticker:
-            feat = feat_by_ticker[doc["ticker"]]
+        if user_weights and feat is not None:
             # Merge risk from signal doc into feat for threshold check
             feat["risk"] = doc.get("risk", {})
             score, signal = compute_personalized_score(feat, user_weights)
@@ -79,7 +104,7 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
             signal = doc.get("signal", "HOLD")
 
         items.append(WatchlistItem(
-            ticker=doc["ticker"],
+            ticker=ticker,
             signal=signal,
             score=score,
             confidence=doc.get("confidence", 0.0),
@@ -89,10 +114,23 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
             price_target=ao.get("price_target"),
             thesis=ao.get("thesis"),
             generated_at=generated_at,
+            **setup,
         ))
 
-    items.sort(key=lambda x: (_CONVICTION_RANK[x.conviction], x.score), reverse=True)
-    return WatchlistResponse(count=len(items), items=items)
+    # Actionable setups float to the top, then conviction, then score — a dip
+    # entry is time-sensitive in a way a high-conviction HOLD is not.
+    items.sort(
+        key=lambda x: (TRIGGER_RANK.get(x.trigger, 0), _CONVICTION_RANK[x.conviction], x.score),
+        reverse=True,
+    )
+
+    setups = WatchlistSetupCounts(
+        entry=sum(1 for i in items if i.trigger == "ENTRY"),
+        exit_alert=sum(1 for i in items if i.trigger == "EXIT_ALERT"),
+        neutral=sum(1 for i in items if i.trigger == "NEUTRAL"),
+        pending=sum(1 for i in items if i.trigger == "PENDING"),
+    )
+    return WatchlistResponse(count=len(items), items=items, setups=setups)
 
 
 @router.post("/ticker", response_model=TickerAddResponse, summary="Add a ticker to the watch list")

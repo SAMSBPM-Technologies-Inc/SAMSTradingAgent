@@ -156,6 +156,15 @@ class SignalSummary(BaseModel):
 
 
 class WatchlistItem(BaseModel):
+    """
+    One watched ticker, carrying both projections that used to be split across
+    /watchlist and /signals/dip-buy: the scored verdict (signal, conviction,
+    thesis) and the timing setup (trigger + the indicators behind it).
+
+    A ticker with no signal document yet is still returned, as signal="PENDING"
+    with score 0 — the old /watchlist iterated the signals collection and so
+    silently dropped freshly-added tickers until the pipeline caught up.
+    """
     ticker: str
     signal: str
     score: float
@@ -167,10 +176,30 @@ class WatchlistItem(BaseModel):
     thesis: Optional[str] = None
     generated_at: datetime
 
+    # ── Timing setup (formerly the Alpha Radar dip-buy scan) ──────────────────
+    #: "ENTRY" | "EXIT_ALERT" | "NEUTRAL" | "PENDING" (no feature data yet)
+    trigger: str = "PENDING"
+    rsi_14: Optional[float] = None
+    stoch_rsi: Optional[float] = None
+    bb_pct: Optional[float] = None          # 0=lower band, 1=upper band
+    ma_20: Optional[float] = None
+    volume_anomaly: Optional[float] = None  # latest vol / 20d avg
+    pct_from_ma20: Optional[float] = None   # (price - ma20) / ma20 * 100
+    computed_at: Optional[datetime] = None  # when the indicators were computed
+
+
+class WatchlistSetupCounts(BaseModel):
+    """Trigger tallies for the filter bar, so the client needn't recount."""
+    entry: int = 0
+    exit_alert: int = 0
+    neutral: int = 0
+    pending: int = 0
+
 
 class WatchlistResponse(BaseModel):
     count: int
     items: list[WatchlistItem]
+    setups: WatchlistSetupCounts = WatchlistSetupCounts()
 
 
 class TickerAddRequest(BaseModel):
