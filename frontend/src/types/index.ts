@@ -1,5 +1,12 @@
 export type Signal = 'BUY' | 'SELL' | 'HOLD'
 
+/**
+ * Timing setup for a watched ticker — the dip-buy classification that used to
+ * live on its own /radar page. PENDING means the pipeline has not produced
+ * indicator data for the ticker yet.
+ */
+export type Trigger = 'ENTRY' | 'EXIT_ALERT' | 'NEUTRAL' | 'PENDING'
+
 export interface AlternativeData {
   short_interest?: {
     short_ratio?: number | null
@@ -51,7 +58,8 @@ export interface User {
 
 export interface WatchlistItem {
   ticker: string
-  signal: Signal
+  /** 'PENDING' while the ticker is watched but not yet scored. */
+  signal: Signal | 'PENDING'
   score: number
   confidence: number
   conviction?: Conviction
@@ -60,6 +68,29 @@ export interface WatchlistItem {
   price_target?: number
   thesis?: string
   generated_at: string
+
+  // ── Timing setup (formerly the Alpha Radar dip-buy scan) ──────────────────
+  trigger: Trigger
+  rsi_14?: number
+  stoch_rsi?: number
+  bb_pct?: number
+  ma_20?: number
+  volume_anomaly?: number
+  pct_from_ma20?: number
+  computed_at?: string
+}
+
+export interface WatchlistSetupCounts {
+  entry: number
+  exit_alert: number
+  neutral: number
+  pending: number
+}
+
+export interface WatchlistResponse {
+  count: number
+  items: WatchlistItem[]
+  setups: WatchlistSetupCounts
 }
 
 export interface AnalyzeResponse {

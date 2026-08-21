@@ -243,8 +243,10 @@ class Settings(BaseSettings):
     # a dip-buyer by accident rather than by decision.
     #
     # Defaults to mean_reversion because that is what the product already
-    # assumes — /alpha-radar is a dip-buy scanner. Under `momentum` the
-    # mean-reversion components are inverted, not merely reweighted.
+    # assumes — the watchlist's ENTRY trigger is a dip-buy setup (see
+    # services/setup_scan.py). Under `momentum` the mean-reversion components
+    # are inverted, not merely reweighted, and those thresholds would need to
+    # invert with them.
     technical_stance: str = Field(
         default="mean_reversion",
         description="How technical signals are read: mean_reversion | momentum | blended",

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query
 from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import AnalyzeResponse, DipBuyCandidate, DipBuyScanResponse, SignalListResponse, SignalSummary
+from app.services.setup_scan import FEATURE_PROJECTION, setup_from_feature_doc
 from app.services.scoring import compute_personalized_score
 from app.utils.logger import get_logger
 
@@ -94,23 +95,19 @@ async def signals_summary(current_user: dict = Depends(get_current_user)) -> Sig
     )
 
 
-# ── Entry thresholds (your dip-buy strategy) ──────────────────────────────────
-_ENTRY_RSI_MAX       = 45.0   # RSI not yet overbought
-_ENTRY_STOCH_MAX     = 0.20   # oversold on Stochastic RSI
-_ENTRY_BB_MAX        = 0.35   # near or below lower Bollinger Band
-
-# ── Exit-alert thresholds ─────────────────────────────────────────────────────
-_EXIT_RSI_MIN        = 70.0   # overbought
-_EXIT_BB_MIN         = 0.90   # near upper Bollinger Band
-
-
 @router.get(
     "/signals/dip-buy",
     response_model=DipBuyScanResponse,
-    summary="Scan watchlist for dip-buy entries and profit-taking alerts",
+    summary="[Deprecated] Scan watchlist for dip-buy entries and profit-taking alerts",
+    deprecated=True,
 )
 async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuyScanResponse:
     """
+    Deprecated — GET /watchlist now returns the same classification inline as
+    `trigger` on every item, so the merged home page needs one round-trip
+    instead of two. Kept for any client still on the old Alpha Radar page;
+    thresholds are shared with /watchlist via services.setup_scan.
+
     Entry candidates  — stoch_rsi ≤ 0.20  AND  bb_pct ≤ 0.35  AND  rsi_14 ≤ 45
     Exit alerts       — rsi_14 ≥ 70  OR  bb_pct ≥ 0.90
 
@@ -127,12 +124,7 @@ async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuy
 
     # Fetch latest features doc per watched ticker
     docs = await db[COLL_FEATURES].find(
-        {"ticker": {"$in": tickers}},
-        {
-            "ticker": 1, "current_price": 1, "computed_at": 1,
-            "rsi_14": 1, "stoch_rsi": 1, "bb_pct": 1,
-            "ma_20": 1, "volume_anomaly": 1, "technical_score": 1,
-        },
+        {"ticker": {"$in": tickers}}, FEATURE_PROJECTION,
     ).to_list(length=2000)
 
     entries: list[DipBuyCandidate] = []
@@ -140,55 +132,19 @@ async def dip_buy_scan(current_user: dict = Depends(get_current_user)) -> DipBuy
     neutrals: list[DipBuyCandidate] = []
 
     analyzed_tickers: set[str] = set()
+    by_trigger = {"ENTRY": entries, "EXIT_ALERT": exits, "NEUTRAL": neutrals}
 
     for doc in docs:
-        rsi       = doc.get("rsi_14")
-        stoch     = doc.get("stoch_rsi")
-        bb        = doc.get("bb_pct")
-        price     = doc.get("current_price", 0.0)
-        ma20      = doc.get("ma_20")
-        computed  = doc.get("computed_at", datetime.now(tz=timezone.utc))
-        if isinstance(computed, datetime) and computed.tzinfo is None:
-            computed = computed.replace(tzinfo=timezone.utc)
-
         ticker = doc["ticker"]
         analyzed_tickers.add(ticker)
-        pct_from_ma20 = round((price - ma20) / ma20 * 100, 2) if ma20 else None
+        setup = setup_from_feature_doc(doc)
 
-        candidate_base = dict(
+        by_trigger[setup["trigger"]].append(DipBuyCandidate(
             ticker=ticker,
-            current_price=price,
-            rsi_14=rsi,
-            stoch_rsi=stoch,
-            bb_pct=bb,
-            ma_20=ma20,
-            volume_anomaly=doc.get("volume_anomaly"),
+            current_price=doc.get("current_price", 0.0),
             technical_score=doc.get("technical_score", 0.0),
-            pct_from_ma20=pct_from_ma20,
-            computed_at=computed,
-        )
-
-        # Entry: all three conditions must hold; None values are skipped safely
-        is_entry = (
-            (rsi is not None and rsi <= _ENTRY_RSI_MAX)
-            and (stoch is not None and stoch <= _ENTRY_STOCH_MAX)
-            and (bb is not None and bb <= _ENTRY_BB_MAX)
-        )
-        if is_entry:
-            entries.append(DipBuyCandidate(**candidate_base, trigger="ENTRY"))
-            continue
-
-        # Exit alert: either condition fires
-        is_exit = (
-            (rsi is not None and rsi >= _EXIT_RSI_MIN)
-            or (bb is not None and bb >= _EXIT_BB_MIN)
-        )
-        if is_exit:
-            exits.append(DipBuyCandidate(**candidate_base, trigger="EXIT_ALERT"))
-            continue
-
-        # Neutral — has data but doesn't meet entry or exit criteria
-        neutrals.append(DipBuyCandidate(**candidate_base, trigger="NEUTRAL"))
+            **setup,
+        ))
 
     # Tickers in watchlist but with no feature document yet
     unanalyzed = [t for t in tickers if t not in analyzed_tickers]

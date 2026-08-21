@@ -1,10 +1,10 @@
 /**
  * Shared formatting helpers.
  *
- * Relative time lived as a private copy inside AlphaRadarPage, and a second,
- * differently-worded implementation appeared in HoldingsPage. Two spellings of
- * the same idea ("7m ago" vs "7 min ago") read as inconsistency, so this is the
- * single definition both use.
+ * Relative time lived as a private copy inside the old Alpha Radar page, and a
+ * second, differently-worded implementation appeared in HoldingsPage. Two
+ * spellings of the same idea ("7m ago" vs "7 min ago") read as inconsistency,
+ * so this is the single definition every page uses.
  */
 
 /**

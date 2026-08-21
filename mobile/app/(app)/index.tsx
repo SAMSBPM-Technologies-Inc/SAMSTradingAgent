@@ -10,20 +10,48 @@ import {
   ActivityIndicator,
 } from 'react-native'
 import { router } from 'expo-router'
-import { AlertCircle, ArrowRight, Plus, Search, Trash2, TrendingUp } from 'lucide-react-native'
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Plus,
+  Search,
+  Trash2,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { watchlistApi, analyzeApi } from '../../src/lib/api'
-import type { Signal, WatchlistItem } from '../../src/types'
+import type { Signal, Trigger, WatchlistItem, WatchlistSetupCounts } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
-import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 
-type Filter = 'ALL' | Signal
-const FILTERS: Filter[] = ['ALL', 'BUY', 'HOLD', 'SELL']
+// One filter bar mixes two axes deliberately: the verdict (BUY/HOLD/SELL) and
+// the timing setup (DIP/PROFIT). They were separate tabs answering the same
+// question about the same tickers.
+type Filter = 'ALL' | Signal | 'ENTRY' | 'EXIT_ALERT'
+const FILTERS: Filter[] = ['ALL', 'ENTRY', 'EXIT_ALERT', 'BUY', 'HOLD', 'SELL']
+
+const FILTER_LABEL: Record<Filter, string> = {
+  ALL: 'All',
+  ENTRY: 'Dip',
+  EXIT_ALERT: 'Profit',
+  BUY: 'Buy',
+  HOLD: 'Hold',
+  SELL: 'Sell',
+}
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
   fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
+  green: '#16a34a', amber: '#d97706', red: '#ef4444',
+}
+
+function matchesFilter(item: WatchlistItem, f: Filter): boolean {
+  if (f === 'ALL') return true
+  if (f === 'ENTRY' || f === 'EXIT_ALERT') return item.trigger === f
+  return item.signal === f
 }
 
 // ── Filter bar ────────────────────────────────────────────────────────────────
@@ -35,23 +63,163 @@ function FilterBar({
 }) {
   return (
     <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
-      {FILTERS.map((f) => (
-        <Pressable
-          key={f}
-          onPress={() => onChange(f)}
-          style={{
-            paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
-            backgroundColor: active === f ? C.brand : `${C.border}80`,
-          }}
-        >
-          <Text style={{
-            fontSize: 11, fontWeight: '600',
-            color: active === f ? '#fff' : C.fgMuted,
-          }}>
-            {f} {counts[f]}
-          </Text>
-        </Pressable>
-      ))}
+      {FILTERS.map((f) => {
+        const isSetup = f === 'ENTRY' || f === 'EXIT_ALERT'
+        const setupColor = f === 'ENTRY' ? C.green : C.amber
+        const activeBg = isSetup ? setupColor : C.brand
+        const idleBg = isSetup && counts[f] > 0
+          ? f === 'ENTRY' ? 'rgba(22,163,74,0.12)' : 'rgba(217,119,6,0.12)'
+          : `${C.border}80`
+        const idleFg = isSetup && counts[f] > 0 ? setupColor : C.fgMuted
+
+        return (
+          <Pressable
+            key={f}
+            onPress={() => onChange(f)}
+            style={{
+              paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8,
+              backgroundColor: active === f ? activeBg : idleBg,
+            }}
+          >
+            <Text style={{
+              fontSize: 11, fontWeight: '600',
+              color: active === f ? '#fff' : idleFg,
+            }}>
+              {FILTER_LABEL[f]} {counts[f]}
+            </Text>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
+// ── Setup badge ───────────────────────────────────────────────────────────────
+
+function SetupBadge({ trigger }: { trigger: Trigger }) {
+  if (trigger === 'NEUTRAL') {
+    return <Text style={{ fontSize: 11, color: C.fgMuted }}>—</Text>
+  }
+
+  const cfg = trigger === 'ENTRY'
+    ? { bg: 'rgba(22,163,74,0.14)', fg: C.green, label: 'DIP', Icon: TrendingDown }
+    : trigger === 'EXIT_ALERT'
+      ? { bg: 'rgba(217,119,6,0.14)', fg: C.amber, label: 'PROFIT', Icon: TrendingUp }
+      : { bg: `${C.border}99`, fg: C.fgMuted, label: 'WAIT', Icon: Clock }
+
+  const { bg, fg, label, Icon } = cfg
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: 3,
+      backgroundColor: bg, paddingHorizontal: 6, paddingVertical: 2,
+      borderRadius: 999, alignSelf: 'flex-start',
+    }}>
+      <Icon size={9} color={fg} />
+      <Text style={{ fontSize: 9, fontWeight: '700', color: fg, letterSpacing: 0.3 }}>
+        {label}
+      </Text>
+    </View>
+  )
+}
+
+// ── Indicator bar (from the old radar cards) ─────────────────────────────────
+
+function IndicatorBar({ label, value, format }: {
+  label: string
+  value?: number
+  format?: (v: number) => string
+}) {
+  if (value == null) return null
+  const pct = Math.min(100, Math.max(0, value))
+  // High is the danger end for all three: overbought means the dip has passed.
+  const color = pct > 75 ? C.red : pct > 50 ? '#f59e0b' : C.green
+
+  return (
+    <View style={{ gap: 3 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        <Text style={{ fontSize: 11, color: C.fgMuted }}>{label}</Text>
+        <Text style={{ fontSize: 11, fontWeight: '600', color: C.fg }}>
+          {format ? format(value) : value.toFixed(1)}
+        </Text>
+      </View>
+      <View style={{ height: 4, borderRadius: 2, backgroundColor: C.border, overflow: 'hidden' }}>
+        <View style={{ height: '100%', width: `${pct}%`, backgroundColor: color, borderRadius: 2 }} />
+      </View>
+    </View>
+  )
+}
+
+// ── Expanded row detail ───────────────────────────────────────────────────────
+
+function RowDetail({ item }: { item: WatchlistItem }) {
+  const hasIndicators = item.rsi_14 != null || item.stoch_rsi != null || item.bb_pct != null
+
+  return (
+    <View style={{
+      paddingHorizontal: 16, paddingVertical: 14, gap: 10,
+      backgroundColor: C.bg,
+      borderBottomWidth: 1, borderBottomColor: C.border,
+    }}>
+      {!hasIndicators ? (
+        <Text style={{ fontSize: 12, color: C.fgMuted }}>
+          No indicator data yet — analysis is still running in the background.
+        </Text>
+      ) : (
+        <>
+          <IndicatorBar label="RSI-14" value={item.rsi_14} />
+          <IndicatorBar
+            label="Stoch RSI"
+            value={item.stoch_rsi != null ? item.stoch_rsi * 100 : undefined}
+            format={(v) => `${v.toFixed(0)}%`}
+          />
+          <IndicatorBar
+            label="BB Position"
+            value={item.bb_pct != null ? item.bb_pct * 100 : undefined}
+            format={(v) => `${v.toFixed(0)}%`}
+          />
+
+          {item.pct_from_ma20 != null && (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={{ fontSize: 11, color: C.fgMuted }}>Distance from MA-20</Text>
+              <Text style={{
+                fontSize: 11, fontWeight: '600',
+                color: item.pct_from_ma20 >= 0 ? C.amber : C.green,
+              }}>
+                {item.pct_from_ma20 > 0 ? '+' : ''}{item.pct_from_ma20.toFixed(1)}%
+              </Text>
+            </View>
+          )}
+          {item.volume_anomaly != null && (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={{ fontSize: 11, color: C.fgMuted }}>Volume vs avg</Text>
+              <Text style={{
+                fontSize: 11, fontWeight: '600',
+                color: item.volume_anomaly >= 1.2 ? C.green : C.fg,
+              }}>
+                {item.volume_anomaly.toFixed(2)}x
+              </Text>
+            </View>
+          )}
+          {item.conviction && (
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <Text style={{ fontSize: 11, color: C.fgMuted }}>Conviction</Text>
+              <Text style={{ fontSize: 11, fontWeight: '600', color: C.fg }}>{item.conviction}</Text>
+            </View>
+          )}
+          {item.thesis && (
+            <Text style={{ fontSize: 12, color: C.fgMuted, lineHeight: 17 }}>{item.thesis}</Text>
+          )}
+        </>
+      )}
+
+      <Pressable
+        onPress={() => router.push(`/ticker/${item.ticker}`)}
+        style={{ paddingTop: 2 }}
+      >
+        <Text style={{ fontSize: 12, fontWeight: '600', color: C.brand }}>
+          View full analysis →
+        </Text>
+      </Pressable>
     </View>
   )
 }
@@ -75,7 +243,12 @@ function SkeletonRow() {
 
 // ── Watchlist row ─────────────────────────────────────────────────────────────
 
-function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: string) => void }) {
+function WatchlistRow({ item, expanded, onToggle, onRemove }: {
+  item: WatchlistItem
+  expanded: boolean
+  onToggle: () => void
+  onRemove: (t: string) => void
+}) {
   const [removing, setRemoving] = useState(false)
   const scorePct = Math.round(item.score * 100)
 
@@ -90,68 +263,81 @@ function WatchlistRow({ item, onRemove }: { item: WatchlistItem; onRemove: (t: s
     }
   }
 
+  const accent =
+    item.trigger === 'ENTRY' ? C.green
+    : item.trigger === 'EXIT_ALERT' ? C.amber
+    : 'transparent'
+
   return (
-    <Pressable
-      onPress={() => router.push(`/ticker/${item.ticker}`)}
-      style={({ pressed }) => ({
-        flexDirection: 'row', alignItems: 'center', gap: 10,
-        paddingHorizontal: 16, paddingVertical: 13,
-        borderBottomWidth: 1, borderBottomColor: C.border,
-        backgroundColor: pressed ? C.bg : C.surface,
-      })}
-    >
-      {/* Ticker */}
-      <Text style={{
-        width: 44, fontSize: 13, fontWeight: '700', color: C.fg, flexShrink: 0,
-      }}>
-        {item.ticker}
-      </Text>
-
-      {/* Signal */}
-      <View style={{ width: 42, flexShrink: 0 }}>
-        <SignalBadge signal={item.signal} />
-      </View>
-
-      {/* Score bar */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, width: 70, flexShrink: 0 }}>
-        <View style={{
-          flex: 1, height: 4, borderRadius: 2, backgroundColor: C.border, overflow: 'hidden',
-        }}>
-          <View style={{ height: '100%', width: `${scorePct}%`, backgroundColor: C.brand, borderRadius: 2 }} />
+    <>
+      <Pressable
+        onPress={onToggle}
+        style={({ pressed }) => ({
+          flexDirection: 'row', alignItems: 'center', gap: 10,
+          paddingLeft: 13, paddingRight: 16, paddingVertical: 13,
+          borderBottomWidth: 1, borderBottomColor: C.border,
+          borderLeftWidth: 3, borderLeftColor: accent,
+          backgroundColor: pressed ? C.bg : C.surface,
+        })}
+      >
+        {/* Ticker + setup */}
+        <View style={{ width: 52, flexShrink: 0, gap: 3 }}>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: C.fg }}>
+            {item.ticker}
+          </Text>
+          <SetupBadge trigger={item.trigger} />
         </View>
-        <Text style={{ fontSize: 10, color: C.fgMuted, width: 20, textAlign: 'right' }}>{scorePct}</Text>
-      </View>
 
-      {/* Price */}
-      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3, flex: 1 }}>
-        {item.current_price != null ? (
-          <>
-            <Text style={{ fontSize: 13, fontWeight: '600', color: C.fg }}>
-              ${item.current_price.toFixed(2)}
-            </Text>
-            {item.day_change_pct != null && (
-              <Text style={{
-                fontSize: 10,
-                color: item.day_change_pct >= 0 ? '#22c55e' : '#ef4444',
-              }}>
-                {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
+        {/* Signal */}
+        <View style={{ width: 42, flexShrink: 0 }}>
+          <SignalBadge signal={item.signal} />
+        </View>
+
+        {/* Score bar */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, width: 64, flexShrink: 0 }}>
+          <View style={{
+            flex: 1, height: 4, borderRadius: 2, backgroundColor: C.border, overflow: 'hidden',
+          }}>
+            <View style={{ height: '100%', width: `${scorePct}%`, backgroundColor: C.brand, borderRadius: 2 }} />
+          </View>
+          <Text style={{ fontSize: 10, color: C.fgMuted, width: 20, textAlign: 'right' }}>{scorePct}</Text>
+        </View>
+
+        {/* Price */}
+        <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 3, flex: 1 }}>
+          {item.current_price != null ? (
+            <>
+              <Text style={{ fontSize: 13, fontWeight: '600', color: C.fg }}>
+                ${item.current_price.toFixed(2)}
               </Text>
-            )}
-          </>
-        ) : (
-          <Text style={{ fontSize: 11, color: C.fgMuted }}>—</Text>
-        )}
-      </View>
+              {item.day_change_pct != null && (
+                <Text style={{
+                  fontSize: 10,
+                  color: item.day_change_pct >= 0 ? '#22c55e' : C.red,
+                }}>
+                  {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
+                </Text>
+              )}
+            </>
+          ) : (
+            <Text style={{ fontSize: 11, color: C.fgMuted }}>—</Text>
+          )}
+        </View>
 
-      {/* Remove */}
-      <Pressable onPress={handleRemove} disabled={removing} hitSlop={8}>
-        {removing
-          ? <ActivityIndicator size={14} color={C.fgMuted} />
-          : <Trash2 size={14} color={C.fgMuted} />}
+        {/* Remove */}
+        <Pressable onPress={handleRemove} disabled={removing} hitSlop={8}>
+          {removing
+            ? <ActivityIndicator size={14} color={C.fgMuted} />
+            : <Trash2 size={14} color={C.fgMuted} />}
+        </Pressable>
+
+        {expanded
+          ? <ChevronUp size={14} color={C.fgMuted} />
+          : <ChevronDown size={14} color={C.fgMuted} />}
       </Pressable>
 
-      <ArrowRight size={14} color={C.fgMuted} />
-    </Pressable>
+      {expanded && <RowDetail item={item} />}
+    </>
   )
 }
 
@@ -331,39 +517,54 @@ function EmptyState() {
 
 // ── Dashboard Screen ──────────────────────────────────────────────────────────
 
+const EMPTY_SETUPS: WatchlistSetupCounts = { entry: 0, exit_alert: 0, neutral: 0, pending: 0 }
+
 export default function DashboardScreen() {
   const [items, setItems] = useState<WatchlistItem[]>([])
+  const [setups, setSetups] = useState<WatchlistSetupCounts>(EMPTY_SETUPS)
   const [isLoading, setIsLoading] = useState(true)
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<Filter>('ALL')
+  const [expanded, setExpanded] = useState<string | null>(null)
 
-  const fetchWatchlist = async () => {
+  const fetchWatchlist = useCallback(async () => {
     setError(null)
     try {
       const res = await watchlistApi.get()
       const data = res.data
       setItems(Array.isArray(data) ? data : (data.items ?? []))
+      setSetups(Array.isArray(data) ? EMPTY_SETUPS : (data.setups ?? EMPTY_SETUPS))
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
       setError(msg ?? 'Failed to load watchlist.')
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [])
 
-  useEffect(() => { fetchWatchlist() }, [])
+  useEffect(() => { fetchWatchlist() }, [fetchWatchlist])
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true)
+    await fetchWatchlist()
+    setIsRefreshing(false)
+  }, [fetchWatchlist])
 
   const handleRemove = (ticker: string) =>
     setItems((prev) => prev.filter((i) => i.ticker !== ticker))
 
   const counts: Record<Filter, number> = {
     ALL: items.length,
+    ENTRY: setups.entry,
+    EXIT_ALERT: setups.exit_alert,
     BUY: items.filter((i) => i.signal === 'BUY').length,
     HOLD: items.filter((i) => i.signal === 'HOLD').length,
     SELL: items.filter((i) => i.signal === 'SELL').length,
   }
 
-  const filtered = filter === 'ALL' ? items : items.filter((i) => i.signal === filter)
+  const filtered = items.filter((i) => matchesFilter(i, filter))
+  const actionable = setups.entry + setups.exit_alert
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
@@ -375,8 +576,15 @@ export default function DashboardScreen() {
           data={isLoading ? [] : filtered}
           keyExtractor={(item) => item.ticker}
           keyboardShouldPersistTaps="handled"
+          refreshing={isRefreshing}
+          onRefresh={handleRefresh}
           renderItem={({ item }) => (
-            <WatchlistRow item={item} onRemove={handleRemove} />
+            <WatchlistRow
+              item={item}
+              expanded={expanded === item.ticker}
+              onToggle={() => setExpanded((cur) => (cur === item.ticker ? null : item.ticker))}
+              onRemove={handleRemove}
+            />
           )}
           ListHeaderComponent={
             <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
@@ -388,6 +596,11 @@ export default function DashboardScreen() {
                 {!isLoading && (
                   <Text style={{ fontSize: 13, color: C.fgMuted, marginTop: 2 }}>
                     {items.length} {items.length === 1 ? 'ticker' : 'tickers'} tracked
+                    {actionable > 0 && (
+                      <Text style={{ color: C.fg, fontWeight: '600' }}>
+                        {' · '}{actionable} {actionable === 1 ? 'setup' : 'setups'} live
+                      </Text>
+                    )}
                   </Text>
                 )}
               </View>
@@ -444,7 +657,7 @@ export default function DashboardScreen() {
                       <Text key={h} style={{
                         fontSize: 9, fontWeight: '700', color: C.fgMuted,
                         textTransform: 'uppercase', letterSpacing: 0.8,
-                        width: h === 'Ticker' ? 44 : h === 'Signal' ? 42 : h === 'Score' ? 70 : undefined,
+                        width: h === 'Ticker' ? 52 : h === 'Signal' ? 42 : h === 'Score' ? 64 : undefined,
                         flex: h === 'Price' ? 1 : undefined,
                       }}>
                         {h}
@@ -456,9 +669,13 @@ export default function DashboardScreen() {
 
               {/* No filtered results */}
               {!isLoading && items.length > 0 && filtered.length === 0 && (
-                <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-                  <Text style={{ fontSize: 13, color: C.fgMuted }}>
-                    No {filter} signals in your watchlist.
+                <View style={{ paddingVertical: 40, paddingHorizontal: 16, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, color: C.fgMuted, textAlign: 'center' }}>
+                    {filter === 'ENTRY'
+                      ? 'No dip-buy setups right now. Add more tickers or wait for a pullback.'
+                      : filter === 'EXIT_ALERT'
+                        ? 'Nothing overbought on your watchlist.'
+                        : `No ${FILTER_LABEL[filter].toLowerCase()} signals in your watchlist.`}
                   </Text>
                 </View>
               )}

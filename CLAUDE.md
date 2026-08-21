@@ -89,7 +89,7 @@ npm run web
 
 | Collection | Purpose |
 |---|---|
-| `users` | Accounts, JWT, tier (0-3), role, IBKR creds (encrypted), alert settings |
+| `users` | Accounts, JWT, per-user scoring weights, IBKR creds (encrypted), alert settings |
 | `stocks_raw` | Latest OHLCV + sentiment per ticker |
 | `stocks_features` | Technical/fundamental/sentiment/macro/catalyst scores |
 | `stocks_signals` | Latest BUY/SELL/HOLD per ticker (per-user aware) |
@@ -98,26 +98,33 @@ npm run web
 | `trades` | Auto-trading order records |
 | `performance_stats` | Signal accuracy, win rates per ticker |
 
-### Authentication & Tiers
+### Authentication
 
-JWT-based auth. User tiers gate feature access:
-- Tier 0: Basic signals
-- Tier 1: Full dashboard
-- Tier 2+: AI Analyst report (`/report/{ticker}`)
-- Tier 3: Admin (`sudheer.samudrala@samsbpm.com` auto-elevated on startup)
+JWT-based auth, no feature gating. The tier system (0–3) and the admin portal
+were removed in `f61066f7` when this became a personal tool with master/user
+separation — every authenticated user gets every feature.
 
 ### Frontend Route Structure
 
 ```
 /auth          → AuthPage (register/login)
-/              → DashboardPage (watchlist + live signals)
+/              → DashboardPage (watchlist: signals + dip-buy setups in one table)
 /ticker/:sym   → TickerPage (full AI report, bull/bear, technical chart)
+/holdings      → HoldingsPage (IBKR positions)
 /performance   → PerformancePage (signal history, win rate)
 /profile       → ProfilePage (alerts, IBKR config, auto-trade)
-/alpha-radar   → AlphaRadarPage (dip-buy scanner)
 /guide         → GuidePage (IB Gateway setup)
-/admin         → AdminPage (user management, tier/role)
+/radar         → redirects to / (see below)
 ```
+
+**Alpha Radar is merged into the dashboard.** It was never a second set of
+tickers — both pages read the same `watchlists` collection, one joining
+`stocks_signals` for the verdict and the other joining `stocks_features` for
+dip-buy timing. `GET /watchlist` now returns both projections per row: the
+signal plus a `trigger` (`ENTRY` / `EXIT_ALERT` / `NEUTRAL` / `PENDING`) with
+the indicators behind it, surfaced as a Setup column, filter chips, and an
+expandable row detail. Thresholds live in `services/setup_scan.py`;
+`GET /signals/dip-buy` is deprecated but still served from the same module.
 
 Key shared infrastructure: `AuthContext` (JWT persistence), `ThemeContext` (light/dark), `lib/api.ts` (Axios with bearer token). The mobile app mirrors this structure using Expo Router.
 

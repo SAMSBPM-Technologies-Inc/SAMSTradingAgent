@@ -8,7 +8,6 @@ import TickerPage from './pages/TickerPage'
 import PerformancePage from './pages/PerformancePage'
 import ProfilePage from './pages/ProfilePage'
 import GuidePage from './pages/GuidePage'
-import AlphaRadarPage from './pages/AlphaRadarPage'
 import HoldingsPage from './pages/HoldingsPage'
 import LoadingSpinner from './components/LoadingSpinner'
 
@@ -82,14 +81,9 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
-      <Route
-        path="/radar"
-        element={
-          <ProtectedRoute>
-            <AlphaRadarPage />
-          </ProtectedRoute>
-        }
-      />
+      {/* Alpha Radar merged into the dashboard — its dip-buy setups are now a
+          column and filter on the watchlist. Kept as a redirect for bookmarks. */}
+      <Route path="/radar" element={<Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

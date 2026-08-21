@@ -274,7 +274,7 @@ function IbGatewayGuide() {
           </Step>
           <Step n={3} title="Restart the API and verify">
             <p>After setting env vars, redeploy or restart the API container. On startup, the server automatically connects to IB Gateway.</p>
-            <p>Users with Tier 3 can check the connection status on the <strong>Profile → Auto Trading</strong> card — the indicator shows <strong>IB Gateway connected</strong> when the server has an active session.</p>
+            <p>Check the connection status on the <strong>Profile → Auto Trading</strong> card — the indicator shows <strong>IB Gateway connected</strong> when the server has an active session.</p>
           </Step>
         </div>
       </Section>
