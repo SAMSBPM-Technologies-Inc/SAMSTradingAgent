@@ -63,7 +63,10 @@ function FilterBar({ active, onChange, counts }: {
           <button
             key={f}
             onClick={() => onChange(f)}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            // A filter chip is a selection, not a link — say which one is on.
+            aria-pressed={active === f}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
               active === f
                 ? isSetup
                   ? f === 'ENTRY' ? 'bg-green-600 text-white' : 'bg-amber-500 text-white'
@@ -255,12 +258,32 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
     : item.trigger === 'EXIT_ALERT' ? 'border-l-2 border-l-amber-500'
     : 'border-l-2 border-l-transparent'
 
+  const detailId = `row-detail-${item.ticker}`
+
   return (
     <>
+      {/*
+        Was a bare `div onClick`: not focusable, not operable from a keyboard,
+        and announced as nothing. It is a disclosure control, so it says so —
+        role, expanded state, what it controls, and Enter/Space to activate.
+      */}
       <div
         onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        aria-label={`${item.ticker}, ${item.signal}, score ${scorePct}. Toggle indicator detail.`}
         className={`flex items-center gap-3 pl-3 pr-4 py-3 border-b border-[var(--color-border)]
-                    hover:bg-[var(--color-bg)] transition-colors group cursor-pointer ${accent}`}
+                    hover:bg-[var(--color-bg)] transition-colors group cursor-pointer
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
+                    focus-visible:ring-inset ${accent}`}
       >
         {/* Ticker */}
         <button
@@ -345,13 +368,21 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
               : <Trash2 className="w-3.5 h-3.5" />
             }
           </button>
-          <span className="text-[var(--color-fg-muted)]" title={expanded ? 'Hide indicators' : 'Show indicators'}>
+          <span
+            aria-hidden="true"
+            className="text-[var(--color-fg-muted)]"
+            title={expanded ? 'Hide indicators' : 'Show indicators'}
+          >
             {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </span>
         </div>
       </div>
 
-      {expanded && <RowDetail item={item} />}
+      {expanded && (
+        <div id={detailId}>
+          <RowDetail item={item} />
+        </div>
+      )}
     </>
   )
 }
@@ -544,14 +575,18 @@ function CriteriaLegend() {
     <div className="mb-6">
       <button
         onClick={() => setShow((v) => !v)}
+        aria-expanded={show}
+        aria-controls="setup-criteria"
         className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors"
       >
-        {show ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        <span aria-hidden="true">
+          {show ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </span>
         How setups are detected
       </button>
 
       {show && (
-        <div className="card grid sm:grid-cols-2 gap-4 text-xs text-[var(--color-fg-muted)] mt-3">
+        <div id="setup-criteria" className="card grid sm:grid-cols-2 gap-4 text-xs text-[var(--color-fg-muted)] mt-3">
           <div>
             <div className="flex items-center gap-1.5 font-semibold text-green-600 dark:text-green-400 mb-2">
               <TrendingDown className="w-3.5 h-3.5" /> Dip entry (all must hold)
@@ -603,15 +638,21 @@ function SortHeader({ field, sort, onSort, className = '', children }: {
         else if (sort!.dir === 'desc') onSort({ field, dir: 'asc' })
         else onSort(null)
       }}
-      aria-label={`Sort by ${field}`}
+      // Announces the current sort rather than just painting an arrow.
+      aria-label={`Sort by ${field}${
+        active ? `, currently ${sort!.dir === 'desc' ? 'descending' : 'ascending'}` : ''
+      }`}
       className={`flex-shrink-0 flex items-center gap-1 text-left uppercase tracking-widest
                   transition-colors hover:text-[var(--color-fg)]
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded
                   ${active ? 'text-[var(--color-fg)]' : ''} ${className}`}
     >
       {children}
-      {active && (sort!.dir === 'desc'
-        ? <ChevronDown className="w-3 h-3" />
-        : <ChevronUp className="w-3 h-3" />)}
+      <span aria-hidden="true">
+        {active && (sort!.dir === 'desc'
+          ? <ChevronDown className="w-3 h-3" />
+          : <ChevronUp className="w-3 h-3" />)}
+      </span>
     </button>
   )
 }
@@ -778,7 +819,7 @@ export default function DashboardPage() {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl
+        <div role="alert" className="flex items-center gap-3 px-4 py-3 rounded-xl
                         bg-red-500/10 border border-red-500/20 text-red-500 text-sm mb-6">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}

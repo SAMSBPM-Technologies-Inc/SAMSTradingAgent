@@ -548,6 +548,7 @@ export default function PerformancePage() {
         </div>
       ) : error ? (
         <div
+          role="alert"
           className="flex items-center gap-3 px-4 py-3 rounded-xl
                       bg-red-500/10 border border-red-500/20 text-red-500 text-sm"
         >

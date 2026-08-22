@@ -156,17 +156,23 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
 
 function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(true)
+  const panelId = `panel-${title.toLowerCase().replace(/\s+/g, '-')}`
   return (
     <div>
       <button
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls={panelId}
         className="flex items-center justify-between w-full py-1 text-sm font-medium
-                   text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors"
+                   text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors
+                   focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded"
       >
         {title}
-        {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        <span aria-hidden="true">
+          {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </span>
       </button>
-      {open && <div className="mt-3">{children}</div>}
+      {open && <div id={panelId} className="mt-3">{children}</div>}
     </div>
   )
 }
@@ -516,7 +522,14 @@ function ExportMenu({ data }: { data: AnalyzeResponse }) {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          {/* A real button, not a div with a click handler: the backdrop is a
+              dismiss control, so it should be reachable and announce itself. */}
+          <button
+            type="button"
+            aria-label="Close export menu"
+            className="fixed inset-0 z-10 cursor-default"
+            onClick={() => setOpen(false)}
+          />
           <div className="absolute right-0 top-full mt-1 z-20 w-40 border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden" style={{ borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}>
             <button
               onClick={() => { downloadPdf(data); setOpen(false) }}

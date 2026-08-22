@@ -41,15 +41,45 @@ export default function CommandPalette() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Where focus was before the dialog opened, so it can be handed back. A
+  // modal that drops focus to the top of the document on close loses a
+  // keyboard user their place entirely.
+  const restoreFocusTo = useRef<HTMLElement | null>(null)
+
   useEffect(() => {
     if (open) {
+      restoreFocusTo.current = document.activeElement as HTMLElement | null
       setQuery('')
       setResults([])
       setActive(0)
       // Focus after paint, or the input is not in the DOM yet.
       requestAnimationFrame(() => inputRef.current?.focus())
+      // The page behind a modal must not scroll under it.
+      const prevOverflow = document.body.style.overflow
+      document.body.style.overflow = 'hidden'
+      return () => { document.body.style.overflow = prevOverflow }
     }
+    restoreFocusTo.current?.focus?.()
   }, [open])
+
+  // Trap Tab inside the dialog. Without this, tabbing walks into the page
+  // behind it while the overlay still covers everything.
+  const onTrapKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab') return
+    const focusable = e.currentTarget.querySelectorAll<HTMLElement>(
+      'input, button, [href], [tabindex]:not([tabindex="-1"])',
+    )
+    if (focusable.length === 0) return
+    const first = focusable[0]
+    const last = focusable[focusable.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
 
   const search = useCallback((q: string) => {
     if (debounce.current) clearTimeout(debounce.current)
@@ -79,19 +109,31 @@ export default function CommandPalette() {
   if (!open) return null
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh] px-4
-                 bg-black/40 backdrop-blur-sm"
-      onClick={() => setOpen(false)}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Search tickers"
-    >
+    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-[15vh] px-4">
+      {/* Backdrop as a real button: it is a dismiss control, so it should be
+          focusable and announce itself rather than being a div that happens to
+          respond to clicks. Escape closes too, handled globally above. */}
+      <button
+        type="button"
+        aria-label="Close search"
+        className="absolute inset-0 bg-black/40 backdrop-blur-sm cursor-default"
+        onClick={() => setOpen(false)}
+      />
+      {/*
+        A modal dialog has to intercept Tab to keep focus inside it — that is the
+        WAI-ARIA authoring practice, not an interaction bolted onto inert markup.
+        The rule classes `dialog` as non-interactive and cannot express the
+        exception.
+      */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions */}
       <div
-        className="w-full max-w-lg rounded-xl border border-[var(--color-border)]
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search tickers"
+        className="relative w-full max-w-lg rounded-xl border border-[var(--color-border)]
                    bg-[var(--color-surface)] overflow-hidden"
         style={{ boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}
-        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onTrapKeyDown}
       >
         <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-border)]">
           {loading

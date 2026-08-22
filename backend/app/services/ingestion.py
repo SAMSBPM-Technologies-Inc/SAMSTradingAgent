@@ -152,44 +152,14 @@ async def _fetch_enrichment(ticker: str) -> tuple[dict, list, dict, dict, dict]:
 
 
 async def _fetch_price_history(ticker: str) -> pd.DataFrame:
-    """Download OHLCV history via Yahoo Finance v8 chart API. Non-blocking async."""
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    params = {"interval": "1d", "range": f"{HISTORY_DAYS}d"}
-    hosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
+    """
+    OHLCV history from the configured provider.
 
-    last_exc: Exception | None = None
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        for attempt, host in enumerate(hosts):
-            if attempt > 0:
-                await asyncio.sleep(1)
-            try:
-                url = f"https://{host}/v8/finance/chart/{ticker}"
-                resp = await client.get(url, headers=headers, params=params)
-                resp.raise_for_status()
-                data = resp.json()
-                break
-            except Exception as exc:
-                last_exc = exc
-        else:
-            raise last_exc  # type: ignore[misc]
+    The Yahoo-specific fetch that used to live here moved to
+    `services/price_providers.py` behind a seam, so replacing the unlicensed
+    development source with a licensed one is a `PRICE_PROVIDER` change rather
+    than an edit to the ingestion path.
+    """
+    from app.services.price_providers import fetch_price_history
 
-    result = data.get("chart", {}).get("result", [])
-    if not result:
-        return pd.DataFrame()
-
-    chart = result[0]
-    timestamps = chart.get("timestamp", [])
-    ohlcv = chart.get("indicators", {}).get("quote", [{}])[0]
-    adjclose = chart.get("indicators", {}).get("adjclose", [{}])[0].get("adjclose", [])
-
-    df = pd.DataFrame(
-        {
-            "Open": ohlcv.get("open", []),
-            "High": ohlcv.get("high", []),
-            "Low": ohlcv.get("low", []),
-            "Close": adjclose if adjclose else ohlcv.get("close", []),
-            "Volume": ohlcv.get("volume", []),
-        },
-        index=pd.to_datetime(timestamps, unit="s", utc=True),
-    )
-    return df.dropna(subset=["Close"])
+    return await fetch_price_history(ticker, HISTORY_DAYS)

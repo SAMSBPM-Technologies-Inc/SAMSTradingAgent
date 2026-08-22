@@ -344,7 +344,7 @@ export default function CalibrationPage() {
           <LoadingSpinner size="lg" />
         </div>
       ) : error ? (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl
+        <div role="alert" className="flex items-center gap-3 px-4 py-3 rounded-xl
                         bg-red-500/10 border border-red-500/20 text-red-500 text-sm">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}

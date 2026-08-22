@@ -198,6 +198,16 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-dvh flex flex-col bg-[var(--color-bg)] transition-colors duration-200">
+      {/* Visible only on focus. Without it a keyboard user tabs the whole nav
+          on every page before reaching content. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-[70] focus:top-2 focus:left-2
+                   focus:px-3 focus:py-2 focus:rounded-lg focus:bg-brand-500 focus:text-white
+                   focus:text-sm focus:font-medium"
+      >
+        Skip to content
+      </a>
       <CommandPalette />
       <DesktopNav />
 
@@ -217,8 +227,12 @@ export default function Layout({ children }: LayoutProps) {
       <div className="flex-1 flex flex-col md:pt-[60px] min-w-0">
         <AccountBar />
 
-        <main className="flex-1 mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
-                         max-w-5xl mx-auto w-full">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
+                     max-w-5xl mx-auto w-full focus:outline-none"
+        >
           {children}
           <Disclaimer />
         </main>
