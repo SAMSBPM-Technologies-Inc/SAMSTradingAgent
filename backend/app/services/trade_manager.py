@@ -22,6 +22,17 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+class BrokerUnavailable(RuntimeError):
+    """
+    The broker could not be reached, so the requested action did not happen.
+
+    Raised only on user-initiated paths. The scheduled agent swallows the same
+    condition and retries on its next cycle, but a person who pressed a button
+    has to be told, or the UI reports a success that never occurred.
+    """
+
+
 # Exchange listing for Canadian-listed tickers (CIRO restriction — cannot trade via API)
 _CANADIAN_EXCHANGE_SUFFIXES = {".TO", ".V", ".CN", ".NEO"}
 
@@ -211,17 +222,60 @@ async def _get_user_account_id(user_id: str) -> str:
     return get_settings().ibkr_account_id
 
 
-async def _open_position_exists(user_id: str, ticker: str) -> bool:
-    """Return True if there's already an open (PENDING or FILLED BUY) trade for this ticker."""
+async def _open_position(user_id: str, ticker: str) -> dict | None:
+    """
+    The open (PENDING / FILLED / PARTIAL) BUY blocking this ticker, if any.
+
+    Returns the document rather than a bool so callers can say *what* is in the
+    way. "Position already open" gave no way to tell a filled holding from a
+    stale order record that never reconciled, and those need opposite responses.
+    """
     db = await get_db()
-    doc = await db[COLL_TRADES].find_one({
+    return await db[COLL_TRADES].find_one({
         "user_id": user_id,
         "ticker": ticker,
         "action": "BUY",
         "status": {"$in": list(TradeStatus.OPEN)},
         "closed_at": None,
     })
-    return doc is not None
+
+
+def _blocked_by_open_position(trade: dict) -> str:
+    """
+    Explain the refusal in terms of what the user can act on.
+
+    Why a second entry is refused at all: the first one is bracketed, and its
+    stop and target are still working at the venue. A second entry would attach
+    a second bracket to the same holding, so two stops could fire against one
+    position and sell more than is held — the same oversell-into-a-short hazard
+    `execute_exit` cancels the bracket to avoid. Scaling in safely means
+    cancelling the working legs and submitting one combined bracket, which is a
+    deliberate feature, not a side effect of pressing Buy twice.
+    """
+    status = trade.get("status", "OPEN")
+    qty = trade.get("filled_qty") or trade.get("qty") or 0
+    opened = trade.get("opened_at")
+    when = opened.strftime("%d %b") if hasattr(opened, "strftime") else "earlier"
+
+    if status == TradeStatus.FILLED:
+        return (
+            f"You already hold {qty:g} shares from {when}, with a stop and target "
+            f"working at the broker. Adding to it would attach a second bracket to "
+            f"the same holding. Close the position first, or leave it to run."
+        )
+    if status == TradeStatus.PARTIAL:
+        return (
+            f"An order from {when} is partially filled ({qty:g} shares so far). "
+            f"Wait for it to complete or close the position before adding."
+        )
+    # PENDING — submitted but not filled. May also be a record that never
+    # reconciled, which the user cannot tell apart without being told.
+    order_id = trade.get("order_id")
+    return (
+        f"An order for {qty:g} shares from {when} is still working"
+        + (f" (broker order {order_id})" if order_id else " and has no broker order id")
+        + ". Wait for it to fill, or close it from the Orders page if it is stale."
+    )
 
 
 async def _count_open_positions(user_id: str) -> int:
@@ -310,8 +364,9 @@ async def _prepare_entry(
             return None, f"Ticker not in allowed list: {settings.allowed_tickers}"
 
     # ── Guard: no duplicate open position ─────────────────────────────────────
-    if await _open_position_exists(user_id, ticker):
-        return None, "Position already open for this ticker"
+    existing = await _open_position(user_id, ticker)
+    if existing is not None:
+        return None, _blocked_by_open_position(existing)
 
     # ── Guard: max open positions ─────────────────────────────────────────────
     if await _count_open_positions(user_id) >= settings.max_open_positions:
@@ -691,6 +746,13 @@ async def execute_exit(
 
         if not ibkr.is_connected():
             logger.warning("exit_skipped_not_connected", user_id=user_id, ticker=ticker)
+            # A user-initiated close must not report success it did not achieve.
+            # The agent's own exits still fail quietly — it retries next cycle —
+            # but someone pressing Close needs to know the order never left.
+            if not require_enabled:
+                raise BrokerUnavailable(
+                    f"Broker not connected — the close order for {ticker} was not sent."
+                )
             return
 
         price = current_price or 0.0
@@ -797,8 +859,16 @@ async def execute_exit(
             account_id=account_id, trigger=trigger,
         )
 
+    except BrokerUnavailable:
+        # Deliberately not swallowed: the caller is a person waiting on an
+        # answer, and this handler exists to keep the scheduled agent alive,
+        # not to hide failures from the UI.
+        raise
     except Exception as exc:
         logger.error("execute_exit_failed", user_id=user_id, ticker=ticker, error=str(exc))
+        if not require_enabled:
+            # Same reasoning — a user-initiated close reports what happened.
+            raise
 
 
 # ── Reconciliation ────────────────────────────────────────────────────────────

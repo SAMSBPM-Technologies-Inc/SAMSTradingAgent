@@ -29,7 +29,7 @@ from app.models.trade import (
     TradeStatus,
 )
 from app.services import broker as ibkr
-from app.services.trade_manager import execute_exit, execute_manual_entry
+from app.services.trade_manager import BrokerUnavailable, execute_exit, execute_manual_entry
 from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/trading", tags=["trading"])
@@ -280,10 +280,22 @@ async def close_position(
     # require_enabled=False: this is the user asking to get out, not the agent
     # acting. Gating it on the auto-trade switch meant every manual-mode user
     # got "close_order_submitted" while nothing was submitted.
-    await execute_exit(
-        user_id, ticker.upper(), current_price,
-        trigger="MANUAL_CLOSE", require_enabled=False,
-    )
+    try:
+        await execute_exit(
+            user_id, ticker.upper(), current_price,
+            trigger="MANUAL_CLOSE", require_enabled=False,
+        )
+    except BrokerUnavailable as exc:
+        # 503, not 500: nothing is broken, the venue is simply unreachable and
+        # retrying later is the right response.
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error("manual_close_failed", user_id=user_id, ticker=ticker, error=str(exc))
+        raise HTTPException(
+            status_code=502,
+            detail=f"The close order for {ticker.upper()} could not be submitted: {exc}",
+        )
+
     logger.info("manual_close_requested", user_id=user_id, ticker=ticker.upper())
     return {"status": "close_order_submitted", "ticker": ticker.upper()}
 
