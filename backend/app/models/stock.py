@@ -290,7 +290,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.0.0"
+    version: str = "1.1.0"
 
 
 # ── Dip-buy scan ──────────────────────────────────────────────────────────────
