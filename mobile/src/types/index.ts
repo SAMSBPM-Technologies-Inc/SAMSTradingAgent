@@ -83,6 +83,44 @@ export interface WatchlistResponse {
   setups: WatchlistSetupCounts
 }
 
+/** Risk assessment — gates every BUY. */
+export interface RiskAssessment {
+  risk_score: number
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH'
+  explanation: string
+}
+
+/** One sub-score and the share of the composite it supplied. */
+export interface FactorContribution {
+  key: string
+  label: string
+  /** Sub-score, 0–1. */
+  score: number
+  weight: number
+  /** Points of the composite. Signed for the alternative-data modifier. */
+  contribution: number
+}
+
+export interface ScoreBreakdown {
+  method: string
+  /** False on the XGBoost path, where a weighted decomposition would be fiction. */
+  attributable: boolean
+  personalized: boolean
+  factors: FactorContribution[]
+  alternative_data?: FactorContribution | null
+  base_total: number
+  composite: number
+}
+
+/** The thresholds behind the verdict, read from the engine rather than restated. */
+export interface SignalGate {
+  buy_threshold: number
+  sell_threshold: number
+  risk_max_for_buy: number
+  score_passes_buy: boolean
+  risk_passes_buy: boolean
+}
+
 export interface AnalyzeResponse {
   ticker: string
   score: number
@@ -98,7 +136,9 @@ export interface AnalyzeResponse {
   exit_suggestion?: string
   explanation: string
   generated_at: string
-  risk?: Record<string, unknown>
+  risk?: RiskAssessment
+  breakdown?: ScoreBreakdown | null
+  gate?: SignalGate | null
   bull_case?: string
   bear_case?: string
   catalysts?: string[]
@@ -210,6 +250,80 @@ export interface OrderPlacementResponse {
   reason?: string | null
   /** True when this matched an earlier request and no new order was sent. */
   duplicate: boolean
+}
+
+/**
+ * Every bucket carries `n` and `significant`. Below `min_samples_for_signal` a
+ * win rate is anecdote, and the API says so rather than returning a
+ * confident-looking percentage — the UI must not launder that away.
+ */
+export interface CalibrationBucket {
+  n: number
+  win_rate: number | null
+  avg_return: number | null
+  median_return: number | null
+  significant: boolean
+}
+
+export interface ScoreBucket extends CalibrationBucket {
+  lo: number
+  hi: number
+}
+
+export interface ThresholdRow extends CalibrationBucket {
+  threshold: number
+  risk_filtered: boolean
+  /** Fraction of the sample that actually carried a risk score. */
+  risk_coverage: number
+}
+
+export interface ConfidenceBucket extends CalibrationBucket {
+  lo: number
+  hi: number
+}
+
+export interface CalibrationReport {
+  ticker: string | null
+  settled_records: number
+  base_rate: CalibrationBucket
+  score_buckets: ScoreBucket[]
+  /** null when there aren't enough usable buckets to say either way. */
+  score_ranks_outcomes: boolean | null
+  usable_buckets: number
+  threshold_sweep: ThresholdRow[]
+  confidence_buckets: ConfidenceBucket[]
+  min_samples_for_signal: number
+}
+
+export interface Holding {
+  ticker: string
+  qty: number
+  avg_cost: number
+  market_value: number | null
+  unrealized_pnl: number | null
+}
+
+export interface HoldingsResponse {
+  connected: boolean
+  account_id: string
+  holdings: Holding[]
+  total_market_value: number
+}
+
+export interface OhlcBar {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface ChartSeries {
+  ticker: string
+  bars: OhlcBar[]
+  sma_20: { date: string; value: number }[]
+  sma_50: { date: string; value: number }[]
 }
 
 /** An entry the agent wanted to take but was not permitted to take alone. */

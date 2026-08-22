@@ -15,6 +15,8 @@ import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
 import OrderTicket from '../../src/components/OrderTicket'
+import PriceChart from '../../src/components/PriceChart'
+import { FactorBreakdown, RiskPanel } from '../../src/components/ScorePanels'
 
 const C = {
   bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
@@ -476,6 +478,28 @@ export default function TickerScreen() {
         </View>
 
         {/* Thesis */}
+        {/* Price action first — it is what anyone opens a stock page to see. */}
+        <Section title="Price">
+          <PriceChart ticker={data.ticker} />
+        </Section>
+
+        {/* Why this score, and why this verdict. */}
+        {data.breakdown && (
+          <Section title="Score Breakdown">
+            <FactorBreakdown breakdown={data.breakdown} />
+          </Section>
+        )}
+        {data.risk && (
+          <Section title="Risk & Signal Gate">
+            <RiskPanel
+              risk={data.risk}
+              gate={data.gate}
+              signal={data.signal}
+              score={data.score}
+            />
+          </Section>
+        )}
+
         {data.thesis && (
           <Section title="Investment Thesis">
             <Text style={{ fontSize: 13, color: C.fg, lineHeight: 20 }}>{data.thesis}</Text>

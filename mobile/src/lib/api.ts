@@ -69,6 +69,12 @@ export const watchlistApi = {
   remove: (ticker: string) => api.delete(`/ticker/${ticker}`),
 }
 
+export const chartApi = {
+  /** OHLCV + SMA for the chart. The PNG at /chart/{t} is export-only. */
+  series: (ticker: string, days = 180) =>
+    api.get<import('../types').ChartSeries>(`/chart/${ticker}/series`, { params: { days } }),
+}
+
 export const analyzeApi = {
   get: (ticker: string, forceRefresh = false) =>
     api.get('/analyze', { params: { ticker, force_refresh: forceRefresh } }),
@@ -79,6 +85,10 @@ export const analyzeApi = {
 export const performanceApi = {
   get: () => api.get('/performance'),
   signals: () => api.get<import('../types').SignalRecord[]>('/performance/signals'),
+  calibration: (ticker?: string, applyRiskGate = true) =>
+    api.get<import('../types').CalibrationReport>('/performance/calibration', {
+      params: { ticker, apply_risk_gate: applyRiskGate },
+    }),
 }
 
 export const alertsApi = {
@@ -105,6 +115,7 @@ export const tradingApi = {
   placeOrder: (body: import('../types').ManualOrderRequest) =>
     api.post<import('../types').OrderPlacementResponse>('/trading/order', body),
 
+  getHoldings: () => api.get<import('../types').HoldingsResponse>('/trading/holdings'),
   getProposals: () => api.get<import('../types').Proposal[]>('/trading/proposals'),
   approveProposal: (id: string, confirmLive = false) =>
     api.post<import('../types').OrderPlacementResponse>(

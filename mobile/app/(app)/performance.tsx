@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react'
-import { View, Text, ScrollView } from 'react-native'
-import { AlertCircle, BarChart2, Clock, TrendingUp } from 'lucide-react-native'
+import { View, Text, Pressable, ScrollView } from 'react-native'
+import { AlertCircle, BarChart2, Clock, Target, TrendingUp } from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { router } from 'expo-router'
 import { performanceApi } from '../../src/lib/api'
 import type { PerformanceResponse, Signal, SignalRecord, Conviction } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
@@ -220,9 +221,26 @@ export default function PerformanceScreen() {
         <Text style={{ fontSize: 22, fontWeight: '700', color: C.fg, marginBottom: 4 }}>
           Signal Accuracy
         </Text>
-        <Text style={{ fontSize: 13, color: C.fgMuted, marginBottom: 24 }}>
+        <Text style={{ fontSize: 13, color: C.fgMuted, marginBottom: 12 }}>
           Historical accuracy of AI-generated trading signals
         </Text>
+
+        {/* "Was it right?" is this screen; "were the thresholds in the right
+            place?" is the next one, and it is the harder question. */}
+        <Pressable
+          onPress={() => router.push('/(app)/calibration')}
+          accessibilityRole="button"
+          style={{
+            flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start',
+            borderWidth: 1, borderColor: C.border, borderRadius: 9,
+            paddingHorizontal: 12, paddingVertical: 8, marginBottom: 24,
+          }}
+        >
+          <Target size={14} color={C.fgMuted} />
+          <Text style={{ fontSize: 12, fontWeight: '600', color: C.fgMuted }}>
+            Calibration
+          </Text>
+        </Pressable>
 
         {isLoading ? (
           <View style={{ alignItems: 'center', paddingVertical: 60 }}>

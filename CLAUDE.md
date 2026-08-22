@@ -182,12 +182,21 @@ them.
 
 Key shared infrastructure: `AuthContext` (JWT persistence), `ThemeContext` (light/dark), `ToastContext` (`toast` / `toastWithUndo` — destructive actions defer their request for the length of the undo window), `lib/api.ts` (Axios with bearer token). The mobile app mirrors this structure using Expo Router.
 
-**Mobile trading parity.** The order ticket, proposal queue, and Orders tab
-exist on both clients and must stay in step — particularly the two safety
-behaviours: the displayed quantity is never authoritative (the server clamps
-it), and a live-money order or approval requires the user to type the ticker
-back. Mobile still lacks the chart, calibration, factor breakdown, and
-holdings screens.
+**Mobile is at parity with web.** Order ticket, proposal queue, Orders tab,
+chart, calibration, factor breakdown, risk gate, and holdings all exist on both
+clients and must stay in step — particularly the two safety behaviours: the
+displayed quantity is never authoritative (the server clamps it), and a
+live-money order or approval requires the user to type the ticker back.
+
+The mobile chart is `react-native-svg`, not `lightweight-charts` (DOM-only), but
+reads the same `/chart/{ticker}/series` and the same server-computed moving
+averages, so all three renderers plot the same line. Mobile screens still
+hardcode a light-only `C` palette; the web tokens are the reference if they are
+ever themed.
+
+**Accessibility is linted, not audited by hand.** `npm run lint:a11y` in
+`frontend/` runs jsx-a11y and must stay clean — it caught four defects a manual
+sweep missed. Suppressions require a written reason; there are two.
 
 **Colours are tokens, never hexes.** Every colour lives in both `:root` and
 `.dark` in `frontend/src/index.css`. A raw hex in a component is a light-mode-only

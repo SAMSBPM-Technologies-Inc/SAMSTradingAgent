@@ -1,6 +1,6 @@
 import React from 'react'
 import { Tabs } from 'expo-router'
-import { Home, BarChart2, ClipboardList, User } from 'lucide-react-native'
+import { Home, BarChart2, Briefcase, ClipboardList, User } from 'lucide-react-native'
 import { useTheme } from '../../src/lib/theme-context'
 
 const BRAND = '#f2600c'
@@ -52,6 +52,13 @@ export default function AppLayout() {
         }}
       />
       <Tabs.Screen
+        name="holdings"
+        options={{
+          title: 'Holdings',
+          tabBarIcon: ({ color, size }) => <Briefcase size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="performance"
         options={{
           title: 'Performance',
@@ -65,11 +72,11 @@ export default function AppLayout() {
           tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
         }}
       />
-      {/* Hidden from tab bar — accessible via Profile link */}
-      <Tabs.Screen
-        name="guide"
-        options={{ href: null }}
-      />
+      {/* Hidden from the tab bar. Five tabs is the practical limit on a phone,
+          so these are reached by link: guide from Profile, calibration from
+          Performance — the same discovery path as the web app. */}
+      <Tabs.Screen name="guide" options={{ href: null }} />
+      <Tabs.Screen name="calibration" options={{ href: null }} />
     </Tabs>
   )
 }
