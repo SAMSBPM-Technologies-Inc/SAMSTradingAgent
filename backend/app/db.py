@@ -25,8 +25,60 @@ async def connect_db() -> None:
     # Trigger a lightweight command to confirm connectivity
     await _client.admin.command("ping")
     logger.info("mongodb_connected", db=settings.mongodb_db_name)
-    await _ensure_indexes()
-    await _migrate_trading_mode()
+    # Neither of these may abort startup. Connecting to Mongo is the only step
+    # here that is genuinely load-bearing for serving requests; index creation
+    # and data migration are maintenance, and maintenance failing should
+    # degrade the service, not delete it.
+    await _ensure_indexes_safely()
+    await _migrate_trading_mode_safely()
+
+
+async def _ensure_indexes_safely() -> None:
+    """
+    Create indexes, but never let one take the API down.
+
+    This used to be a bare `await _ensure_indexes()`. A malformed unique index
+    threw during creation, `connect_db` propagated it out of the lifespan
+    startup, and the process died — so a defect in a *trades* index stopped
+    people logging in. That blast radius is wrong: indexes are a performance
+    and integrity concern, and the right failure mode is a loud degraded start,
+    not a dead service.
+
+    Logged at error level with the exception attached, because a missing unique
+    index silently weakens a guarantee something else is relying on — the
+    idempotency index in particular is the real defence against a
+    double-submitted order.
+    """
+    try:
+        await _ensure_indexes()
+    except Exception as exc:
+        logger.error(
+            "mongodb_index_creation_failed_continuing",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            impact="the API is serving, but an index is missing — uniqueness "
+                   "guarantees backed by it are not being enforced",
+        )
+
+
+async def _migrate_trading_mode_safely() -> None:
+    """
+    Run the migration, but never let it take the API down.
+
+    Same reasoning as `_ensure_indexes_safely`. If this fails, accounts that
+    were trading unattended load as MANUAL and start queueing proposals instead
+    of placing orders — visible and recoverable, unlike a dead service.
+    """
+    try:
+        await _migrate_trading_mode()
+    except Exception as exc:
+        logger.error(
+            "trading_mode_migration_failed_continuing",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            impact="accounts already trading unattended may load as MANUAL and "
+                   "queue proposals rather than placing orders",
+        )
 
 
 async def _migrate_trading_mode() -> None:
@@ -61,7 +113,12 @@ async def _migrate_trading_mode() -> None:
 
 
 async def _ensure_indexes() -> None:
-    """Create indexes idempotently on startup. Safe to call on every restart."""
+    """
+    Create indexes idempotently on startup. Safe to call on every restart.
+
+    Wrapped by `_ensure_indexes_safely`, which is what actually runs — see the
+    note there on why an index failure must not be fatal.
+    """
     db = await get_db()
     await db[COLL_SIGNALS].create_index("ticker", unique=True, background=True)
     await db[COLL_SIGNAL_HISTORY].create_index("ticker", background=True)
@@ -94,10 +151,19 @@ async def _ensure_indexes() -> None:
     # Idempotency for user-initiated orders. This index — not the lookup in the
     # route — is what actually prevents a double-clicked Buy from buying twice:
     # two concurrent requests can both read "no prior order" before either
-    # writes. Sparse so the automated path, which carries no key, is unaffected.
+    # writes.
+    #
+    # partialFilterExpression, NOT sparse. A compound sparse index only skips a
+    # document when *every* indexed field is missing, and every trade has a
+    # user_id — so `sparse=True` indexed the whole existing collection with
+    # idempotency_key: null, and the second such document collided against
+    # unique=True. That threw inside _ensure_indexes, which is awaited
+    # unguarded at startup, and took the entire API down.
     await db[COLL_TRADES].create_index(
         [("user_id", 1), ("idempotency_key", 1)],
-        unique=True, sparse=True, background=True,
+        unique=True,
+        partialFilterExpression={"idempotency_key": {"$type": "string"}},
+        background=True,
     )
     logger.info("mongodb_indexes_ensured")
 
