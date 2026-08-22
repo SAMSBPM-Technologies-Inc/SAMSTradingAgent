@@ -9,6 +9,18 @@ SAMSTradingAgent is a production AI-powered stock analysis system with three sub
 - **frontend/**: React + Vite + Tailwind SPA deployed at `sta.samsbpm.com` (Cloudflare Pages)
 - **mobile/**: React Native + Expo cross-platform app
 
+## Releases
+
+`CHANGELOG.md` at the repo root is the release record — update it in the same
+change that ships the behaviour, not afterwards. Record what is *different for a
+user*, not commit subjects. Keep the **Known gaps** section of each release
+honest; a note that only lists wins is not trusted twice.
+
+Backend, frontend, and mobile deploy together and share one version. When
+bumping, all four declarations move together: `frontend/package.json`,
+`mobile/package.json`, `backend/app/main.py` (`version=`), and
+`backend/app/models/stock.py` (`HealthResponse.version`).
+
 ## Commands
 
 ### Backend
