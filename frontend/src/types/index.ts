@@ -93,6 +93,44 @@ export interface WatchlistResponse {
   setups: WatchlistSetupCounts
 }
 
+/** Risk assessment — gates every BUY, and went unrendered until Tier 1. */
+export interface RiskAssessment {
+  risk_score: number
+  risk_level: 'LOW' | 'MEDIUM' | 'HIGH'
+  explanation: string
+}
+
+/** One sub-score and the share of the composite it supplied. */
+export interface FactorContribution {
+  key: string
+  label: string
+  /** Sub-score, 0–1. */
+  score: number
+  weight: number
+  /** Points of the composite. Signed for the alternative-data modifier. */
+  contribution: number
+}
+
+export interface ScoreBreakdown {
+  method: string
+  /** False on the XGBoost path, where a weighted decomposition would be fiction. */
+  attributable: boolean
+  personalized: boolean
+  factors: FactorContribution[]
+  alternative_data?: FactorContribution | null
+  base_total: number
+  composite: number
+}
+
+/** The thresholds behind the verdict, read from the engine rather than restated. */
+export interface SignalGate {
+  buy_threshold: number
+  sell_threshold: number
+  risk_max_for_buy: number
+  score_passes_buy: boolean
+  risk_passes_buy: boolean
+}
+
 export interface AnalyzeResponse {
   ticker: string
   score: number
@@ -108,7 +146,9 @@ export interface AnalyzeResponse {
   exit_suggestion?: string
   explanation: string
   generated_at: string
-  risk?: Record<string, unknown>
+  risk?: RiskAssessment
+  breakdown?: ScoreBreakdown | null
+  gate?: SignalGate | null
   bull_case?: string
   bear_case?: string
   catalysts?: string[]
@@ -116,6 +156,10 @@ export interface AnalyzeResponse {
   alternative_data?: AlternativeData
   current_price?: number
   day_change_pct?: number
+  /** Whether the AI analyst actually ran for this document, or the rule-based path did. */
+  analyst_used?: boolean
+  /** The model this server is configured to call. Null when the analyst is disabled. */
+  analyst_model?: string | null
 }
 
 export interface PerformanceResponse {
@@ -165,14 +209,69 @@ export interface AlertSettings {
   daily_digest: boolean
 }
 
+/**
+ * How much autonomy the agent has. The ladder is suggest → confirm → automate;
+ * new accounts start at MANUAL because an agent that can move money should be
+ * opted into rather than defaulted into.
+ */
+export type TradingMode = 'MANUAL' | 'SEMI_AUTO' | 'AUTO'
+
 export interface AutoTradeSettings {
   enabled: boolean
+  mode: TradingMode
+  /** SEMI_AUTO only: weakest conviction the agent may act on unattended. */
+  auto_execute_conviction: Conviction
   paper_trading: boolean
   min_signal_score: number
   position_size_pct: number
   max_open_positions: number
   max_daily_loss_pct: number
   allowed_tickers: string[]
+}
+
+export interface ManualOrderRequest {
+  ticker: string
+  action: 'BUY' | 'SELL'
+  /** A request, not an instruction — the server clamps to what it can fund. */
+  qty?: number
+  limit_price?: number
+  /** Required when the server routes to a live-money account. */
+  confirm_live?: boolean
+  idempotency_key?: string
+}
+
+export interface OrderPlacementResponse {
+  placed: boolean
+  status: string
+  ticker: string
+  action: string
+  qty: number
+  limit_price: number
+  order_id?: number | string | null
+  stop_loss?: number | null
+  take_profit?: number | null
+  is_paper: boolean
+  trade_id?: string | null
+  /** Why it wasn't placed, or how the quantity was adjusted. */
+  reason?: string | null
+  /** True when this matched an earlier request and no new order was sent. */
+  duplicate: boolean
+}
+
+/** An entry the agent wanted to take but was not permitted to take alone. */
+export interface Proposal {
+  id: string
+  ticker: string
+  action: string
+  qty: number
+  limit_price: number
+  stop_loss?: number | null
+  take_profit?: number | null
+  signal_score?: number | null
+  conviction?: Conviction | null
+  reason?: string | null
+  proposed_at: string
+  is_paper: boolean
 }
 
 export interface AutoTradeSettingsResponse extends AutoTradeSettings {
@@ -298,8 +397,75 @@ export interface ClosedTrade {
 }
 
 export interface TradePerformanceResponse {
+  /** The agent chose it and placed it unattended — the only clean read of the engine. */
   signal_driven: TradeStats
+  /** The agent chose it, a human approved it. Measures the pair, not the agent. */
+  approved: TradeStats
+  /** A human chose it. Says nothing about the engine. */
   manual: TradeStats
   all: TradeStats
   recent_closed: ClosedTrade[]
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+
+export interface OhlcBar {
+  date: string
+  open: number
+  high: number
+  low: number
+  close: number
+  volume: number
+}
+
+export interface ChartSeries {
+  ticker: string
+  bars: OhlcBar[]
+  sma_20: { date: string; value: number }[]
+  sma_50: { date: string; value: number }[]
+}
+
+// ── Calibration ───────────────────────────────────────────────────────────────
+
+/**
+ * Every bucket carries `n` and `significant`. Below `min_samples_for_signal`
+ * a win rate is anecdote, and the API says so rather than returning a
+ * confident-looking percentage — the UI must not launder that away.
+ */
+export interface CalibrationBucket {
+  n: number
+  win_rate: number | null
+  avg_return: number | null
+  median_return: number | null
+  significant: boolean
+}
+
+export interface ScoreBucket extends CalibrationBucket {
+  lo: number
+  hi: number
+}
+
+export interface ThresholdRow extends CalibrationBucket {
+  threshold: number
+  risk_filtered: boolean
+  /** Fraction of the sample that actually carried a risk score. */
+  risk_coverage: number
+}
+
+export interface ConfidenceBucket extends CalibrationBucket {
+  lo: number
+  hi: number
+}
+
+export interface CalibrationReport {
+  ticker: string | null
+  settled_records: number
+  base_rate: CalibrationBucket
+  score_buckets: ScoreBucket[]
+  /** null when there aren't enough usable buckets to say either way. */
+  score_ranks_outcomes: boolean | null
+  usable_buckets: number
+  threshold_sweep: ThresholdRow[]
+  confidence_buckets: ConfidenceBucket[]
+  min_samples_for_signal: number
 }

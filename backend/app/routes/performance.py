@@ -142,11 +142,23 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
             "worst": round(min((t["pnl"] for t in priced), default=0), 2) if priced else None,
         }
 
-    # signal_type marks how the order came to exist. Anything not produced by a
-    # signal is excluded from the engine's record.
+    # signal_type marks how the order came to exist. Three buckets, never
+    # pooled, because they answer different questions:
+    #
+    #   signal_driven — the agent chose it and placed it unattended. The only
+    #                   clean read of the engine.
+    #   approved      — the agent chose it, a human approved it. Biased upward
+    #                   by whatever the human declined, so it measures the
+    #                   pair, not the agent.
+    #   manual        — a human chose it. Says nothing about the engine.
     _SIGNAL_TYPES = {"BUY", "SELL", "EXIT_ALERT"}
     signal_driven = [t for t in trades if t.get("signal_type") in _SIGNAL_TYPES]
-    manual = [t for t in trades if t.get("signal_type") not in _SIGNAL_TYPES]
+    approved = [t for t in trades if t.get("signal_type") == "PROPOSAL_APPROVED"]
+    manual = [
+        t for t in trades
+        if t.get("signal_type") not in _SIGNAL_TYPES
+        and t.get("signal_type") != "PROPOSAL_APPROVED"
+    ]
 
     recent = sorted(
         [t for t in trades if t.get("status") in (TradeStatus.CLOSED, TradeStatus.UNRECONCILED)],
@@ -156,6 +168,7 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
 
     return {
         "signal_driven": summarise(signal_driven),
+        "approved": summarise(approved),
         "manual": summarise(manual),
         "all": summarise(trades),
         "recent_closed": [

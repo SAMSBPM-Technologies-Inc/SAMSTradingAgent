@@ -16,6 +16,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { watchlistApi, analyzeApi } from '../lib/api'
+import { useToast } from '../lib/toast-context'
 import { relativeTime } from '../lib/format'
 import type { Signal, Trigger, WatchlistItem, WatchlistSetupCounts } from '../types'
 import Layout from '../components/Layout'
@@ -62,7 +63,10 @@ function FilterBar({ active, onChange, counts }: {
           <button
             key={f}
             onClick={() => onChange(f)}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+            // A filter chip is a selection, not a link — say which one is on.
+            aria-pressed={active === f}
+            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
               active === f
                 ? isSetup
                   ? f === 'ENTRY' ? 'bg-green-600 text-white' : 'bg-amber-500 text-white'
@@ -241,19 +245,12 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
   onRemove: (t: string) => void
 }) {
   const navigate = useNavigate()
-  const [removing, setRemoving] = useState(false)
+  const [removing] = useState(false)
   const scorePct = Math.round(item.score * 100)
 
-  const handleRemove = async (e: React.MouseEvent) => {
+  const handleRemove = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (removing) return
-    setRemoving(true)
-    try {
-      await watchlistApi.remove(item.ticker)
-      onRemove(item.ticker)
-    } catch {
-      setRemoving(false)
-    }
+    onRemove(item.ticker)
   }
 
   const accent =
@@ -261,12 +258,32 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
     : item.trigger === 'EXIT_ALERT' ? 'border-l-2 border-l-amber-500'
     : 'border-l-2 border-l-transparent'
 
+  const detailId = `row-detail-${item.ticker}`
+
   return (
     <>
+      {/*
+        Was a bare `div onClick`: not focusable, not operable from a keyboard,
+        and announced as nothing. It is a disclosure control, so it says so —
+        role, expanded state, what it controls, and Enter/Space to activate.
+      */}
       <div
         onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-controls={detailId}
+        aria-label={`${item.ticker}, ${item.signal}, score ${scorePct}. Toggle indicator detail.`}
         className={`flex items-center gap-3 pl-3 pr-4 py-3 border-b border-[var(--color-border)]
-                    hover:bg-[var(--color-bg)] transition-colors group cursor-pointer ${accent}`}
+                    hover:bg-[var(--color-bg)] transition-colors group cursor-pointer
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60
+                    focus-visible:ring-inset ${accent}`}
       >
         {/* Ticker */}
         <button
@@ -351,13 +368,21 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
               : <Trash2 className="w-3.5 h-3.5" />
             }
           </button>
-          <span className="text-[var(--color-fg-muted)]" title={expanded ? 'Hide indicators' : 'Show indicators'}>
+          <span
+            aria-hidden="true"
+            className="text-[var(--color-fg-muted)]"
+            title={expanded ? 'Hide indicators' : 'Show indicators'}
+          >
             {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
           </span>
         </div>
       </div>
 
-      {expanded && <RowDetail item={item} />}
+      {expanded && (
+        <div id={detailId}>
+          <RowDetail item={item} />
+        </div>
+      )}
     </>
   )
 }
@@ -550,14 +575,18 @@ function CriteriaLegend() {
     <div className="mb-6">
       <button
         onClick={() => setShow((v) => !v)}
+        aria-expanded={show}
+        aria-controls="setup-criteria"
         className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] transition-colors"
       >
-        {show ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        <span aria-hidden="true">
+          {show ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+        </span>
         How setups are detected
       </button>
 
       {show && (
-        <div className="card grid sm:grid-cols-2 gap-4 text-xs text-[var(--color-fg-muted)] mt-3">
+        <div id="setup-criteria" className="card grid sm:grid-cols-2 gap-4 text-xs text-[var(--color-fg-muted)] mt-3">
           <div>
             <div className="flex items-center gap-1.5 font-semibold text-green-600 dark:text-green-400 mb-2">
               <TrendingDown className="w-3.5 h-3.5" /> Dip entry (all must hold)
@@ -581,6 +610,67 @@ function CriteriaLegend() {
       )}
     </div>
   )
+}
+
+// ── Sorting ───────────────────────────────────────────────────────────────────
+//
+// A watchlist you cannot order by score or by today's move is a list, not a
+// table. Default stays insertion order so the view does not reshuffle itself
+// under anyone who was not asking for that.
+
+type SortField = 'ticker' | 'score' | 'day_change_pct'
+type SortState = { field: SortField; dir: 'asc' | 'desc' } | null
+
+function SortHeader({ field, sort, onSort, className = '', children }: {
+  field: SortField
+  sort: SortState
+  onSort: (s: SortState) => void
+  className?: string
+  children: React.ReactNode
+}) {
+  const active = sort?.field === field
+  return (
+    <button
+      onClick={() => {
+        // Three-state cycle: descending → ascending → unsorted. Without the
+        // third state there is no way back to the original order.
+        if (!active) onSort({ field, dir: 'desc' })
+        else if (sort!.dir === 'desc') onSort({ field, dir: 'asc' })
+        else onSort(null)
+      }}
+      // Announces the current sort rather than just painting an arrow.
+      aria-label={`Sort by ${field}${
+        active ? `, currently ${sort!.dir === 'desc' ? 'descending' : 'ascending'}` : ''
+      }`}
+      className={`flex-shrink-0 flex items-center gap-1 text-left uppercase tracking-widest
+                  transition-colors hover:text-[var(--color-fg)]
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 rounded
+                  ${active ? 'text-[var(--color-fg)]' : ''} ${className}`}
+    >
+      {children}
+      <span aria-hidden="true">
+        {active && (sort!.dir === 'desc'
+          ? <ChevronDown className="w-3 h-3" />
+          : <ChevronUp className="w-3 h-3" />)}
+      </span>
+    </button>
+  )
+}
+
+function sortItems(items: WatchlistItem[], sort: SortState): WatchlistItem[] {
+  if (!sort) return items
+  const { field, dir } = sort
+  const factor = dir === 'asc' ? 1 : -1
+  return [...items].sort((a, b) => {
+    if (field === 'ticker') return a.ticker.localeCompare(b.ticker) * factor
+    // Missing values sort last in both directions — a ticker with no price yet
+    // is not "the worst performer", it is simply unknown.
+    const av = a[field], bv = b[field]
+    if (av == null && bv == null) return 0
+    if (av == null) return 1
+    if (bv == null) return -1
+    return (av - bv) * factor
+  })
 }
 
 // ── Empty state ───────────────────────────────────────────────────────────────
@@ -609,6 +699,7 @@ function EmptyState() {
 const EMPTY_SETUPS: WatchlistSetupCounts = { entry: 0, exit_alert: 0, neutral: 0, pending: 0 }
 
 export default function DashboardPage() {
+  const { toast, toastWithUndo } = useToast()
   const [items, setItems] = useState<WatchlistItem[]>([])
   const [setups, setSetups] = useState<WatchlistSetupCounts>(EMPTY_SETUPS)
   const [isLoading, setIsLoading] = useState(true)
@@ -617,6 +708,7 @@ export default function DashboardPage() {
   const [filter, setFilter] = useState<Filter>('ALL')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+  const [sort, setSort] = useState<SortState>(null)
 
   const fetchWatchlist = useCallback(async (showSpinner = false) => {
     if (showSpinner) setIsRefreshing(true)
@@ -639,8 +731,27 @@ export default function DashboardPage() {
 
   useEffect(() => { fetchWatchlist() }, [fetchWatchlist])
 
+  /**
+   * Remove optimistically, but hold the DELETE for the length of the undo
+   * window. Previously the request fired on click with no confirmation and no
+   * way back — a mis-tap silently destroyed a watchlist entry.
+   */
   const handleRemove = (ticker: string) => {
+    const snapshot = items
     setItems((prev) => prev.filter((i) => i.ticker !== ticker))
+
+    toastWithUndo(
+      `Removed ${ticker}`,
+      async () => {
+        try {
+          await watchlistApi.remove(ticker)
+        } catch {
+          toast(`Could not remove ${ticker}.`, 'error')
+          setItems(snapshot)
+        }
+      },
+      () => setItems(snapshot),
+    )
   }
 
   const counts: Record<Filter, number> = {
@@ -652,7 +763,7 @@ export default function DashboardPage() {
     SELL: items.filter((i) => i.signal === 'SELL').length,
   }
 
-  const filtered = items.filter((i) => matchesFilter(i, filter))
+  const filtered = sortItems(items.filter((i) => matchesFilter(i, filter)), sort)
 
   const actionable = setups.entry + setups.exit_alert
 
@@ -708,7 +819,7 @@ export default function DashboardPage() {
 
       {/* Error */}
       {error && (
-        <div className="flex items-center gap-3 px-4 py-3 rounded-xl
+        <div role="alert" className="flex items-center gap-3 px-4 py-3 rounded-xl
                         bg-red-500/10 border border-red-500/20 text-red-500 text-sm mb-6">
           <AlertCircle className="w-4 h-4 flex-shrink-0" />
           {error}
@@ -731,10 +842,10 @@ export default function DashboardPage() {
 
           {/* Column headers — must mirror WatchlistRow layout exactly */}
           <div className="hidden sm:flex items-center gap-3 pl-3 pr-4 py-2 border-b border-[var(--color-border)] text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)] select-none border-l-2 border-l-transparent">
-            <span className="w-14 flex-shrink-0">Ticker</span>
+            <SortHeader field="ticker" sort={sort} onSort={setSort} className="w-14">Ticker</SortHeader>
             <span className="w-20 flex-shrink-0">Signal</span>
-            <span className="w-24 flex-shrink-0">Score</span>
-            <span className="flex-shrink-0">Price</span>
+            <SortHeader field="score" sort={sort} onSort={setSort} className="w-24">Score</SortHeader>
+            <SortHeader field="day_change_pct" sort={sort} onSort={setSort}>Price</SortHeader>
             <span className="w-28 flex-shrink-0">Setup</span>
             <span className="hidden md:block flex-shrink-0">Conviction</span>
           </div>

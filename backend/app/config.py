@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # BOTH cap at ~5 requests/minute and Alpha Vantage at 25/day, so neither can
     # be called per pipeline cycle — see fundamentals.py for the cache.
     massive_api_key: str = Field(default="", description="Massive (Polygon.io) API key for fundamentals")
+    #: Where OHLCV bars come from. "yahoo" hits an undocumented endpoint with a
+    #: browser User-Agent — fine for development, not licensed for commercial
+    #: use. "polygon" is the licensed path and needs MASSIVE_API_KEY on a plan
+    #: that includes aggregates. See services/price_providers.py.
+    price_provider: str = Field(
+        default="yahoo",
+        description="OHLCV source: 'yahoo' (dev only, unlicensed) or 'polygon' (licensed)",
+    )
     alphavantage_api_key: str = Field(default="", description="Alpha Vantage API key for fundamentals")
     # Fundamentals move quarterly; a day-old figure is not meaningfully staler
     # than a fresh one, and the rate limits make anything shorter unworkable.

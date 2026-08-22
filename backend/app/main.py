@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from app.config import get_settings
 from app.db import COLL_USERS, close_db, connect_db, get_db  # COLL_USERS used by _check_owner_account
 from app.jobs.scheduler import start_scheduler, stop_scheduler
-from app.routes import alerts, analysis, auth, health, performance, report, signals, trading, watchlist
+from app.routes import alerts, analysis, auth, chart, health, performance, report, signals, trading, watchlist
 from app.utils.logger import get_logger, setup_logging
 
 setup_logging()
@@ -133,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(analysis.router)
     app.include_router(signals.router)
     app.include_router(report.router)
+    app.include_router(chart.router)
     app.include_router(watchlist.router)
     app.include_router(performance.router)
     app.include_router(alerts.router)

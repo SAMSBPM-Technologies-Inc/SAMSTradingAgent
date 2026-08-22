@@ -1,29 +1,38 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut, Pencil, Sliders, User, Wifi, WifiOff, X } from 'lucide-react'
 import { alertsApi, authApi, tradingApi } from '../lib/api'
-import type { AlertSettings, AutoTradeSettings, ScoringWeights } from '../types'
+import type { AlertSettings, AutoTradeSettings, ScoringWeights, TradingMode } from '../types'
 import { useAuth } from '../lib/auth-context'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
 
 // ── Alert Settings section ────────────────────────────────────────────────────
 
+/**
+ * A `<label>` cannot name a `<button>` — the implicit association only works
+ * for form controls, so this switch previously announced as an unnamed toggle.
+ * The text is bound explicitly via aria-labelledby instead, and the wrapper is
+ * a div because label-wrapping-button is invalid markup.
+ */
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  const labelId = `toggle-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`
   return (
-    <label className="flex items-center justify-between gap-4 cursor-pointer select-none">
-      <span className="text-sm text-[var(--color-fg)]">{label}</span>
+    <div className="flex items-center justify-between gap-4 select-none">
+      <span id={labelId} className="text-sm text-[var(--color-fg)]">{label}</span>
       <button
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-labelledby={labelId}
         onClick={() => onChange(!checked)}
         className={`relative w-10 h-6 rounded-full transition-colors duration-200 flex-shrink-0
+          focus:outline-none focus:ring-2 focus:ring-brand-500/50
           ${checked ? 'bg-brand-500' : 'bg-[var(--color-border)]'}`}
       >
         <span className={`absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200
           ${checked ? 'translate-x-4' : 'translate-x-0'}`} />
       </button>
-    </label>
+    </div>
   )
 }
 
@@ -110,8 +119,9 @@ function AlertSettingsCard() {
       <div className="flex flex-col gap-4">
         {/* Slack */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-[var(--color-fg)]">Slack Webhook URL</label>
+          <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="slack-webhook">Slack Webhook URL</label>
           <input
+            id="slack-webhook"
             type="url"
             value={settings.slack_webhook_url ?? ''}
             onChange={(e) => setSettings((s) => ({ ...s, slack_webhook_url: e.target.value }))}
@@ -130,8 +140,9 @@ function AlertSettingsCard() {
 
         {/* WhatsApp */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-[var(--color-fg)]">WhatsApp (via CallMeBot)</label>
+          <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="whatsapp-phone">WhatsApp (via CallMeBot)</label>
           <input
+            id="whatsapp-phone"
             type="tel"
             value={settings.whatsapp_phone ?? ''}
             onChange={(e) => setSettings((s) => ({ ...s, whatsapp_phone: e.target.value }))}
@@ -205,6 +216,8 @@ function AlertSettingsCard() {
 
 const DEFAULT_TRADE_SETTINGS: AutoTradeSettings = {
   enabled: false,
+  mode: 'MANUAL',
+  auto_execute_conviction: 'HIGH',
   paper_trading: true,
   min_signal_score: 0.75,
   position_size_pct: 0.05,
@@ -212,6 +225,29 @@ const DEFAULT_TRADE_SETTINGS: AutoTradeSettings = {
   max_daily_loss_pct: 0.02,
   allowed_tickers: [],
 }
+
+/**
+ * How much autonomy the agent gets. Presented as a ladder rather than a
+ * switch — the product previously offered only the top rung, and nobody funds
+ * an account to a fully autonomous agent on day one.
+ */
+const MODE_OPTIONS: { value: TradingMode; label: string; blurb: string }[] = [
+  {
+    value: 'MANUAL',
+    label: 'Manual',
+    blurb: 'The agent proposes every entry and places none. You approve each one.',
+  },
+  {
+    value: 'SEMI_AUTO',
+    label: 'Semi-auto',
+    blurb: 'The agent places high-conviction entries itself and queues the rest for you.',
+  },
+  {
+    value: 'AUTO',
+    label: 'Auto',
+    blurb: 'The agent places every entry that clears its risk guards, unattended.',
+  },
+]
 
 function AutoTradingCard() {
   const [settings, setSettings] = useState<AutoTradeSettings>(DEFAULT_TRADE_SETTINGS)
@@ -299,6 +335,76 @@ function AutoTradingCard() {
 
         {settings.enabled && (
           <>
+            {/* Autonomy ladder */}
+            <div className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-[var(--color-fg)]">Autonomy</span>
+              <div className="flex flex-col gap-2">
+                {MODE_OPTIONS.map((opt) => (
+                  // The label is correctly bound (htmlFor → the radio's id) and
+                  // contains its text, but the rule cannot see through `{opt.label}`
+                  // to prove it — a static-analysis limit, not a missing name.
+                  // eslint-disable-next-line jsx-a11y/label-has-associated-control
+                  <label
+                    key={opt.value}
+                    htmlFor={`mode-${opt.value}`}
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer
+                                transition-colors ${
+                      settings.mode === opt.value
+                        ? 'border-brand-500 bg-brand-500/5'
+                        : 'border-[var(--color-border)] hover:bg-[var(--color-bg)]'
+                    }`}
+                  >
+                    <input
+                      id={`mode-${opt.value}`}
+                      type="radio"
+                      name="trading-mode"
+                      checked={settings.mode === opt.value}
+                      onChange={() => setSettings((s) => ({ ...s, mode: opt.value }))}
+                      aria-describedby={`mode-${opt.value}-desc`}
+                      className="accent-brand-500 mt-0.5"
+                    />
+                    <div className="min-w-0">
+                      <span className="text-sm text-[var(--color-fg)]">{opt.label}</span>
+                      <p
+                        id={`mode-${opt.value}-desc`}
+                        className="text-xs text-[var(--color-fg-muted)] mt-0.5 leading-relaxed"
+                      >
+                        {opt.blurb}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {settings.mode === 'SEMI_AUTO' && (
+              <div className="flex flex-col gap-1.5">
+                <label
+                  htmlFor="auto-conviction"
+                  className="text-sm font-medium text-[var(--color-fg)]"
+                >
+                  Place unattended at conviction
+                </label>
+                <select
+                  id="auto-conviction"
+                  value={settings.auto_execute_conviction}
+                  onChange={(e) => setSettings((s) => ({
+                    ...s,
+                    auto_execute_conviction: e.target.value as AutoTradeSettings['auto_execute_conviction'],
+                  }))}
+                  className="input text-sm"
+                >
+                  <option value="HIGH">High only</option>
+                  <option value="MEDIUM">Medium and above</option>
+                  <option value="LOW">Any conviction</option>
+                </select>
+                <p className="text-xs text-[var(--color-fg-muted)]">
+                  Anything weaker goes to your approval queue on the Orders page. An entry
+                  with no conviction attached — the analyst may not have run — always queues.
+                </p>
+              </div>
+            )}
+
             {/* Paper / Live */}
             <div className="flex flex-col gap-1.5">
               <span className="text-sm font-medium text-[var(--color-fg)]">Trading mode</span>
@@ -327,10 +433,11 @@ function AutoTradingCard() {
             {/* Score threshold */}
             <div className="flex flex-col gap-1.5">
               <div className="flex justify-between">
-                <label className="text-sm font-medium text-[var(--color-fg)]">Minimum signal score</label>
+                <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="min-signal-score">Minimum signal score</label>
                 <span className="text-sm font-semibold text-brand-500">{(settings.min_signal_score * 100).toFixed(0)}%</span>
               </div>
               <input
+            id="min-signal-score"
                 type="range" min={0.5} max={1.0} step={0.05}
                 value={settings.min_signal_score}
                 onChange={(e) => setSettings((s) => ({ ...s, min_signal_score: parseFloat(e.target.value) }))}
@@ -342,10 +449,11 @@ function AutoTradingCard() {
             {/* Position size */}
             <div className="flex flex-col gap-1.5">
               <div className="flex justify-between">
-                <label className="text-sm font-medium text-[var(--color-fg)]">Position size</label>
+                <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="position-size">Position size</label>
                 <span className="text-sm font-semibold text-brand-500">{(settings.position_size_pct * 100).toFixed(0)}% of equity</span>
               </div>
               <input
+            id="position-size"
                 type="range" min={0.01} max={0.20} step={0.01}
                 value={settings.position_size_pct}
                 onChange={(e) => setSettings((s) => ({ ...s, position_size_pct: parseFloat(e.target.value) }))}
@@ -356,8 +464,9 @@ function AutoTradingCard() {
             {/* Max positions + daily loss */}
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-[var(--color-fg)]">Max open positions</label>
+                <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="max-open-positions">Max open positions</label>
                 <input
+            id="max-open-positions"
                   type="number" min={1} max={20}
                   value={settings.max_open_positions}
                   onChange={(e) => setSettings((s) => ({ ...s, max_open_positions: parseInt(e.target.value) || 1 }))}
@@ -365,9 +474,10 @@ function AutoTradingCard() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-sm font-medium text-[var(--color-fg)]">Daily loss limit</label>
+                <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="daily-loss-limit">Daily loss limit</label>
                 <div className="relative">
                   <input
+            id="daily-loss-limit"
                     type="number" min={0.001} max={0.10} step={0.005}
                     value={settings.max_daily_loss_pct}
                     onChange={(e) => setSettings((s) => ({ ...s, max_daily_loss_pct: parseFloat(e.target.value) || 0.02 }))}
@@ -381,10 +491,11 @@ function AutoTradingCard() {
 
             {/* Ticker whitelist */}
             <div className="flex flex-col gap-1.5">
-              <label className="text-sm font-medium text-[var(--color-fg)]">Ticker whitelist (optional)</label>
+              <label className="text-sm font-medium text-[var(--color-fg)]" htmlFor="ticker-whitelist">Ticker whitelist (optional)</label>
               <p className="text-xs text-[var(--color-fg-muted)]">Leave empty to allow all watchlist tickers. Add tickers to restrict.</p>
               <div className="flex gap-2">
                 <input
+            id="ticker-whitelist"
                   type="text"
                   value={tickerInput}
                   onChange={(e) => setTickerInput(e.target.value.toUpperCase())}
@@ -423,12 +534,18 @@ function AutoTradingCard() {
 
 // ── Scoring Weights section ────────────────────────────────────────────────────
 
+/**
+ * Must mirror `backend/app/config.py` (weight_technical … weight_alternative_data).
+ * These used to disagree — Reset handed out 0.25/0.15/0.20/0.15/0.10/0.15 while
+ * the server ran 0.30/0.20/0.20/0.15/0.00/0.15 — so "Reset" silently moved the
+ * user off the engine's own defaults.
+ */
 const DEFAULT_WEIGHTS: ScoringWeights = {
-  technical: 0.25,
-  fundamental: 0.15,
+  technical: 0.30,
+  fundamental: 0.20,
   sentiment: 0.20,
   macro: 0.15,
-  volatility: 0.10,
+  volatility: 0.00,
   catalyst: 0.15,
   alternative_data: 0.10,
 }
@@ -441,6 +558,13 @@ const WEIGHT_LABELS: Record<keyof ScoringWeights, string> = {
   volatility: 'Volatility',
   catalyst: 'Catalyst',
   alternative_data: 'Alternative Data',
+}
+
+/** Only where the number needs defending. Most weights are self-explanatory. */
+const WEIGHT_HINTS: Partial<Record<keyof ScoringWeights, string>> = {
+  volatility:
+    'Defaults to 0 — volatility is priced at the risk gate, which vetoes BUY above a '
+    + 'risk score of 6. Raising this charges volatility twice.',
 }
 
 function ScoringWeightsCard() {
@@ -498,25 +622,32 @@ function ScoringWeightsCard() {
         {BASE_KEYS.map((key) => (
           <div key={key} className="flex flex-col gap-1">
             <div className="flex justify-between text-sm">
-              <label className="text-[var(--color-fg)]">{WEIGHT_LABELS[key]}</label>
+              <label htmlFor={`weight-${key}`} className="text-[var(--color-fg)]">
+                {WEIGHT_LABELS[key]}
+              </label>
               <span className="font-semibold text-brand-500">{(weights[key] * 100).toFixed(0)}%</span>
             </div>
             <input
+              id={`weight-${key}`}
               type="range" min={0} max={1} step={0.01}
               value={weights[key]}
               onChange={(e) => update(key, parseFloat(e.target.value))}
               className="w-full accent-brand-500"
             />
+            {WEIGHT_HINTS[key] && (
+              <p className="text-xs text-[var(--color-fg-muted)]">{WEIGHT_HINTS[key]}</p>
+            )}
           </div>
         ))}
 
         {/* Alternative data (additive modifier) */}
         <div className="flex flex-col gap-1 pt-2 border-t border-[var(--color-border)]">
           <div className="flex justify-between text-sm">
-            <label className="text-[var(--color-fg)]">{WEIGHT_LABELS.alternative_data} <span className="text-[var(--color-fg-muted)] text-xs">(modifier)</span></label>
+            <label htmlFor="weight-alternative_data" className="text-[var(--color-fg)]">{WEIGHT_LABELS.alternative_data} <span className="text-[var(--color-fg-muted)] text-xs">(modifier)</span></label>
             <span className="font-semibold text-brand-500">{(weights.alternative_data * 100).toFixed(0)}%</span>
           </div>
           <input
+            id="weight-alternative_data"
             type="range" min={0} max={0.5} step={0.01}
             value={weights.alternative_data}
             onChange={(e) => update('alternative_data', parseFloat(e.target.value))}

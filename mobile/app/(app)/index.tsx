@@ -26,6 +26,7 @@ import { watchlistApi, analyzeApi } from '../../src/lib/api'
 import type { Signal, Trigger, WatchlistItem, WatchlistSetupCounts } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
+import Disclaimer from '../../src/components/Disclaimer'
 
 // One filter bar mixes two axes deliberately: the verdict (BUY/HOLD/SELL) and
 // the timing setup (DIP/PROFIT). They were separate tabs answering the same
@@ -681,6 +682,7 @@ export default function DashboardScreen() {
               )}
             </View>
           }
+          ListFooterComponent={<Disclaimer />}
           contentContainerStyle={{ paddingBottom: 100 }}
           style={{ backgroundColor: C.bg }}
         />

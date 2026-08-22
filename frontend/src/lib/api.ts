@@ -75,6 +75,18 @@ export const performanceApi = {
   signals: () => api.get<import('../types').SignalRecord[]>('/performance/signals'),
   trades: () =>
     api.get<import('../types').TradePerformanceResponse>('/performance/trades'),
+  calibration: (ticker?: string, applyRiskGate = true) =>
+    api.get<import('../types').CalibrationReport>('/performance/calibration', {
+      params: { ticker, apply_risk_gate: applyRiskGate },
+    }),
+}
+
+export const chartApi = {
+  /** OHLCV + SMA for the interactive chart. The PNG at /chart/{t} is export-only. */
+  series: (ticker: string, days = 180) =>
+    api.get<import('../types').ChartSeries>(`/chart/${ticker}/series`, {
+      params: { days },
+    }),
 }
 
 export const alertsApi = {
@@ -92,4 +104,19 @@ export const tradingApi = {
   getHoldings: () => api.get<import('../types').HoldingsResponse>('/trading/holdings'),
   getOrders: () => api.get<import('../types').TradeRecord[]>('/trading/orders'),
   closePosition: (ticker: string) => api.post(`/trading/close/${ticker}`),
+
+  /**
+   * Place a user-initiated order. `qty` is a request — the server re-derives
+   * the fundable size and may return less. Always send an idempotency key so a
+   * double-clicked button cannot buy twice.
+   */
+  placeOrder: (body: import('../types').ManualOrderRequest) =>
+    api.post<import('../types').OrderPlacementResponse>('/trading/order', body),
+
+  getProposals: () => api.get<import('../types').Proposal[]>('/trading/proposals'),
+  approveProposal: (id: string, confirmLive = false) =>
+    api.post<import('../types').OrderPlacementResponse>(
+      `/trading/proposals/${id}/approve`, null, { params: { confirm_live: confirmLive } },
+    ),
+  declineProposal: (id: string) => api.post(`/trading/proposals/${id}/decline`),
 }

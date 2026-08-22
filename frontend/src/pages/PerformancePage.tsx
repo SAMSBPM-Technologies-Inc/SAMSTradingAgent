@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { AlertCircle, BarChart2, Clock, TrendingUp } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { AlertCircle, BarChart2, Clock, Target, TrendingUp } from 'lucide-react'
 import { performanceApi } from '../lib/api'
 import type {
   ClosedTrade,
@@ -69,15 +70,15 @@ function StatCard({
   valueClass?: string
 }) {
   return (
-    <div className="border border-[#e7e2d8] p-4 flex flex-col gap-1" style={{ borderRadius: '10px' }}>
-      <span className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a]">{label}</span>
+    <div className="border border-[var(--color-border)] p-4 flex flex-col gap-1" style={{ borderRadius: '10px' }}>
+      <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">{label}</span>
       <span
-        className={`text-[22px] font-bold tabular-nums ${valueClass ?? 'text-[#14110c]'}`}
+        className={`text-[22px] font-bold tabular-nums ${valueClass ?? 'text-[var(--color-fg)]'}`}
         style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
       >
         {value}
       </span>
-      {sub && <span className="text-[11px] text-[#83786a]">{sub}</span>}
+      {sub && <span className="text-[11px] text-[var(--color-fg-muted)]">{sub}</span>}
     </div>
   )
 }
@@ -97,10 +98,10 @@ const usd = new Intl.NumberFormat('en-US', {
 
 /** Broker-statement convention: gains green, losses red in parentheses. */
 function Pnl({ value, className = '' }: { value: number | null | undefined; className?: string }) {
-  if (value == null) return <span className="text-[#83786a]">—</span>
+  if (value == null) return <span className="text-[var(--color-fg-muted)]">—</span>
   const loss = value < -0.005
   const gain = value > 0.005
-  const tone = loss ? 'text-red-500' : gain ? 'text-green-600' : 'text-[#14110c]'
+  const tone = loss ? 'text-red-500' : gain ? 'text-green-600' : 'text-[var(--color-fg)]'
   return (
     <span className={`tabular-nums ${tone} ${className}`}>
       {loss ? `(${usd.format(Math.abs(value))})` : usd.format(value)}
@@ -115,47 +116,47 @@ function TradeStatsBlock({ title, note, stats }: {
 }) {
   const nothing = stats.closed === 0 && stats.open === 0 && stats.unreconciled === 0
   return (
-    <div className="border border-[#e7e2d8] p-4" style={{ borderRadius: '10px' }}>
+    <div className="border border-[var(--color-border)] p-4" style={{ borderRadius: '10px' }}>
       <div className="flex items-baseline justify-between gap-3 mb-1">
-        <span className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a]">
+        <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
           {title}
         </span>
         {stats.realised_pnl != null && (
           <Pnl value={stats.realised_pnl} className="text-[18px] font-bold" />
         )}
       </div>
-      <p className="text-[11px] text-[#83786a] mb-3">{note}</p>
+      <p className="text-[11px] text-[var(--color-fg-muted)] mb-3">{note}</p>
 
       {nothing ? (
-        <p className="text-sm text-[#83786a]">No trades yet.</p>
+        <p className="text-sm text-[var(--color-fg-muted)]">No trades yet.</p>
       ) : (
         <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-          <span className="text-[#83786a]">Closed</span>
-          <span className="tabular-nums text-right text-[#14110c]">{stats.closed}</span>
-          <span className="text-[#83786a]">Open</span>
-          <span className="tabular-nums text-right text-[#14110c]">{stats.open}</span>
-          <span className="text-[#83786a]">Win rate</span>
-          <span className="tabular-nums text-right text-[#14110c]">
+          <span className="text-[var(--color-fg-muted)]">Closed</span>
+          <span className="tabular-nums text-right text-[var(--color-fg)]">{stats.closed}</span>
+          <span className="text-[var(--color-fg-muted)]">Open</span>
+          <span className="tabular-nums text-right text-[var(--color-fg)]">{stats.open}</span>
+          <span className="text-[var(--color-fg-muted)]">Win rate</span>
+          <span className="tabular-nums text-right text-[var(--color-fg)]">
             {stats.win_rate == null
               ? '—'
               : `${Math.round(stats.win_rate * 100)}% (${stats.wins}/${stats.wins + stats.losses})`}
           </span>
-          <span className="text-[#83786a]">Avg win</span>
+          <span className="text-[var(--color-fg-muted)]">Avg win</span>
           <span className="text-right"><Pnl value={stats.avg_win} /></span>
-          <span className="text-[#83786a]">Avg loss</span>
+          <span className="text-[var(--color-fg-muted)]">Avg loss</span>
           <span className="text-right"><Pnl value={stats.avg_loss} /></span>
           {stats.closed_unpriced > 0 && (
             <>
-              <span className="text-[#83786a]">Unpriced</span>
-              <span className="tabular-nums text-right text-[#83786a]">
+              <span className="text-[var(--color-fg-muted)]">Unpriced</span>
+              <span className="tabular-nums text-right text-[var(--color-fg-muted)]">
                 {stats.closed_unpriced}
               </span>
             </>
           )}
           {stats.unreconciled > 0 && (
             <>
-              <span className="text-[#83786a]">Unreconciled</span>
-              <span className="tabular-nums text-right text-[#83786a]">
+              <span className="text-[var(--color-fg-muted)]">Unreconciled</span>
+              <span className="tabular-nums text-right text-[var(--color-fg-muted)]">
                 {stats.unreconciled}
               </span>
             </>
@@ -169,7 +170,7 @@ function TradeStatsBlock({ title, note, stats }: {
 function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
   if (trades.length === 0) {
     return (
-      <div className="card p-8 text-center text-sm text-[#83786a]">
+      <div className="card p-8 text-center text-sm text-[var(--color-fg-muted)]">
         No closed trades yet. Positions appear here once they exit.
       </div>
     )
@@ -179,50 +180,52 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[46rem]">
           <thead>
-            <tr className="border-b border-[#e7e2d8] text-[11px] uppercase tracking-widest text-[#83786a]">
-              <th className="text-left font-semibold px-4 py-2.5">Ticker</th>
-              <th className="text-right font-semibold px-3 py-2.5">Qty</th>
-              <th className="text-right font-semibold px-3 py-2.5">Entry</th>
-              <th className="text-right font-semibold px-3 py-2.5">Exit</th>
-              <th className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
-              <th className="text-right font-semibold px-3 py-2.5">%</th>
-              <th className="text-left font-semibold px-4 py-2.5">Exit</th>
+            <tr className="border-b border-[var(--color-border)] text-[11px] uppercase tracking-widest text-[var(--color-fg-muted)]">
+              <th scope="col" className="text-left font-semibold px-4 py-2.5">Ticker</th>
+              <th scope="col" className="text-right font-semibold px-3 py-2.5">Qty</th>
+              <th scope="col" className="text-right font-semibold px-3 py-2.5">Entry</th>
+              <th scope="col" className="text-right font-semibold px-3 py-2.5">Exit</th>
+              <th scope="col" className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
+              <th scope="col" className="text-right font-semibold px-3 py-2.5">%</th>
+              {/* Was a second column also labelled "Exit" — this one is why the
+                  position closed, not the price it closed at. */}
+              <th scope="col" className="text-left font-semibold px-4 py-2.5">Reason</th>
             </tr>
           </thead>
           <tbody>
             {trades.map((t, i) => (
               <tr
                 key={`${t.ticker}-${t.closed_at ?? i}`}
-                className="border-b border-[#e7e2d8] last:border-b-0"
+                className="border-b border-[var(--color-border)] last:border-b-0"
               >
                 <td className="px-4 py-2.5">
-                  <span className="font-semibold text-[#14110c]">{t.ticker}</span>
+                  <span className="font-semibold text-[var(--color-fg)]">{t.ticker}</span>
                   {t.signal_type && t.signal_type !== 'BUY' && t.signal_type !== 'SELL' && (
-                    <span className="ml-2 text-[10px] uppercase tracking-wider text-[#83786a]">
+                    <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--color-fg-muted)]">
                       manual
                     </span>
                   )}
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-[#14110c]">
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-fg)]">
                   {t.qty?.toLocaleString() ?? '—'}
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-[#83786a]">
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-fg-muted)]">
                   {fmtPrice(t.entry_price)}
                 </td>
-                <td className="px-3 py-2.5 text-right tabular-nums text-[#83786a]">
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-fg-muted)]">
                   {fmtPrice(t.exit_price)}
                 </td>
                 <td className="px-3 py-2.5 text-right"><Pnl value={t.pnl} /></td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   {t.pnl_pct == null ? (
-                    <span className="text-[#83786a]">—</span>
+                    <span className="text-[var(--color-fg-muted)]">—</span>
                   ) : (
                     <span className={t.pnl_pct < 0 ? 'text-red-500' : 'text-green-600'}>
                       {(t.pnl_pct * 100).toFixed(2)}%
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-2.5 text-[#83786a] text-[13px]">
+                <td className="px-4 py-2.5 text-[var(--color-fg-muted)] text-[13px]">
                   {t.status === 'UNRECONCILED'
                     ? 'no broker record'
                     : t.exit_reason === 'closed_unpriced'
@@ -247,10 +250,10 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
 const SIGNAL_ORDER: Signal[] = ['BUY', 'HOLD', 'SELL']
 
 const tintBg: Record<Signal, string> = {
-  BUY: '#eaf6ee', SELL: '#fbebeb', HOLD: '#fbf1e2',
+  BUY: 'var(--tint-buy)', SELL: 'var(--tint-sell)', HOLD: 'var(--tint-hold)',
 }
 const barColor: Record<Signal, string> = {
-  BUY: '#15803d', SELL: '#b91c1c', HOLD: '#b45309',
+  BUY: 'var(--accent-buy)', SELL: 'var(--accent-sell)', HOLD: 'var(--accent-hold)',
 }
 
 function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][number] }) {
@@ -267,7 +270,7 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
       {pending ? (
         <div className="flex flex-col gap-1">
           <span
-            className="text-[#83786a] tabular-nums"
+            className="text-[var(--color-fg-muted)] tabular-nums"
             style={{ fontFamily: 'Archivo, system-ui, sans-serif', fontWeight: 700, fontSize: '28px' }}
           >
             Pending
@@ -279,7 +282,7 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
       ) : (
         <div className="flex flex-col gap-1">
           <span
-            className="text-[#14110c] tabular-nums"
+            className="text-[var(--color-fg)] tabular-nums"
             style={{ fontFamily: 'Archivo, system-ui, sans-serif', fontWeight: 700, fontSize: '28px' }}
           >
             {fmtPct(row.win_rate)}
@@ -308,9 +311,9 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
 // ── Recent signal history table (Section 3) ────────────────────────────────────
 
 function OutcomeCell({ rec }: { rec: SignalRecord }) {
-  if (rec.return_20d == null) return <span className="text-[#83786a] text-xs">Pending</span>
-  if (rec.was_correct) return <span className="text-[#15803d] text-xs font-medium">✓ Correct</span>
-  return <span className="text-[#b91c1c] text-xs font-medium">✗ Wrong</span>
+  if (rec.return_20d == null) return <span className="text-[var(--color-fg-muted)] text-xs">Pending</span>
+  if (rec.was_correct) return <span className="text-[var(--accent-buy)] text-xs font-medium">✓ Correct</span>
+  return <span className="text-[var(--accent-sell)] text-xs font-medium">✗ Wrong</span>
 }
 
 function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
@@ -326,27 +329,20 @@ function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
   }
 
   return (
+    // Section label lives on the page's <h2>; a card heading here repeated it.
     <div className="card overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--color-border)]">
-        <h3
-          className="font-semibold text-[var(--color-fg)]"
-          style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
-        >
-          Recent Signal History
-        </h3>
-      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Date</th>
-              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Ticker</th>
-              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Signal</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Score</th>
-              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Conviction</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Entry Price</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">20d Return</th>
-              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Outcome</th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Date</th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Ticker</th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Signal</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Score</th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Conviction</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Entry Price</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">20d Return</th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Outcome</th>
             </tr>
           </thead>
           <tbody>
@@ -407,24 +403,17 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
   const sorted = [...rows].sort((a, b) => (b.win_rate ?? 0) - (a.win_rate ?? 0))
 
   return (
+    // Section label lives on the page's <h2>; a card heading here repeated it.
     <div className="card overflow-hidden">
-      <div className="px-4 py-3 border-b border-[var(--color-border)]">
-        <h3
-          className="font-semibold text-[var(--color-fg)]"
-          style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
-        >
-          By Ticker
-        </h3>
-      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Ticker</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Signals</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Settled</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Win Rate</th>
-              <th className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[#83786a]">Avg 20d</th>
+              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Ticker</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Signals</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Settled</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Win Rate</th>
+              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Avg 20d</th>
             </tr>
           </thead>
           <tbody>
@@ -536,13 +525,21 @@ export default function PerformancePage() {
   return (
     <Layout>
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-[#14110c]" style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
-          Signal Accuracy Dashboard
-        </h1>
-        <p className="text-sm text-[var(--color-fg-muted)] mt-0.5">
-          Historical accuracy of AI-generated trading signals
-        </p>
+      <div className="mb-6 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--color-fg)]" style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+            Signal Accuracy Dashboard
+          </h1>
+          <p className="text-sm text-[var(--color-fg-muted)] mt-0.5">
+            Historical accuracy of AI-generated trading signals
+          </p>
+        </div>
+        {/* "Was it right?" is this page; "were the thresholds in the right
+            place?" is the next one, and it is the harder question. */}
+        <Link to="/calibration" className="btn-secondary flex-shrink-0 self-start">
+          <Target className="w-4 h-4" />
+          Calibration
+        </Link>
       </div>
 
       {isLoading ? (
@@ -551,6 +548,7 @@ export default function PerformancePage() {
         </div>
       ) : error ? (
         <div
+          role="alert"
           className="flex items-center gap-3 px-4 py-3 rounded-xl
                       bg-red-500/10 border border-red-500/20 text-red-500 text-sm"
         >
@@ -559,26 +557,34 @@ export default function PerformancePage() {
         </div>
       ) : (
         <>
-        {trades && (trades.all.closed > 0 || trades.all.open > 0) && (
+        {trades && trades.approved && (trades.all.closed > 0 || trades.all.open > 0) && (
           <div className="flex flex-col gap-3 mb-6">
             <div>
-              <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-1">
+              <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)] mb-1">
                 Realised trading performance
               </h2>
-              <p className="text-[12px] text-[#83786a]">
+              <p className="text-[12px] text-[var(--color-fg-muted)]">
                 What the executed orders did. Signal accuracy below measures
                 whether a call was right after 20 days; this measures money.
               </p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            {/* Three buckets, never pooled. The middle one is the whole point
+                of the manual/semi-auto ladder: it shows what the agent's picks
+                did once a human filtered them. */}
+            <div className="grid gap-3 sm:grid-cols-3">
               <TradeStatsBlock
-                title="Signal-driven"
-                note="Orders the agent placed from its own signals — the engine's record."
+                title="Agent"
+                note="Placed unattended from its own signals — the only clean read of the engine."
                 stats={trades.signal_driven}
               />
               <TradeStatsBlock
+                title="Approved"
+                note="The agent proposed, you accepted. Biased by what you declined — measures the pair."
+                stats={trades.approved}
+              />
+              <TradeStatsBlock
                 title="Manual"
-                note="Hand-placed or seeded positions. Not evidence about the signals."
+                note="You chose the ticker. Not evidence about the signals."
                 stats={trades.manual}
               />
             </div>
@@ -631,7 +637,7 @@ export default function PerformancePage() {
 
           {/* ── Section 2: Signal type accuracy ───────────────────────────── */}
           <div>
-            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)] mb-3">
               By Signal Type
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -643,7 +649,7 @@ export default function PerformancePage() {
 
           {/* ── Section 3: Recent signal history table ────────────────────── */}
           <div>
-            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-3">
+            <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)] mb-3">
               Signal History
             </h2>
             <SignalHistoryTable records={signalHistory} />
@@ -652,7 +658,7 @@ export default function PerformancePage() {
           {/* ── Section 4: By ticker table ────────────────────────────────── */}
           {data.by_ticker && data.by_ticker.length > 0 && (
             <div>
-              <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[#83786a] mb-3">
+              <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)] mb-3">
                 By Ticker
               </h2>
               <ByTickerTable rows={data.by_ticker} />

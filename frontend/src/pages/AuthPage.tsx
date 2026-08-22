@@ -23,17 +23,27 @@ type LoginFormData = z.infer<typeof loginSchema>
 const PasswordField = forwardRef<
   HTMLInputElement,
   React.InputHTMLAttributes<HTMLInputElement> & { label: string; error?: string }
->(function PasswordField({ label, error, ...props }, ref) {
+>(function PasswordField({ label, error, id, ...props }, ref) {
   const [show, setShow] = useState(false)
+  // Derived from the label when no id is supplied, so the binding cannot be
+  // forgotten at a call site.
+  const fieldId = id ?? `field-${label.toLowerCase().replace(/\s+/g, '-')}`
+  const errorId = `${fieldId}-error`
+
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-[var(--color-fg)]">{label}</label>
+      <label htmlFor={fieldId} className="text-sm font-medium text-[var(--color-fg)]">
+        {label}
+      </label>
       <div className="relative">
         <input
           ref={ref}
           {...props}
+          id={fieldId}
           type={show ? 'text' : 'password'}
           className="input pr-12"
+          aria-invalid={!!error}
+          aria-describedby={error ? errorId : undefined}
         />
         <button
           type="button"
@@ -41,11 +51,14 @@ const PasswordField = forwardRef<
           className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-fg-muted)]
                      hover:text-[var(--color-fg)] transition-colors"
           aria-label={show ? 'Hide password' : 'Show password'}
+          aria-pressed={show}
         >
           {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
       </div>
-      {error && <p className="text-xs text-red-500">{error}</p>}
+      {error && (
+        <p id={errorId} role="alert" className="text-xs text-red-500">{error}</p>
+      )}
     </div>
   )
 })
@@ -78,15 +91,26 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
       <div className="flex flex-col gap-1.5">
-        <label className="text-sm font-medium text-[var(--color-fg)]">Email</label>
+        <label htmlFor="login-email" className="text-sm font-medium text-[var(--color-fg)]">
+          Email
+        </label>
         <input
           {...register('email')}
+          id="login-email"
           type="email"
           placeholder="you@example.com"
           autoComplete="email"
           className="input"
+          aria-invalid={!!errors.email}
+          aria-describedby={errors.email ? 'login-email-error' : undefined}
         />
-        {errors.email && <p className="text-xs text-red-500">{errors.email.message}</p>}
+        {/* Announced, not just shown — a validation message that only exists
+            visually is invisible to a screen reader. */}
+        {errors.email && (
+          <p id="login-email-error" role="alert" className="text-xs text-red-500">
+            {errors.email.message}
+          </p>
+        )}
       </div>
 
       <PasswordField
@@ -98,7 +122,7 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
       />
 
       {serverError && (
-        <div className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm">
+        <div role="alert" className="px-4 py-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-500 text-sm">
           {serverError}
         </div>
       )}

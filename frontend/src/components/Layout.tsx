@@ -4,14 +4,17 @@ import {
   BarChart2,
   Briefcase,
   BookOpen,
+  ClipboardList,
   Home,
   LogOut,
   Search,
+  Target,
   User,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth-context'
 import AccountBar from './AccountBar'
 import ThemeToggle from './ThemeToggle'
+import CommandPalette from './CommandPalette'
 
 // Icon mark SVG (inlined so it renders at any size with no extra request)
 const IconMark = ({ size = 32 }: { size?: number }) => (
@@ -46,8 +49,10 @@ function LogoMark() {
 
 const navLinks = [
   { to: '/', label: 'Dashboard', icon: Home, exact: true },
+  { to: '/orders', label: 'Orders', icon: ClipboardList, exact: false },
   { to: '/holdings', label: 'Holdings', icon: Briefcase, exact: false },
   { to: '/performance', label: 'Performance', icon: BarChart2, exact: false },
+  { to: '/calibration', label: 'Calibration', icon: Target, exact: false },
   { to: '/guide', label: 'Guide', icon: BookOpen, exact: false },
 ]
 
@@ -76,8 +81,8 @@ function DesktopNav() {
               `flex items-center gap-2 text-[13.5px] font-medium transition-colors duration-150
                border-b-2 pb-0.5 px-0 py-1 mr-6
                ${isActive
-                 ? 'text-[#14110c] border-[#f2600c]'
-                 : 'text-[#83786a] border-transparent hover:text-[#14110c]'
+                 ? 'text-[var(--color-fg)] border-brand-500'
+                 : 'text-[var(--color-fg-muted)] border-transparent hover:text-[var(--color-fg)]'
                }`
             }
           >
@@ -123,8 +128,8 @@ function DesktopNav() {
 
 const bottomTabs = [
   { to: '/', label: 'Home', icon: Home, exact: true },
-  { to: '/holdings', label: 'Holdings', icon: Briefcase, exact: false },
-  { to: '/ticker/search', label: 'Analyze', icon: Search, exact: false },
+  { to: '/orders', label: 'Orders', icon: ClipboardList, exact: false },
+  { to: '/search', label: 'Analyze', icon: Search, exact: false },
   { to: '/performance', label: 'Perf', icon: BarChart2, exact: false },
   { to: '/profile', label: 'Profile', icon: User, exact: false },
 ]
@@ -163,6 +168,29 @@ function MobileBottomBar() {
   )
 }
 
+/**
+ * Regulatory notice, on every page at every breakpoint.
+ *
+ * This used to live only on the Guide page and inside exported PDFs — in an
+ * app that also routes live orders to a broker and whose own copy cites CIRO.
+ * It belongs where the recommendations are read, not one navigation away from
+ * them, and mobile had no copy of it at all.
+ */
+function Disclaimer() {
+  return (
+    <p className="mt-10 pt-4 border-t border-[var(--color-border)]
+                  text-[0.65rem] leading-relaxed text-[var(--color-fg-muted)]">
+      <strong className="text-[var(--color-fg)]">Not financial advice.</strong>{' '}
+      SAMSBPM Trading Agent is an automated analysis tool provided for informational
+      purposes only. It is not a registered investment adviser, broker-dealer, or
+      portfolio manager, and nothing here is a recommendation to buy or sell any
+      security. Signals are model output, not research; past signal accuracy does
+      not predict future results. Trading involves risk of loss, including total
+      loss of capital. You are solely responsible for your investment decisions.
+    </p>
+  )
+}
+
 interface LayoutProps {
   children: React.ReactNode
 }
@@ -170,6 +198,17 @@ interface LayoutProps {
 export default function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-dvh flex flex-col bg-[var(--color-bg)] transition-colors duration-200">
+      {/* Visible only on focus. Without it a keyboard user tabs the whole nav
+          on every page before reaching content. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-[70] focus:top-2 focus:left-2
+                   focus:px-3 focus:py-2 focus:rounded-lg focus:bg-brand-500 focus:text-white
+                   focus:text-sm focus:font-medium"
+      >
+        Skip to content
+      </a>
+      <CommandPalette />
       <DesktopNav />
 
       {/* Mobile top bar */}
@@ -188,9 +227,14 @@ export default function Layout({ children }: LayoutProps) {
       <div className="flex-1 flex flex-col md:pt-[60px] min-w-0">
         <AccountBar />
 
-        <main className="flex-1 mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
-                         max-w-5xl mx-auto w-full">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex-1 mb-bottom-bar md:mb-0 px-4 py-6 md:px-6 md:py-8
+                     max-w-5xl mx-auto w-full focus:outline-none"
+        >
           {children}
+          <Disclaimer />
         </main>
       </div>
 

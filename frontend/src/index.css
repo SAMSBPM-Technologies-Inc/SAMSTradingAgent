@@ -2,13 +2,31 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Design tokens */
+/* Design tokens
+   ─────────────
+   Every colour a component reaches for must be declared in BOTH blocks below.
+   A raw hex in a component is a light-mode-only colour: the Performance page
+   was painted #14110c on a #0e0c09 background in dark mode and read as a black
+   rectangle. Tokens, not hexes. */
 :root {
   --color-bg: #fbfaf8;
   --color-surface: #ffffff;
   --color-border: #e7e2d8;
   --color-fg: #14110c;
   --color-fg-muted: #83786a;
+  /* Hover wash for bordered/ghost controls. */
+  --color-hover: #f1eee6;
+
+  /* Verdict tints — card backgrounds behind BUY / HOLD / SELL. */
+  --tint-buy: #eaf6ee;
+  --tint-sell: #fbebeb;
+  --tint-hold: #fbf1e2;
+
+  /* Verdict accents — progress bars and outcome text. Must stay legible
+     against --color-surface, so these darken in light and lighten in dark. */
+  --accent-buy: #15803d;
+  --accent-sell: #b91c1c;
+  --accent-hold: #b45309;
 }
 
 .dark {
@@ -17,6 +35,15 @@
   --color-border: #2a2420;
   --color-fg: #f0ece4;
   --color-fg-muted: #9a8f82;
+  --color-hover: #221d17;
+
+  --tint-buy: #10231a;
+  --tint-sell: #2a1414;
+  --tint-hold: #2a2010;
+
+  --accent-buy: #4ade80;
+  --accent-sell: #f87171;
+  --accent-hold: #fbbf24;
 }
 
 @layer base {
@@ -48,7 +75,7 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: #e7e2d8;
+    background: var(--color-border);
     border-radius: 3px;
   }
 }
@@ -108,7 +135,7 @@
   }
 
   .btn-secondary:hover:not(:disabled) {
-    background: #f1eee6;
+    background: var(--color-hover);
   }
 
   /* Ghost button */
@@ -125,8 +152,8 @@
   }
 
   .btn-ghost:hover {
-    background: #f1eee6;
-    color: #14110c;
+    background: var(--color-hover);
+    color: var(--color-fg);
   }
 }
 

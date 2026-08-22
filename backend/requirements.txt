@@ -13,6 +13,7 @@ numpy==1.26.4
 scikit-learn==1.4.2
 xgboost==2.0.3
 ta==0.11.0          # Technical analysis library (RSI, MACD, etc.)
+mplfinance==0.12.10b0   # Candlestick chart rendering (pulls in matplotlib)
 
 # Scheduling
 apscheduler==3.10.4

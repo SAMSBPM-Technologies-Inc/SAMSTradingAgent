@@ -29,6 +29,112 @@ _MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "model", "xgb_
 _xgb_model = None  # loaded lazily
 
 
+#: The six base factors plus the additive alternative-data modifier, in the
+#: order they are presented. `key` indexes user weight dicts, `feature` indexes
+#: the feature document, `label` is what the UI shows.
+FACTORS: tuple[tuple[str, str, str], ...] = (
+    ("technical",        "technical_score",        "Technical"),
+    ("fundamental",      "fundamental_score",      "Fundamental"),
+    ("sentiment",        "sentiment_score",        "Sentiment"),
+    ("macro",            "macro_score",            "Macro"),
+    ("volatility",       "volatility_score",       "Volatility"),
+    ("catalyst",         "catalyst_score",         "Catalyst"),
+)
+
+ALT_FACTOR = ("alternative_data", "alternative_data_score", "Alternative Data")
+
+
+def effective_weights(user_weights: dict | None) -> dict[str, float]:
+    """
+    The weights a score would actually be computed with.
+
+    Single source for the personalised path and the attribution breakdown —
+    these used to be separate copies, which is how the UI ended up showing a
+    volatility default the engine had abandoned. Fallbacks mirror the Settings
+    defaults in config.py, including volatility at 0.0: volatility is priced at
+    the risk gate rather than in the score. A user who has explicitly saved a
+    volatility weight keeps it; that is their choice, and it reinstates the
+    double-count knowingly.
+    """
+    settings = get_settings()
+    defaults = {
+        "technical":        settings.weight_technical,
+        "fundamental":      settings.weight_fundamental,
+        "sentiment":        settings.weight_sentiment,
+        "macro":            settings.weight_macro,
+        "volatility":       settings.weight_volatility,
+        "catalyst":         settings.weight_catalyst,
+        "alternative_data": settings.weight_alternative_data,
+    }
+    if not user_weights:
+        return defaults
+    return {k: float(user_weights.get(k, v)) for k, v in defaults.items()}
+
+
+class _WeightView:
+    """Adapts a weight dict to the attribute access `_weighted_score` expects."""
+
+    def __init__(self, weights: dict[str, float]) -> None:
+        for key, value in weights.items():
+            setattr(self, f"weight_{key}", value)
+
+
+def explain_score(feat: dict, user_weights: dict | None = None) -> dict:
+    """
+    Where the composite score came from, factor by factor.
+
+    The six sub-scores have always been computed and stored, and nothing ever
+    returned them: the UI showed a 0–100 number with no attribution while
+    offering sliders to reweight it. This is that attribution.
+
+    `attributable` is False on the XGBoost path. The weights genuinely did not
+    produce that score — the model did — so presenting a weighted decomposition
+    beside it would be a fabrication, and the caller is told to say so instead.
+    """
+    weights = effective_weights(user_weights)
+    method = feat.get("scoring_method") or (
+        "xgboost" if get_settings().enable_ml_model else "weighted"
+    )
+
+    factors = []
+    base_total = 0.0
+    for key, feature_key, label in FACTORS:
+        score = float(feat.get(feature_key, 0.5) or 0.5)
+        weight = float(weights.get(key, 0.0))
+        contribution = weight * score
+        base_total += contribution
+        factors.append({
+            "key": key,
+            "label": label,
+            "score": round(score, 4),
+            "weight": round(weight, 4),
+            "contribution": round(contribution, 4),
+        })
+
+    alt_key, alt_feature, alt_label = ALT_FACTOR
+    alt_score = float(feat.get(alt_feature, 0.5) or 0.5)
+    alt_weight = float(weights.get(alt_key, 0.0))
+    # Additive modifier centred on 0.5: it nudges the base rather than being a
+    # share of it, so its "contribution" is signed and can drag the score down.
+    alt_contribution = alt_weight * (alt_score - 0.5)
+
+    return {
+        "method": method,
+        "attributable": method != "xgboost",
+        "personalized": bool(user_weights),
+        "factors": factors,
+        "alternative_data": {
+            "key": alt_key,
+            "label": alt_label,
+            "score": round(alt_score, 4),
+            "weight": round(alt_weight, 4),
+            "contribution": round(alt_contribution, 4),
+        },
+        "base_total": round(base_total, 4),
+        "composite": round(clamp(base_total + alt_contribution), 4),
+    }
+
+
 def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[float, str]:
     """
     Apply per-user scoring weights to a feature document and return
@@ -38,19 +144,7 @@ def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[f
     Risk score is expected in feat["risk"]["score"] if available.
     """
     if user_weights:
-        # Fallbacks mirror the Settings defaults in config.py — including
-        # volatility at 0.0, which is priced at the risk gate rather than in the
-        # score. A user who has explicitly saved a volatility weight keeps it;
-        # that is their choice, and it reinstates the double-count knowingly.
-        class _W:
-            weight_technical        = user_weights.get("technical",        0.30)
-            weight_fundamental      = user_weights.get("fundamental",       0.20)
-            weight_sentiment        = user_weights.get("sentiment",         0.20)
-            weight_macro            = user_weights.get("macro",             0.15)
-            weight_volatility       = user_weights.get("volatility",        0.00)
-            weight_catalyst         = user_weights.get("catalyst",          0.15)
-            weight_alternative_data = user_weights.get("alternative_data",  0.10)
-        score = clamp(_weighted_score(feat, _W()))
+        score = clamp(_weighted_score(feat, _WeightView(effective_weights(user_weights))))
     else:
         settings = get_settings()
         score = clamp(_weighted_score(feat, settings))
