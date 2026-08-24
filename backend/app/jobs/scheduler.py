@@ -170,6 +170,89 @@ async def _premarket_sweep_job() -> None:
     logger.info("premarket_sweep_done", results=results)
 
 
+# ── Broker connectivity watch ─────────────────────────────────────────────────
+#
+# A dead broker session is silent: scoring continues, the UI works, and orders
+# are simply refused. You find out when you try to trade, which is the worst
+# moment to discover it. This is the alert that would have caught the Monday
+# morning outage before market open.
+
+#: When the session was first seen down, or None while it is healthy. Process
+#: state deliberately — a restart re-arms the alert, which is the safe
+#: direction: better a duplicate notification than a silent outage.
+_broker_down_since: datetime | None = None
+#: Set once per outage so a long one does not notify every five minutes.
+_broker_alert_sent = False
+
+
+async def _broker_watch_job() -> None:
+    """Alert when the broker has been disconnected longer than the threshold."""
+    global _broker_down_since, _broker_alert_sent
+
+    try:
+        settings = get_settings()
+        if not settings.auto_trade_enabled:
+            return  # No broker expected; nothing to watch.
+
+        from app.services import broker as ibkr
+
+        now = datetime.now(tz=timezone.utc)
+
+        if ibkr.is_connected():
+            if _broker_alert_sent and _broker_down_since is not None:
+                minutes = int((now - _broker_down_since).total_seconds() // 60)
+                await _notify_broker(down_minutes=minutes, recovered=True)
+                logger.info("broker_recovered", down_minutes=minutes)
+            _broker_down_since = None
+            _broker_alert_sent = False
+            return
+
+        if _broker_down_since is None:
+            _broker_down_since = now
+            logger.warning("broker_disconnected_observed")
+            return
+
+        minutes = int((now - _broker_down_since).total_seconds() // 60)
+        # Threshold sits above the reconnect loop's 300s ceiling, so a blip the
+        # loop recovers from on its own never pages anyone.
+        if minutes >= settings.broker_alert_after_minutes and not _broker_alert_sent:
+            await _notify_broker(down_minutes=minutes, recovered=False)
+            _broker_alert_sent = True
+            logger.error("broker_down_alert_sent", down_minutes=minutes)
+
+    except Exception as exc:
+        logger.error("broker_watch_job_failed", error=str(exc))
+
+
+async def _notify_broker(*, down_minutes: int, recovered: bool) -> None:
+    """Fan a broker alert out to every user with a channel configured."""
+    from app.services.notifier import send_broker_alert
+
+    settings = get_settings()
+    db = await get_db()
+    users = await db[COLL_USERS].find(
+        {"$or": [
+            {"alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+            {"alert_settings.whatsapp_phone": {"$exists": True, "$ne": None}},
+        ]},
+    ).to_list(length=2000)
+
+    mode = "live" if settings.is_live_trading else "paper"
+    for user in users:
+        prefs = user.get("alert_settings") or {}
+        try:
+            await send_broker_alert(
+                prefs.get("slack_webhook_url"),
+                down_minutes=down_minutes,
+                recovered=recovered,
+                trading_mode=mode,
+                whatsapp_phone=prefs.get("whatsapp_phone"),
+                whatsapp_apikey=prefs.get("whatsapp_apikey"),
+            )
+        except Exception as exc:
+            logger.warning("broker_alert_send_failed", user_id=str(user.get("_id")), error=str(exc))
+
+
 async def _daily_digest_job() -> None:
     """
     Send a morning watchlist digest to all users who have opted in and configured a Slack webhook.
@@ -395,6 +478,19 @@ def start_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=300,
+    )
+
+    # 5. Broker connectivity watch — every 5 min, always on.
+    #    Cheap (an in-process boolean), and the failure it catches is otherwise
+    #    silent until someone tries to place an order.
+    scheduler.add_job(
+        _broker_watch_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="broker_watch",
+        name="Broker connectivity watch",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
     )
 
     scheduler.start()

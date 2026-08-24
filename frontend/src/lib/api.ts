@@ -113,6 +113,14 @@ export const tradingApi = {
   placeOrder: (body: import('../types').ManualOrderRequest) =>
     api.post<import('../types').OrderPlacementResponse>('/trading/order', body),
 
+  brokerStatus: () => api.get<import('../types').BrokerStatus>('/trading/broker/status'),
+  /** Safe: forces an immediate connect attempt instead of waiting out the backoff. */
+  brokerReconnect: () =>
+    api.post<import('../types').BrokerRecoveryResult>('/trading/broker/reconnect'),
+  /** Restarts the gateway container — only where the server allows it. */
+  brokerRestart: () =>
+    api.post<import('../types').BrokerRecoveryResult>('/trading/broker/restart'),
+
   getProposals: () => api.get<import('../types').Proposal[]>('/trading/proposals'),
   approveProposal: (id: string, confirmLive = false) =>
     api.post<import('../types').OrderPlacementResponse>(

@@ -87,6 +87,23 @@ services:
       # 4001/4002 are loopback-only inside ibgateway and will always refuse.
       - IBKR_HOST=ibgateway
       - IBKR_PORT=${IBKR_PORT:-4004}
+      # Lets the UI's "Restart gateway" button work. Requires the Docker socket
+      # mount below — the flag alone does nothing. Off by default; see
+      # runbooks/ib-gateway-offline.md for the trade being made.
+      - ALLOW_GATEWAY_RESTART=${ALLOW_GATEWAY_RESTART:-false}
+    # OPT-IN: uncomment to let the UI restart the gateway container.
+    #
+    # Read before doing it. The Docker socket is root on the host — anything
+    # that compromises the API process can start privileged containers, read
+    # every other container's state, and reach the whole daemon. That is a real
+    # grant in exchange for one recovery button, and the SSH path in
+    # runbooks/ib-gateway-offline.md achieves the same thing without it.
+    #
+    # `Reconnect` in the UI needs none of this and already handles the common
+    # case; only an unauthenticated gateway needs a restart.
+    #
+    # volumes:
+    #   - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       # Start ordering only — the api must come up even if the gateway is still
       # booting or failing, since it also serves the dashboard. broker.py's
