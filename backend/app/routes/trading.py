@@ -29,6 +29,7 @@ from app.models.trade import (
     TradeStatus,
 )
 from app.services import broker as ibkr
+from app.services import gateway_control
 from app.services.trade_manager import BrokerUnavailable, execute_exit, execute_manual_entry
 from app.utils.logger import get_logger
 
@@ -298,6 +299,72 @@ async def close_position(
 
     logger.info("manual_close_requested", user_id=user_id, ticker=ticker.upper())
     return {"status": "close_order_submitted", "ticker": ticker.upper()}
+
+
+# ── Broker session recovery ───────────────────────────────────────────────────
+
+@router.get("/broker/status", summary="Broker session state and what can be done about it")
+async def broker_status(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Whether the broker session is up, and which recovery actions this server
+    offers. The UI reads `restart_available` rather than assuming — the restart
+    path is opt-in and absent on most deployments.
+    """
+    can_restart, restart_reason = gateway_control.restart_available()
+    env = get_env_settings()
+    return {
+        "connected": ibkr.is_connected(),
+        "provider": ibkr.provider_name(),
+        "host": env.ibkr_host,
+        "port": env.ibkr_port,
+        "trading_mode": "live" if env.is_live_trading else "paper",
+        "restart_available": can_restart,
+        "restart_unavailable_reason": restart_reason or None,
+        "login_seconds": gateway_control.GATEWAY_LOGIN_SECONDS,
+    }
+
+
+@router.post("/broker/reconnect", summary="Reconnect to IB Gateway now")
+async def broker_reconnect(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Try a broker session immediately rather than waiting out the backoff.
+
+    Fixes the common case — the gateway is up and this process is holding a
+    dead socket. Harmless if already connected.
+    """
+    result = await gateway_control.force_reconnect()
+    logger.info(
+        "broker_reconnect_requested",
+        user_id=str(current_user["_id"]), connected=result.connected,
+    )
+    return {
+        "action": result.action, "connected": result.connected,
+        "detail": result.detail, "pending": result.pending,
+    }
+
+
+@router.post("/broker/restart", summary="Restart the IB Gateway container")
+async def broker_restart(current_user: dict = Depends(get_current_user)) -> dict:
+    """
+    Restart the gateway itself — the only thing that helps when it is running
+    but unauthenticated, which is what IBKR's weekend maintenance leaves behind.
+
+    Returns as soon as the restart is requested. Login takes ~2 minutes and may
+    need a 2FA approval on the user's phone, so waiting here would time out
+    without telling the caller anything.
+    """
+    try:
+        result = await gateway_control.restart_gateway()
+    except gateway_control.GatewayControlUnavailable as exc:
+        # 501, not 403: the deployment does not implement this, rather than the
+        # user lacking permission for something that exists.
+        raise HTTPException(status_code=501, detail=str(exc))
+
+    logger.info("broker_restart_requested", user_id=str(current_user["_id"]))
+    return {
+        "action": result.action, "connected": result.connected,
+        "detail": result.detail, "pending": result.pending,
+    }
 
 
 # ── Manual orders ─────────────────────────────────────────────────────────────

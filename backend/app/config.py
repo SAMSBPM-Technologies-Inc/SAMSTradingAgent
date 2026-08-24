@@ -48,6 +48,27 @@ class Settings(BaseSettings):
     # NEVER rotate without first re-encrypting all existing ibkr_password_enc values.
     encryption_key: str = Field(default="", description="Base64-encoded Fernet key for IBKR credential encryption")
 
+    # ── Broker recovery ───────────────────────────────────────────────────────
+    #: Allow the UI to restart the IB Gateway container.
+    #:
+    #: OFF by default, and it should stay off unless you want it. Restarting
+    #: another container requires mounting the host Docker socket into the API,
+    #: which is effectively root on the host — anything that compromises the API
+    #: process inherits it. The safe endpoint (`/trading/broker/reconnect`) needs
+    #: none of this and fixes a stale session; a restart is only necessary when
+    #: the gateway itself is unauthenticated, e.g. after IBKR's weekend
+    #: maintenance window.
+    allow_gateway_restart: bool = Field(
+        default=False,
+        description="Let the API restart the IB Gateway container (requires the "
+                    "Docker socket mounted — see docker-compose.prod.yml)",
+    )
+    gateway_container_name: str = Field(default="trading_ibgateway")
+    #: Alert when the broker has been disconnected for at least this long.
+    #: Longer than the reconnect backoff ceiling (300s) so a routine blip that
+    #: the loop recovers from on its own never pages anyone.
+    broker_alert_after_minutes: int = Field(default=15)
+
     # ── Auth / JWT ────────────────────────────────────────────────────────────
     jwt_secret_key: str = Field(
         default="change-me-in-production",

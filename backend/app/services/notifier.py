@@ -63,6 +63,43 @@ async def send_signal_alert(
         await _whatsapp_send(whatsapp_phone, whatsapp_apikey, text)
 
 
+async def send_broker_alert(
+    webhook_url: str | None,
+    *,
+    down_minutes: int,
+    recovered: bool,
+    trading_mode: str,
+    whatsapp_phone: str | None = None,
+    whatsapp_apikey: str | None = None,
+) -> None:
+    """
+    Tell the user the broker session is down (or back).
+
+    Worth waking someone for because it is silent otherwise: the agent keeps
+    scoring and the UI keeps working, orders are simply refused. The failure is
+    invisible until you try to trade, which is the worst time to discover it.
+    """
+    if recovered:
+        text = "\n".join([
+            "✅ IB Gateway reconnected",
+            f"Back after {down_minutes} min. Trading is live again ({trading_mode}).",
+            "SAMSBPM Trading - sta.samsbpm.com",
+        ])
+    else:
+        text = "\n".join([
+            "🔌 IB Gateway disconnected",
+            f"No broker session for {down_minutes} min — orders are being refused ({trading_mode}).",
+            "Common after IBKR's weekend maintenance or an unanswered 2FA prompt.",
+            "Fix: Orders page → Broker → Reconnect, then Restart Gateway if that fails.",
+            "SAMSBPM Trading - sta.samsbpm.com",
+        ])
+
+    if webhook_url:
+        await _slack_post(webhook_url, text)
+    if whatsapp_phone and whatsapp_apikey:
+        await _whatsapp_send(whatsapp_phone, whatsapp_apikey, text)
+
+
 async def send_daily_digest(
     webhook_url: str | None,
     display_name: str,

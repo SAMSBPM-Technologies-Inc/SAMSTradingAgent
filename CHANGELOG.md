@@ -14,6 +14,90 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.2.0] — 2026-08-24
+
+### Added
+
+- **Broker recovery from the UI.** Orders → Broker panel shows session state and
+  offers two actions kept deliberately separate, because they carry different
+  risk. **Reconnect** asks for a session immediately instead of waiting out the
+  15s→300s backoff; it needs no privileges and fixes a stale socket. **Restart
+  gateway** restarts the container — the only thing that clears a gateway that is
+  running but unauthenticated — and is **off by default**, because it requires
+  the host Docker socket inside the API container, which is root on the host.
+  The panel says why the button is unavailable rather than leaving it greyed
+  out, and warns that a restart usually triggers a 2FA push that must be
+  approved on a phone or the session never returns.
+- **Broker disconnection alerts.** A 5-minute job notifies through the existing
+  Slack / WhatsApp channels once the session has been down for
+  `BROKER_ALERT_AFTER_MINUTES` (default 15) — once per outage, plus a recovery
+  notice. The threshold sits above the reconnect ceiling so a blip the loop
+  fixes on its own never pages anyone. This failure was previously silent: the
+  agent keeps scoring and the UI keeps working while every order is refused.
+- **`runbooks/ib-gateway-offline.md`** — why the gateway goes offline (IBKR
+  weekend maintenance, the daily forced logout, unanswered 2FA), how to tell
+  which case you are in from the logs, and how to recover from the UI or over
+  SSH. The in-app Guide covers setup only.
+- `GET /trading/broker/status`, `POST /trading/broker/reconnect`,
+  `POST /trading/broker/restart`.
+
+### Fixed
+
+- **Order refusals now say what is blocking them.** "Position already open for
+  this ticker" gave no way to tell a filled holding from a stale order record
+  that never reconciled, and those need opposite responses. `FILLED` /
+  `PARTIAL` / `PENDING` now read differently and name the quantity, date, and
+  order id. The `FILLED` case also explains why the guard stands: the first
+  entry's bracket is still working, so a second entry would put two stops on one
+  holding and could oversell into a short.
+- **`Close` reported success while doing nothing when the broker was
+  unreachable.** Second instance of the bug fixed in 1.1.1 — that fix covered
+  the `enabled` gate and missed the connectivity gate four lines below it.
+  User-initiated closes now return 503; the scheduled agent still fails quietly
+  because it retries next cycle.
+
+### Known gaps
+
+- **Runbooks live outside `docs/`** because that directory is gitignored as
+  developer planning material. An operational runbook has to be in the repo, so
+  it went to `runbooks/`. The nine documents in `docs/` remain untracked and
+  exist only on whoever's machine wrote them.
+- The UI restart path has not been exercised against a real Docker socket — it
+  is off by default and was tested only for its refusal behaviour.
+
+---
+
+## [1.1.1] — 2026-08-22
+
+Hotfix. **1.1.0 took the API down**, so login and everything else failed.
+
+### Fixed
+
+- **Startup crash.** The idempotency index added in 1.1.0 was declared
+  `sparse=True`. A compound sparse index only skips a document when *every*
+  indexed field is missing, and every trade has a `user_id` — so the whole
+  existing `trades` collection was indexed with `idempotency_key: null`, and the
+  second such document collided against `unique=True`. `create_index` raised
+  inside `_ensure_indexes`, `connect_db` awaited it unguarded, and the exception
+  propagated out of lifespan startup and killed the process. Now uses
+  `partialFilterExpression`, the pattern the signal-history index three lines
+  above already used for the same problem.
+- **Index creation and data migration can no longer abort startup.** A defect in
+  a *trades* index stopped people logging in, which is the wrong blast radius.
+  Connecting to Mongo is the only load-bearing step in that sequence; the rest is
+  maintenance, and maintenance failing should degrade the service rather than
+  delete it. Both log at error level with the concrete consequence attached.
+
+### Known gaps
+
+- Not reproduced locally before shipping — no Docker daemon was available to run
+  a MongoDB instance. **Every backend test at the time stubbed Mongo**, so
+  `_ensure_indexes` never ran against a real database and a failure that only
+  manifests against real documents was structurally invisible. Startup-path code
+  needs a real database in test.
+
+---
+
 ## [1.1.0] — 2026-08-22
 
 The UI was showing roughly 60% of what the engine does, and misstating parts of

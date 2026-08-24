@@ -15,6 +15,7 @@ import type { Proposal, TradeRecord } from '../types'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
 import SignalBadge from '../components/SignalBadge'
+import BrokerPanel from '../components/BrokerPanel'
 
 /**
  * Orders, positions, and the agent's proposal queue.
@@ -311,6 +312,12 @@ export default function OrdersPage() {
           {error}
         </div>
       )}
+
+      {/* Broker session sits above everything: when it is down, every action on
+          this page is refused, and that should be the first thing you see. */}
+      <div className="mb-8">
+        <BrokerPanel />
+      </div>
 
       {loading ? (
         <div className="flex items-center justify-center py-20">

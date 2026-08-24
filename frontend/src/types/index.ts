@@ -258,6 +258,27 @@ export interface OrderPlacementResponse {
   duplicate: boolean
 }
 
+export interface BrokerStatus {
+  connected: boolean
+  provider: string
+  host: string
+  port: number
+  trading_mode: string
+  /** False on most deployments — restarting needs the Docker socket mounted. */
+  restart_available: boolean
+  restart_unavailable_reason?: string | null
+  /** Roughly how long IBC takes to log in after a restart. */
+  login_seconds: number
+}
+
+export interface BrokerRecoveryResult {
+  action: string
+  connected: boolean
+  detail: string
+  /** True when the caller should wait rather than read connected=false as failure. */
+  pending: boolean
+}
+
 /** An entry the agent wanted to take but was not permitted to take alone. */
 export interface Proposal {
   id: string
