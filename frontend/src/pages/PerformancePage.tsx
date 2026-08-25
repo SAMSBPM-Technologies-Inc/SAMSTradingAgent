@@ -115,14 +115,24 @@ function TradeStatsBlock({ title, note, stats }: {
   stats: TradeStats
 }) {
   const nothing = stats.closed === 0 && stats.open === 0 && stats.unreconciled === 0
+  // Net leads when it is known. Gross is what the position did; net is what
+  // reached the account, and on a small account the two are far apart — a
+  // fixed ticket costs 0.5% of a $200 round trip and 0.005% of a $20,000 one.
+  const hasNet = stats.realised_pnl_net != null
+  const headline = hasNet ? stats.realised_pnl_net : stats.realised_pnl
   return (
     <div className="border border-[var(--color-border)] p-4" style={{ borderRadius: '10px' }}>
       <div className="flex items-baseline justify-between gap-3 mb-1">
         <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
           {title}
         </span>
-        {stats.realised_pnl != null && (
-          <Pnl value={stats.realised_pnl} className="text-[18px] font-bold" />
+        {headline != null && (
+          <span className="flex items-baseline gap-1.5">
+            <Pnl value={headline} className="text-[18px] font-bold" />
+            <span className="text-[10px] uppercase tracking-wider text-[var(--color-fg-muted)]">
+              {hasNet ? 'net' : 'gross'}
+            </span>
+          </span>
         )}
       </div>
       <p className="text-[11px] text-[var(--color-fg-muted)] mb-3">{note}</p>
@@ -145,6 +155,49 @@ function TradeStatsBlock({ title, note, stats }: {
           <span className="text-right"><Pnl value={stats.avg_win} /></span>
           <span className="text-[var(--color-fg-muted)]">Avg loss</span>
           <span className="text-right"><Pnl value={stats.avg_loss} /></span>
+
+          {hasNet && (
+            <>
+              <span className="text-[var(--color-fg-muted)]">Gross</span>
+              <span className="text-right"><Pnl value={stats.realised_pnl} /></span>
+              <span className="text-[var(--color-fg-muted)]">Commission</span>
+              <span className="tabular-nums text-right text-[var(--color-fg)]">
+                {stats.commission_paid == null ? '—' : usd.format(stats.commission_paid)}
+                {stats.commission_drag != null && (
+                  <span className="text-[var(--color-fg-muted)]">
+                    {' '}({Math.round(stats.commission_drag * 100)}%)
+                  </span>
+                )}
+              </span>
+              <span className="text-[var(--color-fg-muted)]">Win rate net</span>
+              <span className="tabular-nums text-right text-[var(--color-fg)]">
+                {stats.win_rate_net == null
+                  ? '—'
+                  : `${Math.round(stats.win_rate_net * 100)}% (${stats.netted})`}
+              </span>
+              {/* The number that should drive the sizing thresholds: trades
+                  that made money until the ticket was paid. */}
+              {stats.wins_lost_to_fees > 0 && (
+                <>
+                  <span className="text-[var(--color-fg-muted)]">Wins lost to fees</span>
+                  <span className="tabular-nums text-right text-red-500">
+                    {stats.wins_lost_to_fees}
+                  </span>
+                </>
+              )}
+            </>
+          )}
+          {/* Priced, but with no usable fee figure — mostly trades that closed
+              before fee capture shipped. Shown rather than folded in at zero,
+              which would understate cost in one direction every time. */}
+          {stats.net_unknown > 0 && (
+            <>
+              <span className="text-[var(--color-fg-muted)]">Fees unknown</span>
+              <span className="tabular-nums text-right text-[var(--color-fg-muted)]">
+                {stats.net_unknown}
+              </span>
+            </>
+          )}
           {stats.closed_unpriced > 0 && (
             <>
               <span className="text-[var(--color-fg-muted)]">Unpriced</span>
@@ -186,6 +239,9 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
               <th scope="col" className="text-right font-semibold px-3 py-2.5">Entry</th>
               <th scope="col" className="text-right font-semibold px-3 py-2.5">Exit</th>
               <th scope="col" className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
+              {/* Gross above, net below, in one column — side-by-side columns
+                  read as two unrelated numbers, and the point is the gap. */}
+              <th scope="col" className="text-right font-semibold px-3 py-2.5">Fees</th>
               <th scope="col" className="text-right font-semibold px-3 py-2.5">%</th>
               {/* Was a second column also labelled "Exit" — this one is why the
                   position closed, not the price it closed at. */}
@@ -215,7 +271,30 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
                 <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-fg-muted)]">
                   {fmtPrice(t.exit_price)}
                 </td>
-                <td className="px-3 py-2.5 text-right"><Pnl value={t.pnl} /></td>
+                <td className="px-3 py-2.5 text-right">
+                  <Pnl value={t.pnl} />
+                  {t.pnl_net != null && (
+                    <div className="text-[11px] mt-0.5">
+                      <span className="text-[var(--color-fg-muted)]">net </span>
+                      <Pnl value={t.pnl_net} className="text-[11px]" />
+                    </div>
+                  )}
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums text-[var(--color-fg-muted)] text-[13px]">
+                  {t.commission_paid == null
+                    ? '—'
+                    : usd.format(t.commission_paid)}
+                  {/* An add is a second ticket on one position — the reason
+                      adds are rationed. Worth seeing next to the fee. */}
+                  {t.scale_ins > 0 && (
+                    <div className="text-[10px]">+{t.scale_ins} add{t.scale_ins > 1 ? 's' : ''}</div>
+                  )}
+                  {t.commission_paid != null && !t.commission_complete && (
+                    <div className="text-[10px]" title="At least one execution never reported a commission — this is a floor, not a total.">
+                      incomplete
+                    </div>
+                  )}
+                </td>
                 <td className="px-3 py-2.5 text-right tabular-nums">
                   {t.pnl_pct == null ? (
                     <span className="text-[var(--color-fg-muted)]">—</span>

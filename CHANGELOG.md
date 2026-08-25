@@ -14,6 +14,64 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.6.0] — 2026-08-25
+
+### Added
+
+- **Realised performance is now reported net of commission.** Gross P&L is what
+  the position did; net is what reached the account, and on a small account the
+  two are far apart — a fixed broker ticket costs roughly 0.5% of a $200 round
+  trip and 0.005% of a $20,000 one. A strategy can look profitable gross and
+  lose money net, and until now nothing in the app would have shown that.
+  - `/performance/trades` gains `realised_pnl_net`, `commission_paid`,
+    `commission_drag` (fees as a share of the gross P&L they were charged
+    against) and `win_rate_net`, per bucket, alongside the gross figures the
+    endpoint already returned. Buckets are still never pooled.
+  - **`wins_lost_to_fees`** counts trades that were profitable before
+    commission and not after. That is the number to set the sizing thresholds
+    from — the first honest read on whether `MIN_ADD_FRACTION`, the 2% dip and
+    the two-add cap are anywhere near right.
+  - The Performance page leads with net where it is known and labels it, shows
+    gross beneath, and gives each closed trade its own fee and add count.
+  - Commission is the venue's real figure, taken from IB's execution reports —
+    not a modelled estimate. IB paper simulates commissions, so the paper
+    record produces usable numbers.
+
+- **Trades record what they actually cost.** `commission_paid` accrues across
+  every ticket the position paid: the entry, each scale-in add, and the exit.
+  - Accrual is idempotent by execution id. Reconcile re-reads a 24-hour fill
+    window every two minutes, so without that the fee total would climb on its
+    own for as long as the app stayed up, fastest on the busiest trades.
+  - IB delivers commission in a report separate from the execution and can lag
+    it by a beat. A trade that closes in that gap is picked up by a backfill
+    pass over the last 24 hours rather than being left permanently unpriced.
+
+### Known gaps
+
+- **Trades closed before this release can never be netted.** IB only serves the
+  current session's executions, so there is no way to recover their commissions.
+  They are counted as `net_unknown` and excluded from every net figure rather
+  than folded in at zero — zero would understate cost in one direction every
+  time, which is worse than an honest gap. Expect the net view to be thin for a
+  few days.
+- **A missing commission suppresses the net figure for that trade entirely.**
+  `commission_complete` goes false if any single execution never reported, and
+  the trade then shows gross only. This is deliberate — a partial fee total
+  flatters — but it means one bad execution report hides an otherwise good
+  trade from the net numbers.
+- **Mobile does not show any of this.** The mobile Performance screen renders
+  signal accuracy only and has never had a realised-trades section, so there is
+  nothing there to extend. This is not a new parity gap, but it is now a
+  larger one.
+- **Multi-currency is not handled.** `commission_currency` is recorded but
+  never converted; a non-USD commission would be summed as though it were USD.
+  Everything traded so far is USD-denominated.
+- **The thresholds are still not fitted.** This release makes the evidence
+  visible; it does not use it. `MIN_ADD_FRACTION`, `SCALE_IN_DIP_PCT` and
+  `MAX_SCALE_INS` remain the judgement calls made in 1.5.1.
+
+---
+
 ## [1.5.1] — 2026-08-25
 
 ### Fixed

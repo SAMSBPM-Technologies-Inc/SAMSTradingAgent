@@ -12,7 +12,7 @@ Called from pipeline._execute_trades() after a signal is generated.
 """
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_TRADES, COLL_USERS, get_db
@@ -1551,6 +1551,11 @@ async def _settle_pending_add(
             )
         update["scaled_in_at"] = utcnow()
         update["scale_ins"] = int(trade.get("scale_ins") or 0) + 1
+        # An add is a second ticket on the same position, which is the whole
+        # reason adds are rationed. Fold its commission into the position's
+        # running total so the cost of scaling in lands on the trade that
+        # incurred it.
+        update.update(_accrue_commission(trade, fills))
 
     # Consolidate protection onto the real holding.
     stop = float(pending.get("combined_stop") or trade.get("stop_loss") or 0.0)
@@ -1696,7 +1701,8 @@ async def reconcile_trades() -> dict:
     Returns a counts summary for logging. Never raises.
     """
     summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0,
-               "unpriced": 0, "unreconciled": 0, "scaled": 0, "reprotected": 0}
+               "unpriced": 0, "unreconciled": 0, "scaled": 0, "reprotected": 0,
+               "repriced": 0}
 
     if not ibkr.is_connected():
         logger.debug("reconcile_skipped_broker_disconnected")
@@ -1843,6 +1849,7 @@ async def reconcile_trades() -> dict:
                 (f.executed_at for f in matched if f.executed_at), default=utcnow()
             ),
         }
+        update.update(_accrue_commission(trade, matched))
         await _update_trade(str(trade["_id"]), update)
         trade.update(update)
         summary["filled"] += 1
@@ -1934,6 +1941,7 @@ async def reconcile_trades() -> dict:
             if (now - filled_at).total_seconds() < _CLOSURE_GRACE_MINUTES * 60:
                 continue
 
+        closing = _closing_sell_fills(fills, ticker, filled_at)
         exit_price = _latest_sell_price(fills, ticker, filled_at)
         entry_price = trade.get("entry_price") or trade.get("limit_price")
         qty = float(trade.get("filled_qty") or trade.get("qty") or 0)
@@ -1943,9 +1951,24 @@ async def reconcile_trades() -> dict:
             "closed_at": now,
             "exit_reason": "bracket_or_manual",
         }
+        # The exit's own commission, folded in before net P&L is computed —
+        # a round trip is charged twice and reporting only the entry leg would
+        # halve the very cost this is measuring.
+        update.update(_accrue_commission(trade, closing))
+
         if exit_price and entry_price and qty:
             update["exit_price"] = round(exit_price, 4)
             update["pnl"] = round((exit_price - float(entry_price)) * qty, 2)
+            # Net is only stated when the fee total is known to be complete.
+            # A partial commission figure would make a trade look better than
+            # it was, in the same direction every time — the one error that
+            # compounds into a systematically flattering record.
+            commission = update.get("commission_paid", trade.get("commission_paid"))
+            complete = update.get(
+                "commission_complete", trade.get("commission_complete")
+            )
+            if commission is not None and complete:
+                update["pnl_net"] = round(update["pnl"] - float(commission), 2)
             summary["closed"] += 1
         else:
             # Close it regardless so position counts and the duplicate-entry
@@ -1975,21 +1998,59 @@ async def reconcile_trades() -> dict:
             is_paper=not get_settings().is_live_trading,
         )
 
+    # ── Phase 4: pick up commissions that reported after the close ───────────
+    # A trade leaves `open_trades` the moment it closes, so an execution whose
+    # commission report had not yet arrived would never be attributed to it and
+    # its net P&L would be missing for good. The window is only three minutes
+    # wide (`_CLOSURE_GRACE_MINUTES`) and IB usually reports in seconds, so this
+    # is rare — but it fails in one direction only, always making a trade look
+    # cheaper than it was, and a bias that small and that consistent is worse
+    # than a loud gap. Re-attribute from the same 24h fill window IB still
+    # serves; beyond that the trade keeps `commission_complete: false` and is
+    # reported as unknown rather than guessed at.
+    try:
+        stale = await db[COLL_TRADES].find({
+            "status": TradeStatus.CLOSED,
+            "pnl": {"$ne": None},
+            "pnl_net": None,
+            "closed_at": {"$gte": now - timedelta(minutes=1440)},
+        }).to_list(length=500)
+
+        for trade in stale:
+            ticker = str(trade.get("ticker", "")).upper()
+            filled_at = trade.get("filled_at") or trade.get("opened_at")
+            if isinstance(filled_at, datetime) and filled_at.tzinfo is None:
+                filled_at = filled_at.replace(tzinfo=timezone.utc)
+
+            legs = (
+                (buys_by_order.get(str(trade.get("order_id") or "")) or [])
+                + _closing_sell_fills(fills, ticker, filled_at)
+            )
+            update = _accrue_commission(trade, legs)
+            if not update.get("commission_complete"):
+                continue
+
+            commission = update.get("commission_paid", trade.get("commission_paid"))
+            if commission is None:
+                continue
+            update["pnl_net"] = round(float(trade["pnl"]) - float(commission), 2)
+            await _update_trade(str(trade["_id"]), update)
+            summary["repriced"] += 1
+            logger.info(
+                "trade_commission_backfilled",
+                ticker=ticker, commission=commission, pnl_net=update["pnl_net"],
+            )
+    except Exception as exc:
+        logger.warning("reconcile_commission_backfill_failed", error=str(exc))
+
     if any(summary.values()):
         logger.info("reconcile_trades_done", **summary)
     return summary
 
 
-def _latest_sell_price(fills: list, ticker: str, after: datetime | None) -> float | None:
-    """
-    Volume-weighted price of the SELL fills that closed `ticker` after `after`.
-
-    A bracket exit can print in several pieces; averaging by size gives the
-    price the position actually left at, where taking the last fill alone would
-    report whichever fragment happened to settle last.
-    """
-    total_qty = 0.0
-    total_notional = 0.0
+def _closing_sell_fills(fills: list, ticker: str, after: datetime | None) -> list:
+    """The SELL executions that closed `ticker` after `after`."""
+    out = []
     for f in fills:
         if f.ticker != ticker or f.side != "SELL":
             continue
@@ -2000,6 +2061,68 @@ def _latest_sell_price(fills: list, ticker: str, after: datetime | None) -> floa
             if executed < after:
                 continue
         if f.qty > 0 and f.price > 0:
-            total_qty += f.qty
-            total_notional += f.qty * f.price
-    return (total_notional / total_qty) if total_qty > 0 else None
+            out.append(f)
+    return out
+
+
+def _latest_sell_price(fills: list, ticker: str, after: datetime | None) -> float | None:
+    """
+    Volume-weighted price of the SELL fills that closed `ticker` after `after`.
+
+    A bracket exit can print in several pieces; averaging by size gives the
+    price the position actually left at, where taking the last fill alone would
+    report whichever fragment happened to settle last.
+    """
+    matched = _closing_sell_fills(fills, ticker, after)
+    total_qty = sum(f.qty for f in matched)
+    if total_qty <= 0:
+        return None
+    return sum(f.qty * f.price for f in matched) / total_qty
+
+
+def _accrue_commission(trade: dict, matched: list) -> dict:
+    """
+    Fold the commission on `matched` into the trade's running total.
+
+    Returns the fields to `$set`, or `{}` when there is nothing new to add.
+
+    **Idempotent by execution id.** `reconcile_trades` re-reads a 24-hour fill
+    window every two minutes, so the same executions are seen over and over; the
+    ids already counted are kept on the record and skipped. Without that, the
+    fee total would climb on its own for as long as the app stayed up, and it
+    would climb fastest on the trades that matter most.
+
+    **A missing commission is recorded as missing, not as zero.** IB delivers
+    the commission in a report separate from the execution and can lag it
+    slightly, so a fill seen at settlement may genuinely not have one yet.
+    Treating that as free would understate exactly the cost this is meant to
+    expose, so the execution stays uncounted and `commission_complete` stays
+    false until every execution behind the trade has reported. A later pass
+    picks it up.
+    """
+    counted: list[str] = list(trade.get("commission_exec_ids") or [])
+    seen = set(counted)
+
+    fresh = [f for f in matched if f.exec_id and f.exec_id not in seen]
+    if not fresh:
+        return {}
+
+    priced = [f for f in fresh if f.commission is not None]
+    if not priced:
+        # Executions exist but none has a commission report yet. Leave them
+        # uncounted so a later pass can attribute them properly.
+        return {"commission_complete": False}
+
+    total = float(trade.get("commission_paid") or 0.0) + sum(f.commission for f in priced)
+    update = {
+        "commission_paid": round(total, 4),
+        "commission_exec_ids": counted + [f.exec_id for f in priced],
+        # True only while every execution seen so far has priced. One silent
+        # gap makes the whole total a floor rather than a figure.
+        "commission_complete": len(priced) == len(fresh)
+        and trade.get("commission_complete", True),
+    }
+    currency = next((f.commission_currency for f in priced if f.commission_currency), "")
+    if currency:
+        update["commission_currency"] = currency
+    return update

@@ -441,6 +441,12 @@ class AlpacaAdapter(BrokerAdapter):
                     executed_at=executed_at,
                     order_id=str(a.get("order_id") or ""),
                     exec_id=str(a.get("id") or ""),
+                    # Alpaca US equities are commission-free, so 0.0 is the
+                    # true figure here rather than a missing one. Reported
+                    # explicitly so net P&L is computable on this venue instead
+                    # of being suppressed as unknown.
+                    commission=0.0,
+                    commission_currency="USD",
                 ))
             out.sort(key=lambda x: (x.executed_at is None, x.executed_at))
             return out
