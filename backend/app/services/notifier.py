@@ -17,6 +17,38 @@ _SIGNAL_EMOJI = {"BUY": "📈", "SELL": "📉", "HOLD": "📊"}
 _CONVICTION_LABEL = {"HIGH": "Strong Signal", "MEDIUM": "Moderate", "LOW": "Weak Signal"}
 
 
+def _level_lines(
+    price: float | None, target: float | None, stop: float | None
+) -> list[str]:
+    """
+    Render the protective levels so they can be judged, not just read.
+
+    A level is meaningless on its own — it only means something relative to
+    where the stock is now and to the other level. Both distances are quoted,
+    and when both exist so is the ratio between them, because that ratio is the
+    single number that says whether the trade is worth taking: risking 8% to
+    make 7% is a losing proposition at any hit rate below ~53%, and no amount of
+    conviction in the headline changes that arithmetic.
+    """
+    lines: list[str] = []
+    if not target and not stop:
+        return lines
+
+    if target:
+        pct = f" ({(target - price) / price:+.1%})" if price else ""
+        lines.append(f"Target: {_money(target)}{pct}")
+    if stop:
+        pct = f" ({(stop - price) / price:+.1%})" if price else ""
+        lines.append(f"Stop: {_money(stop)}{pct}")
+
+    if price and target and stop and target > price > stop:
+        reward = target - price
+        risk = price - stop
+        if risk > 0:
+            lines.append(f"Reward:risk {reward / risk:.1f} : 1")
+    return lines
+
+
 async def send_signal_alert(
     webhook_url: str | None,
     ticker: str,
@@ -27,10 +59,24 @@ async def send_signal_alert(
     confidence: float,
     price_target: float | None,
     stop_loss: float | None,
+    current_price: float | None = None,
+    risk_score: float | None = None,
+    time_horizon: str | None = None,
+    position_size_pct: float | None = None,
     whatsapp_phone: str | None = None,
     whatsapp_apikey: str | None = None,
 ) -> None:
-    """Send a signal-flip / high-conviction alert via Slack and/or WhatsApp."""
+    """
+    Send a signal-flip / high-conviction alert via Slack and/or WhatsApp.
+
+    The message has to survive being read on a phone, out of context, with no
+    chart in front of you. "Target: $102.00 | Stop: $87.50" did not: it never
+    said what those levels were measured from, so it was impossible to tell a
+    2% target from a 20% one, or to see that a stop can sit further away than
+    the target and turn a plausible-looking setup into a bad bet. Each level is
+    now quoted with its distance from the price the call was made at, and the
+    two are compared to each other.
+    """
     emoji = _SIGNAL_EMOJI.get(new_signal, "📊")
     conv_label = _CONVICTION_LABEL.get(conviction or "", "")
     score_pct = round(score * 100)
@@ -41,14 +87,23 @@ async def send_signal_alert(
     else:
         header = f"{emoji} {ticker} - {new_signal} (High Conviction)"
 
-    lines = [header, f"Score: {score_pct} | {conv_label} | Confidence: {conf_pct}%"]
-    if price_target or stop_loss:
-        parts = []
-        if price_target:
-            parts.append(f"Target: ${price_target:.2f}")
-        if stop_loss:
-            parts.append(f"Stop: ${stop_loss:.2f}")
-        lines.append(" | ".join(parts))
+    second = f"Score: {score_pct}/100 | {conv_label} | Confidence: {conf_pct}%"
+    if risk_score is not None:
+        second += f" | Risk: {risk_score:.1f}/10"
+    lines = [header, second]
+
+    if current_price:
+        lines.append(f"Price now: {_money(current_price)}")
+    lines.extend(_level_lines(current_price, price_target, stop_loss))
+    if time_horizon:
+        lines.append(f"Expected horizon: {time_horizon}")
+    if position_size_pct and new_signal == "BUY":
+        # Answers "how much do I put in this" in the message that prompts the
+        # question, instead of leaving the user to find the setting.
+        lines.append(
+            f"Your sizing: {position_size_pct:.0%} of account equity, "
+            f"adjusted for volatility"
+        )
     lines.append("SAMSBPM Trading - sta.samsbpm.com")
 
     text = "\n".join(lines)

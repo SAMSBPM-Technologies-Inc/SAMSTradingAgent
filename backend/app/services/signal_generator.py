@@ -29,11 +29,23 @@ logger = get_logger(__name__)
 BUY_THRESHOLD = 0.70
 SELL_THRESHOLD = 0.30
 
-__all__ = ["BUY_THRESHOLD", "SELL_THRESHOLD", "RISK_MAX_FOR_BUY",
-           "generate_signal", "generate_signals_all", "classify_signal"]
+#: How far back through a threshold the score must travel before an established
+#: verdict is given up. A score does not sit still: it is recomputed every
+#: ingestion cycle from live prices, so one hovering within a rounding error of
+#: 0.70 crosses back and forth all session, and a bare comparison turns that
+#: noise into a stream of contradictory verdicts. Entering BUY still requires
+#: clearing 0.70; leaving it requires falling under 0.67. The band is one-sided
+#: on purpose — it makes an existing verdict sticky, never easier to acquire.
+SIGNAL_HYSTERESIS = 0.03
+
+__all__ = ["BUY_THRESHOLD", "SELL_THRESHOLD", "SIGNAL_HYSTERESIS",
+           "RISK_MAX_FOR_BUY", "generate_signal", "generate_signals_all",
+           "classify_signal"]
 
 
-def classify_signal(score: float, risk_score: float) -> str:
+def classify_signal(
+    score: float, risk_score: float, previous_signal: str | None = None
+) -> str:
     """
     The BUY / SELL / HOLD rule, in one place.
 
@@ -41,15 +53,23 @@ def classify_signal(score: float, risk_score: float) -> str:
     gate answers "is it safe to take on this exposure", which has no bearing on
     whether to leave one you already hold. Refusing to exit a position because
     conditions are dangerous would be exactly backwards.
+
+    `previous_signal` engages the hysteresis band: a verdict already in force is
+    held until the score retreats `SIGNAL_HYSTERESIS` past the threshold that
+    produced it. Omit it (the default) to get the raw rule — that is what
+    calibration and threshold sweeps want, since a replay has no "previous".
     """
-    if score > BUY_THRESHOLD and risk_score < RISK_MAX_FOR_BUY:
+    buy_exit = BUY_THRESHOLD - SIGNAL_HYSTERESIS if previous_signal == "BUY" else BUY_THRESHOLD
+    sell_exit = SELL_THRESHOLD + SIGNAL_HYSTERESIS if previous_signal == "SELL" else SELL_THRESHOLD
+
+    if score > buy_exit and risk_score < RISK_MAX_FOR_BUY:
         return "BUY"
-    if score < SELL_THRESHOLD:
+    if score < sell_exit:
         return "SELL"
     return "HOLD"
 
 
-async def generate_signal(ticker: str) -> dict:
+async def generate_signal(ticker: str, previous_signal: str | None = None) -> dict:
     """
     Load feature doc → assess risk → apply signal rules → persist + return signal dict.
     """
@@ -65,7 +85,7 @@ async def generate_signal(ticker: str) -> dict:
     risk_score: float = risk_dict["risk_score"]
 
     # ── Signal decision ───────────────────────────────────────────────────────
-    signal = classify_signal(score, risk_score)
+    signal = classify_signal(score, risk_score, previous_signal)
 
     # Confidence is DISTANCE FROM THE DECISION BOUNDARY, not a probability.
     # It says how far from flipping the verdict is, which is not the same as how

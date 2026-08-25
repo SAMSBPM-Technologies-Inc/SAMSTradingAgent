@@ -272,6 +272,28 @@ class Settings(BaseSettings):
     analyst_score_change_threshold: float = Field(default=0.12, description="Composite score shift that triggers re-analysis")
     analyst_vix_spike_threshold: float = Field(default=30.0, description="VIX level that forces re-analysis of all tickers")
 
+    # ── Signal stability ──────────────────────────────────────────────────────
+    # A verdict is published only once it holds. HXL alerted eight times in an
+    # hour on 24 Aug 2026 — BUY/HOLD/BUY/HOLD at an unchanged score of 0.61 —
+    # because every single evaluation went straight to the user's phone. A
+    # borderline score genuinely does flip; broadcasting each flip converts an
+    # honest "we don't know" into eight confident-looking contradictions.
+    #
+    # See services/signal_stability.py. SELL is exempt from both settings:
+    # delaying an exit costs money, delaying an entry costs an opportunity, and
+    # those are not the same price.
+    signal_confirmations: int = Field(
+        default=2, ge=1, le=10,
+        description="Consecutive fresh evaluations agreeing before a new verdict is published",
+    )
+    # Measured against the *published* verdict, so this is the floor on how
+    # often a ticker can change its mind in public. At the default a ticker
+    # cannot flip more than once an hour no matter what the analyst says.
+    signal_min_dwell_minutes: int = Field(
+        default=60, ge=0, le=1440,
+        description="Minutes a published verdict must stand before it can be replaced",
+    )
+
     # ── Technical stance ──────────────────────────────────────────────────────
     # mean_reversion | momentum | blended
     #

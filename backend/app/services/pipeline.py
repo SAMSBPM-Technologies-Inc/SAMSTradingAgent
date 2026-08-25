@@ -44,6 +44,11 @@ from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
 from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD, generate_signal
+from app.services.signal_stability import (
+    STABILITY_FIELD,
+    StabilityState,
+    stabilise,
+)
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -60,8 +65,13 @@ async def run_pipeline(ticker: str) -> dict:
 
     # Capture previous signal before overwriting (for change detection)
     db = await get_db()
-    prev_doc = await db[COLL_SIGNALS].find_one({"ticker": ticker}, {"signal": 1, "analyst_output": 1})
+    prev_doc = await db[COLL_SIGNALS].find_one(
+        {"ticker": ticker},
+        {"signal": 1, "analyst_output": 1, STABILITY_FIELD: 1},
+    )
     prev_signal = prev_doc.get("signal") if prev_doc else None
+    prev_stability = StabilityState.from_doc(prev_doc)
+    prev_conviction = ((prev_doc or {}).get("analyst_output") or {}).get("conviction")
 
     raw_doc = await ingest_ticker(ticker)
     await compute_features(ticker)
@@ -118,6 +128,18 @@ async def run_pipeline(ticker: str) -> dict:
                 existing["day_change_pct"] = day_change_pct
                 logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst_cached",
                             signal=existing.get("signal"), cache_reason=cache_reason)
+                # A cached verdict is not news, so no alert and no stability
+                # bookkeeping — but it is still a standing instruction, and the
+                # trade path must keep retrying it. An entry skipped because the
+                # gateway was down, or because funds had not settled, otherwise
+                # waited for the next *analysis* rather than the next cycle. That
+                # was invisible while the cache was broken, because every cycle
+                # was a fresh analysis; repairing the cache would have quietly
+                # stretched the retry interval from 5 minutes to an hour. The
+                # call is cheap and idempotent — every guard is re-tested, an
+                # open position or an outstanding proposal blocks it, and a
+                # repeated skip is no longer re-recorded.
+                await _execute_trades(ticker, existing)
                 return existing
 
         # Reached when the analyst cache is stale, when there is no cached doc,
@@ -135,32 +157,38 @@ async def run_pipeline(ticker: str) -> dict:
                     signal["current_price"] = current_price
                     signal["day_change_pct"] = day_change_pct
                     signal["alternative_data"] = alternative_data
-                    await db[COLL_SIGNALS].update_one(
-                        {"ticker": ticker},
-                        {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
+                    changed = await _publish_verdict(
+                        ticker, signal, prev_signal, prev_stability,
+                        extra={"current_price": current_price,
+                               "day_change_pct": day_change_pct},
                     )
                     await _append_history(signal, raw_doc)
                     logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst",
                                 signal=signal.get("signal"), cache_reason=cache_reason)
-                    await _fire_alerts(ticker, prev_signal, signal)
+                    await _fire_alerts(ticker, prev_signal, signal,
+                                       changed=changed, prev_conviction=prev_conviction)
                     await _execute_trades(ticker, signal)
                     return signal
             except Exception as exc:
                 logger.warning("analyst_failed_falling_back", ticker=ticker, error=str(exc))
 
-    signal = await generate_signal(ticker)
+    # The previous verdict engages the hysteresis band, so a score oscillating
+    # within a few thousandths of 0.70 does not re-decide the ticker every five
+    # minutes. The stability layer below handles the rest.
+    signal = await generate_signal(ticker, previous_signal=prev_signal)
     signal["data_sources"] = data_sources
     signal["analyst_used"] = False
     signal["current_price"] = current_price
     signal["day_change_pct"] = day_change_pct
     signal["alternative_data"] = alternative_data
-    await db[COLL_SIGNALS].update_one(
-        {"ticker": ticker},
-        {"$set": {"current_price": current_price, "day_change_pct": day_change_pct}},
+    changed = await _publish_verdict(
+        ticker, signal, prev_signal, prev_stability,
+        extra={"current_price": current_price, "day_change_pct": day_change_pct},
     )
     await _append_history(signal, raw_doc)
     logger.info("pipeline_complete", ticker=ticker, mode="rule_based", signal=signal.get("signal"))
-    await _fire_alerts(ticker, prev_signal, signal)
+    await _fire_alerts(ticker, prev_signal, signal,
+                       changed=changed, prev_conviction=prev_conviction)
     await _execute_trades(ticker, signal)
     return signal
 
@@ -298,6 +326,73 @@ async def _needs_analyst_refresh(ticker: str, raw_doc: dict, feat_doc: dict) -> 
     return False, f"cached_{age_minutes:.0f}min_old"
 
 
+async def _publish_verdict(
+    ticker: str,
+    signal: dict,
+    prev_signal: str | None,
+    prev_stability: StabilityState,
+    *,
+    extra: dict,
+) -> bool:
+    """
+    Decide what this cycle actually publishes, and persist it.
+
+    Both signal paths write their document before reaching here — `run_analysis`
+    and `generate_signal` each upsert `stocks_signals` themselves — so the
+    verdict is corrected with a `$set` rather than by rewriting the document.
+    That deliberately keeps the *fresh* research (thesis, target, stop) on a
+    document whose published verdict is the older one: the analysis is current
+    even when the conclusion has not yet earned a change of mind, and the
+    explanation says so rather than leaving the two silently contradicting.
+
+    Mutates `signal` in place so the caller's history record, alert and trade
+    path all see the published verdict, never the unconfirmed candidate.
+    Returns whether the published verdict changed.
+    """
+    settings = get_settings()
+    db = await get_db()
+    now = utcnow()
+
+    decision = stabilise(
+        published=prev_signal,
+        candidate=signal.get("signal", "HOLD"),
+        now=now,
+        state=prev_stability,
+        confirmations=settings.signal_confirmations,
+        min_dwell_minutes=settings.signal_min_dwell_minutes,
+    )
+
+    if decision.signal != signal.get("signal"):
+        logger.info(
+            "signal_held_back",
+            ticker=ticker,
+            published=decision.signal,
+            candidate=signal.get("signal"),
+            reason=decision.reason,
+        )
+        signal["signal"] = decision.signal
+        held = decision.held_back
+        if held:
+            signal["explanation"] = (
+                f"{signal.get('explanation', '')} "
+                f"[{held} candidate not yet confirmed — {decision.reason}; "
+                f"holding {decision.signal} until it does.]"
+            ).strip()
+
+    signal[STABILITY_FIELD] = decision.state.to_doc()
+
+    await db[COLL_SIGNALS].update_one(
+        {"ticker": ticker},
+        {"$set": {
+            **extra,
+            "signal": decision.signal,
+            "explanation": signal.get("explanation", ""),
+            STABILITY_FIELD: decision.state.to_doc(),
+        }},
+    )
+    return decision.changed
+
+
 def _build_data_sources(raw_doc: dict) -> dict:
     """Extract provenance from raw_doc — indicates which sources were real vs. fallback."""
     sentiment_source = (raw_doc.get("sentiment_raw") or {}).get("source", "none")
@@ -401,17 +496,34 @@ async def _execute_trades(ticker: str, signal: dict) -> None:
         logger.warning("execute_trades_failed", ticker=ticker, error=str(exc))
 
 
-async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -> None:
+async def _fire_alerts(
+    ticker: str,
+    prev_signal: str | None,
+    new_signal: dict,
+    *,
+    changed: bool,
+    prev_conviction: str | None = None,
+) -> None:
     """
-    Notify users watching this ticker if the signal flipped or conviction is HIGH.
+    Notify users watching this ticker when its *state* changes.
     Runs fire-and-forget — never raises.
+
+    "State" is two things, and both are edges rather than levels:
+
+      * the published verdict changed — `changed`, decided by the stability
+        layer, not by comparing this cycle's raw verdict to the last one. An
+        unconfirmed candidate is not news.
+      * conviction newly reached HIGH. This used to alert on every cycle where
+        conviction *was* HIGH, which meant the same "NVDA — BUY (High
+        Conviction)" message repeated for as long as the analyst kept its view.
+        A conviction that has not moved is not news either.
     """
     try:
         new_sig = new_signal.get("signal", "HOLD")
         ao = new_signal.get("analyst_output") or {}
         conviction = ao.get("conviction")
-        signal_flipped = prev_signal is not None and prev_signal != new_sig
-        is_high_conviction = conviction == "HIGH"
+        signal_flipped = changed and prev_signal is not None
+        is_high_conviction = conviction == "HIGH" and prev_conviction != "HIGH"
 
         if not signal_flipped and not is_high_conviction:
             return
@@ -432,7 +544,7 @@ async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -
 
         users = await db[COLL_USERS].find(
             {"_id": {"$in": user_ids}},
-            {"alert_settings": 1},
+            {"alert_settings": 1, "auto_trade_settings": 1},
         ).to_list(length=500)
 
         from app.services.notifier import send_signal_alert
@@ -447,6 +559,7 @@ async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -
                 continue
             if is_high_conviction and not signal_flipped and not prefs.get("notify_on_high_conviction", True):
                 continue
+            ats = user.get("auto_trade_settings") or {}
             await send_signal_alert(
                 webhook_url=webhook,
                 ticker=ticker,
@@ -457,6 +570,15 @@ async def _fire_alerts(ticker: str, prev_signal: str | None, new_signal: dict) -
                 confidence=new_signal.get("confidence", 0.0),
                 price_target=ao.get("price_target"),
                 stop_loss=ao.get("stop_loss"),
+                # Everything below exists so a target and a stop are readable
+                # without opening the app. A bare "Target: $102.00" says nothing
+                # until you know what it is measured from, how far the stop is,
+                # which of the two is the bigger move, and how long the thesis is
+                # supposed to take.
+                current_price=new_signal.get("current_price"),
+                risk_score=(new_signal.get("risk") or {}).get("risk_score"),
+                time_horizon=ao.get("time_horizon"),
+                position_size_pct=ats.get("position_size_pct"),
                 whatsapp_phone=wa_phone,
                 whatsapp_apikey=wa_apikey,
             )

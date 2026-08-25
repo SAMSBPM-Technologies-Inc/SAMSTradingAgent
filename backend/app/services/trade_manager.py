@@ -278,6 +278,39 @@ def _blocked_by_open_position(trade: dict) -> str:
     )
 
 
+async def _already_skipped_for(user_id: str, ticker: str, reason: str) -> bool:
+    """
+    Is the newest record for this user+ticker already this same skip?
+
+    Compares against the newest record rather than searching history, so a skip
+    that recurs *after* something else happened — an entry, an exit, a
+    different refusal — is recorded again. Only an unbroken run collapses.
+    """
+    db = await get_db()
+    latest = await db[COLL_TRADES].find_one(
+        {"user_id": user_id, "ticker": ticker},
+        {"status": 1, "reason": 1},
+        sort=[("opened_at", -1)],
+    )
+    return bool(
+        latest
+        and latest.get("status") == TradeStatus.SKIPPED
+        and latest.get("reason") == reason
+    )
+
+
+async def _pending_proposal(user_id: str, ticker: str) -> dict | None:
+    """The proposal for this ticker still awaiting a human decision, if any."""
+    db = await get_db()
+    return await db[COLL_TRADES].find_one({
+        "user_id": user_id,
+        "ticker": ticker,
+        "action": "BUY",
+        "status": TradeStatus.PROPOSED,
+        "closed_at": None,
+    })
+
+
 async def _count_open_positions(user_id: str) -> int:
     db = await get_db()
     return await db[COLL_TRADES].count_documents({
@@ -367,6 +400,23 @@ async def _prepare_entry(
     existing = await _open_position(user_id, ticker)
     if existing is not None:
         return None, _blocked_by_open_position(existing)
+
+    # ── Guard: no duplicate outstanding proposal ──────────────────────────────
+    # PROPOSED is deliberately not in TradeStatus.OPEN — a proposal commits
+    # nothing — but that also meant nothing stopped the agent proposing the same
+    # entry again on the next evaluation. A ticker oscillating around the BUY
+    # threshold queued a fresh proposal on every flip, so the user opened the
+    # Orders page to four identical HXL cards and no way to tell which one was
+    # current. One outstanding proposal per ticker; approving or declining it
+    # clears the way for the next.
+    pending_proposal = await _pending_proposal(user_id, ticker)
+    if pending_proposal is not None:
+        when = pending_proposal.get("opened_at")
+        when_str = when.strftime("%d %b %H:%M") if hasattr(when, "strftime") else "earlier"
+        return None, (
+            f"A proposal for {ticker} from {when_str} is already waiting for your "
+            f"decision. Approve or decline it on the Orders page."
+        )
 
     # ── Guard: max open positions ─────────────────────────────────────────────
     if await _count_open_positions(user_id) >= settings.max_open_positions:
@@ -568,6 +618,16 @@ async def execute_entry(
         now = utcnow()
 
         async def _skip(reason: str) -> None:
+            # A standing condition is recorded once, not once per evaluation.
+            # The agent re-tests every guard on every BUY evaluation — that is
+            # deliberate, since a skip for "IB Gateway not connected" must
+            # retry once the gateway is back — but writing an identical
+            # SKIPPED row each time buried the user's real order history under
+            # repeats of the same sentence. Re-stating the reason changes
+            # nothing the user can act on; a *different* reason does.
+            if await _already_skipped_for(user_id, ticker, reason):
+                logger.debug("trade_skip_repeat", user_id=user_id, ticker=ticker, reason=reason)
+                return
             await _log_trade({
                 "user_id": user_id, "ticker": ticker, "action": "BUY",
                 "qty": 0, "limit_price": 0.0,

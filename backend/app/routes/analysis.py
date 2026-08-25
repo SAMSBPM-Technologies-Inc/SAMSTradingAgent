@@ -17,6 +17,7 @@ from app.services.pipeline import run_pipeline
 from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.services.scoring import compute_personalized_score, explain_score
 from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD
+from app.services.signal_stability import STABILITY_FIELD
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["analysis"])
@@ -117,7 +118,9 @@ async def _personalized_response(doc: dict, current_user: dict, db) -> AnalyzeRe
 
     if feat and user_weights:
         feat["risk"] = doc.get("risk", {})
-        score, signal = compute_personalized_score(feat, user_weights)
+        score, signal = compute_personalized_score(
+            feat, user_weights, previous_signal=doc.get("signal")
+        )
         doc = {**doc, "score": score, "signal": signal}
 
     breakdown = explain_score(feat, user_weights) if feat else None
@@ -174,6 +177,7 @@ def _doc_to_response(doc: dict, breakdown: Optional[dict] = None) -> AnalyzeResp
         day_change_pct=doc.get("day_change_pct"),
         analyst_used=bool(doc.get("analyst_used", False)),
         analyst_model=_analyst_model(),
+        pending_signal=(doc.get(STABILITY_FIELD) or {}).get("pending_signal"),
         breakdown=ScoreBreakdown(**breakdown) if breakdown else None,
         gate=_build_gate(doc),
     )
