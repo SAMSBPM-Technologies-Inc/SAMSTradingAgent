@@ -14,7 +14,7 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
-## [Unreleased]
+## [1.6.3] — 2026-08-25
 
 ### Fixed
 
