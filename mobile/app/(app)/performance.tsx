@@ -4,6 +4,7 @@ import { AlertCircle, BarChart2, Clock, Target, TrendingUp } from 'lucide-react-
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { performanceApi } from '../../src/lib/api'
+import { formatDate } from '../../src/lib/format'
 import type { PerformanceResponse, Signal, SignalRecord, Conviction } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
@@ -31,12 +32,6 @@ function fmtReturn(val?: number | null): string {
 function returnColor(val?: number | null): string {
   if (val == null) return C.fgMuted
   return val >= 0 ? '#22c55e' : '#ef4444'
-}
-
-function fmtDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-  } catch { return iso }
 }
 
 function fmtScore(score?: number | null): string {
@@ -128,7 +123,7 @@ function SignalHistoryRow({ rec }: { rec: SignalRecord }) {
       gap: 8,
     }}>
       <Text style={{ fontSize: 10, color: C.fgMuted, width: 68 }} numberOfLines={1}>
-        {fmtDate(rec.generated_at)}
+        {formatDate(rec.generated_at)}
       </Text>
       <Text style={{ fontSize: 12, fontWeight: '700', color: C.fg, width: 40 }}>{rec.ticker}</Text>
       <View style={{ width: 38 }}>

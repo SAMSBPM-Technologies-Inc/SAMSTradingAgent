@@ -1,10 +1,7 @@
 /**
- * Shared formatting helpers.
- *
- * Relative time lived as a private copy inside the old Alpha Radar page, and a
- * second, differently-worded implementation appeared in HoldingsPage. Two
- * spellings of the same idea ("7m ago" vs "7 min ago") read as inconsistency,
- * so this is the single definition every page uses.
+ * Shared formatting helpers — the phone counterpart of the web
+ * `frontend/src/lib/format.ts`. Keep the two spellings in step: a timestamp
+ * that reads differently on the two clients reads as a bug in the data.
  */
 
 /**
@@ -24,7 +21,6 @@ export function parseTimestamp(value: string | Date | null | undefined): Date | 
   if (value instanceof Date) {
     d = value
   } else {
-    // Space-separated forms fail outright in Safari; normalise before parsing.
     const s = value.trim().replace(' ', 'T')
     const hasTime = /\d{2}:\d{2}/.test(s)
     const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(s)
@@ -37,8 +33,8 @@ export function parseTimestamp(value: string | Date | null | undefined): Date | 
  * Everything with a timestamp renders in Toronto time, not the viewer's.
  *
  * A trading record is read against the session it happened in, so the zone
- * has to be a property of the data rather than of where the laptop is: the
- * same order must not be dated 25 Aug at a desk and 26 Aug on a trip. Toronto
+ * has to be a property of the data rather than of where the phone is: the
+ * same order must not be dated 25 Aug at home and 26 Aug on a trip. Toronto
  * is US market time, so an order stamped 9:31 AM is one minute into the open
  * wherever it is read.
  */
@@ -57,33 +53,8 @@ export function formatDate(value: string | Date | null | undefined): string {
   return d ? DATE_FMT.format(d) : '—'
 }
 
-/** Clock time in Toronto: "2:04 PM". Label the column "(ET)" where shown. */
+/** Clock time in Toronto: "2:04 PM". Label it "ET" where shown. */
 export function formatTime(value: string | Date | null | undefined): string {
   const d = parseTimestamp(value)
   return d ? TIME_FMT.format(d) : '—'
-}
-
-/**
- * Compact age of a timestamp: "just now", "7m ago", "3h ago", "2d ago".
- *
- * Accepts an ISO string (what the API returns) or a Date (what a local fetch
- * records). Returns "—" for anything unparseable rather than "NaNm ago".
- */
-export function relativeTime(value: string | Date | null | undefined): string {
-  const then = parseTimestamp(value)
-  if (!then) return '—'
-  const ms = then.getTime()
-
-  // A future timestamp means clock skew between browser and server, not a
-  // negative age — clamp rather than render "-3m ago".
-  const diff = Math.max(0, Date.now() - ms)
-
-  const m = Math.floor(diff / 60_000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-
-  return `${Math.floor(h / 24)}d ago`
 }

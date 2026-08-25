@@ -7,6 +7,7 @@ import { router } from 'expo-router'
 import { AlertCircle, Check, Inbox, X } from 'lucide-react-native'
 import { tradingApi } from '../../src/lib/api'
 import { useToast } from '../../src/lib/toast-context'
+import { formatDate, formatTime } from '../../src/lib/format'
 import type { Proposal, TradeRecord } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import Disclaimer from '../../src/components/Disclaimer'
@@ -457,7 +458,7 @@ export default function OrdersScreen() {
                         <Text style={{ fontSize: 11, color: C.fgMuted }}>
                           {o.qty ? `${o.qty} @ ${money(o.entry_price ?? o.limit_price)}` : '—'}
                           {'  ·  '}
-                          {new Date(o.opened_at).toLocaleDateString()}
+                          {formatDate(o.opened_at)} · {formatTime(o.opened_at)} ET
                         </Text>
                         <Pnl value={o.pnl} />
                       </View>
