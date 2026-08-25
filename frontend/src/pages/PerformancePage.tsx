@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertCircle, BarChart2, Clock, Target, TrendingUp } from 'lucide-react'
 import { performanceApi } from '../lib/api'
+import { formatDate } from '../lib/format'
 import type {
   ClosedTrade,
   PerformanceResponse,
@@ -32,18 +33,6 @@ function fmtReturn(val?: number | null): string {
 function returnColor(val?: number | null): string {
   if (val == null) return 'text-[var(--color-fg-muted)]'
   return val >= 0 ? 'text-green-500' : 'text-red-500'
-}
-
-function fmtDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  } catch {
-    return iso
-  }
 }
 
 function fmtScore(score?: number | null): string {
@@ -431,7 +420,7 @@ function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
                 className="border-b border-[var(--color-border)]/50 last:border-0"
               >
                 <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] tabular-nums whitespace-nowrap">
-                  {fmtDate(rec.generated_at)}
+                  {formatDate(rec.generated_at)}
                 </td>
                 <td className="px-4 py-3">
                   <span

@@ -14,6 +14,56 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.6.1] — 2026-08-25
+
+### Fixed
+
+- **Order history shows the time of an order, not just the day.** The agent can
+  place several orders for one ticker in a session — an entry and its scale-in
+  adds — and a column that only said "8/25" could not tell them apart. Web
+  shows the date with the clock time beneath it; mobile appends it to the order
+  line.
+
+- **Timestamps are no longer shifted by the viewer's UTC offset.** The backend
+  writes UTC but MongoDB returns datetimes tz-naive, so the JSON carries no
+  offset and the browser was reading `18:04` as *local* time. Date-only
+  displays mostly hid this; a clock time would not have. Parsing now assumes
+  UTC when no zone is given (`parseTimestamp` in each client's `lib/format`),
+  which also fixes relative ages west of UTC — a proposal placed an hour ago
+  read as "just now" because its timestamp parsed into the future.
+
+- **Dates and times display in Toronto time on both clients**, not in whatever
+  zone the device happens to be in. The zone belongs to the record, not to the
+  reader: an order filled at 01:30 UTC belongs to the 25th's session and must
+  not be dated the 26th because the laptop travelled. Toronto is US market
+  time, so 9:31 AM is one minute into the open wherever it is read. Columns
+  showing a clock time are labelled ET; `DISPLAY_TZ` in `lib/format` is the one
+  place it is set.
+
+- **Signal history dates on the Performance page** used a private, unfixed copy
+  of the date formatter on each client and had the same UTC-shift — an evening
+  signal could be filed under the previous day. Both now use the shared one.
+
+### Known gaps
+
+- **The root cause is still there.** The Mongo client is not `tz_aware`, so the
+  API keeps emitting datetimes with no offset and both clients compensate by
+  assuming UTC. Anything that reads these timestamps without going through
+  `parseTimestamp` — a new page, a script, a third client — inherits the old
+  bug. Setting `tz_aware=True` on the client in `db.py` is the real fix.
+- **Two places still render in device-local time.** The analyst's "Generated
+  …" stamp on the web and mobile ticker pages uses a raw `toLocaleString()`,
+  so it can disagree with every other timestamp in the app by the viewer's UTC
+  offset. The Holdings "As of …" line is also device-local, but that one is a
+  browser-side fetch time rather than a server record, so it is arguably right.
+- **None of this is covered by a test.** The formatters were verified by hand
+  against a non-ET machine zone across naive/zoned/DST inputs; there is no
+  check that stops the next edit from regressing it.
+- Unchanged from 1.6.0: IB commission extraction is still unverified against a
+  real fill, so `net_unknown` is the number to watch on the Performance page.
+
+---
+
 ## [1.6.0] — 2026-08-25
 
 ### Added

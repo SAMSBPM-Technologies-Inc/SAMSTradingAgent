@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
-import { relativeTime } from '../lib/format'
+import { formatDate, formatTime, relativeTime } from '../lib/format'
 import type { Proposal, TradeRecord } from '../types'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -439,7 +439,7 @@ export default function OrdersPage() {
                     <thead>
                       <tr className="border-b border-[var(--color-border)] text-[10.5px]
                                      uppercase tracking-widest text-[var(--color-fg-muted)]">
-                        <th scope="col" className="text-left font-semibold px-4 py-2.5">Date</th>
+                        <th scope="col" className="text-left font-semibold px-4 py-2.5">Date (ET)</th>
                         <th scope="col" className="text-left font-semibold px-3 py-2.5">Ticker</th>
                         <th scope="col" className="text-left font-semibold px-3 py-2.5">Side</th>
                         <th scope="col" className="text-right font-semibold px-3 py-2.5">Qty</th>
@@ -453,7 +453,10 @@ export default function OrdersPage() {
                       {orders.map((o) => (
                         <tr key={o.id} className="border-b border-[var(--color-border)]/50 last:border-0">
                           <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] whitespace-nowrap">
-                            {new Date(o.opened_at).toLocaleDateString()}
+                            {/* Several orders can land in one session, so the
+                                clock time is what tells them apart. */}
+                            <div className="text-[var(--color-fg)]">{formatDate(o.opened_at)}</div>
+                            <div className="tabular-nums">{formatTime(o.opened_at)}</div>
                           </td>
                           <td className="px-3 py-3">
                             <button
