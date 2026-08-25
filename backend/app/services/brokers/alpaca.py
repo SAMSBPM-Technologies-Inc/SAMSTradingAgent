@@ -186,6 +186,62 @@ class AlpacaAdapter(BrokerAdapter):
             logger.error("alpaca_place_order_failed", ticker=ticker, error=str(exc))
             return None
 
+    async def place_protective_orders(
+        self,
+        ticker: str,
+        qty: int,
+        stop_price: float,
+        target_price: float,
+        account_id: str = "",
+        exchange: str = "SMART",
+        currency: str = "USD",
+    ) -> str | None:
+        """
+        Stop and target on an existing holding, as an OCO pair.
+
+        Alpaca expresses this natively: `order_class=oco` with both legs on one
+        sell request, which is exactly the semantics required — a fill on one
+        cancels the other.
+        """
+        if not self.is_connected():
+            logger.error("alpaca_not_connected", ticker=ticker)
+            return None
+        if qty < 1 or not (0 < stop_price < target_price):
+            logger.error(
+                "alpaca_invalid_protective_levels",
+                ticker=ticker, qty=qty, stop=stop_price, target=target_price,
+            )
+            return None
+        try:
+            payload = {
+                "symbol": ticker.upper(),
+                "qty": str(qty),
+                "side": "sell",
+                "type": "limit",
+                "time_in_force": "gtc",
+                "order_class": "oco",
+                "take_profit": {"limit_price": str(round(target_price, 2))},
+                "stop_loss": {"stop_price": str(round(stop_price, 2))},
+            }
+            resp = await self._client.post("/v2/orders", json=payload)
+            if resp.status_code >= 400:
+                logger.error(
+                    "alpaca_protective_rejected",
+                    ticker=ticker, status=resp.status_code, body=resp.text[:500],
+                )
+                return None
+            order_id = str(resp.json().get("id", ""))
+            logger.info(
+                "alpaca_protective_orders_placed",
+                ticker=ticker, qty=qty,
+                stop=round(stop_price, 2), target=round(target_price, 2),
+                order_id=order_id,
+            )
+            return order_id or None
+        except Exception as exc:
+            logger.error("alpaca_place_protective_failed", ticker=ticker, error=str(exc))
+            return None
+
     async def cancel_order(self, order_id: str) -> bool:
         if not self.is_connected():
             return False

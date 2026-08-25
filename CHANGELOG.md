@@ -14,6 +14,76 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.5.0] — 2026-08-24
+
+You can now add to a position you already hold. Holding a stock was never a
+reason to refuse buying more of it — the refusal was standing in for a feature
+that did not exist.
+
+### Added
+
+- **Scale-in.** A `BUY` on a ticker you already hold adds to that position
+  instead of being skipped. One position record, one set of protective orders,
+  sized to the whole holding. Under MANUAL/SEMI_AUTO an add is proposed like any
+  other entry. `ENABLE_SCALE_IN=false` restores the old refusal.
+  - **Sizing caps the position, not the order.** `position_size_pct` used to
+    limit each order, which limited nothing: three 5% adds made a 15% position.
+    Room is measured on **cost basis**, deliberately — on market value a falling
+    position frees room as it falls, so the agent would buy more of a loser
+    precisely as it got worse.
+  - **An add below the stop is refused.** The stop is the level at which the
+    thesis is declared wrong; buying more underneath it is overriding the exit
+    you already chose.
+  - **Protection is never weakened.** The combined stop is the higher of what
+    the new blended cost implies and what is already working, so averaging down
+    cannot loosen the stop on the shares bought first. If no valid pair exists,
+    the add is refused and the existing bracket is left alone.
+- **`place_protective_orders`** on both broker adapters — a stop and target on
+  shares already held, with no entry attached (IB: OCA pair, `ocaType 1`;
+  Alpaca: native OCO). A bracket can only hang off an entry, so without this
+  "the position is unprotected" was a state the system could detect and not fix.
+- **The reconciler re-protects an uncovered position.** Any filled holding the
+  venue reports with no working order gets its stop and target back within two
+  minutes. Scale-in is one way to arrive there; a rolled gateway session or a
+  leg cancelled by hand are others. It never invents a level — a record with no
+  stored stop is logged for a human instead.
+- **`runbooks/scale-in-paper-verification.md`** — the paper-account check,
+  including the partial-fill case and the leg quantities to read in TWS.
+
+### Fixed
+
+- **Closing a scaled position sold only the original shares.** `execute_exit`
+  sizes from the trade record, which understates the holding while an add is
+  still settling — the close sold the original 450, marked the record closed,
+  and orphaned the 100 just added.
+
+### Known gaps
+
+- **Not yet exercised against the paper account.** The logic is covered by 31
+  tests and the ib_async call surface was verified against the installed
+  library, but no order from this code has reached IB. The gateway lives inside
+  the VPS network and is not reachable from a development machine. Run the
+  runbook before this touches funded money — step 4 (partial fill) and step 6
+  (the healer) are the two that cannot be reasoned about from here.
+- **A gap between fill and consolidation.** The add goes out unbracketed and the
+  original bracket is left working, so the *added* shares carry no stop until
+  the next reconciliation pass — up to two minutes. This is deliberate: the
+  alternative (cancel first, or size the legs to the intended total) leaves the
+  whole holding naked while the add rests, or over-covers a partial fill and
+  sells into a short. Under-protection for two minutes is the cheaper failure,
+  but it is a failure.
+- **A resting add can buy back into a position that just stopped out.** The
+  reconciler cancels the add and logs `scale_in_abandoned_position_closed`, but
+  only on its next pass — a fill inside that window opens a small unprotected
+  position, which the healer then brackets.
+- Adds are refused while the previous one is still working, so a fast-moving
+  thesis can only be acted on once per reconciliation cycle.
+- Neither client has a scale-in affordance: pressing Buy on a held ticker now
+  adds, but nothing in the UI says so before you press it. The order ticket
+  still reads as though it were opening a position.
+
+---
+
 ## [1.4.0] — 2026-08-24
 
 A signal only means something if it stops changing. HXL sent eight alerts in

@@ -382,6 +382,95 @@ class IbkrAdapter(BrokerAdapter):
             logger.error("ibkr_place_order_failed", ticker=ticker, error=str(exc))
             return None
 
+    async def place_protective_orders(
+        self,
+        ticker: str,
+        qty: int,
+        stop_price: float,
+        target_price: float,
+        account_id: str = "",
+        exchange: str = "SMART",
+        currency: str = "USD",
+    ) -> str | None:
+        """
+        Attach a stop and a target to shares already held, as an OCA pair.
+
+        Same shape as a bracket's two children, minus the parent. IB links them
+        with a one-cancels-all group so a fill on either cancels the other —
+        without that, a gap through the stop could sell the holding twice and
+        leave a short, which is the exact hazard `execute_exit` cancels working
+        legs to avoid.
+        """
+        if not self.is_connected():
+            logger.error("ibkr_not_connected", ticker=ticker)
+            return None
+        if self._read_only:
+            logger.error("ibkr_read_only_refusing_order", ticker=ticker)
+            return None
+        if qty < 1 or not (0 < stop_price < target_price):
+            logger.error(
+                "ibkr_invalid_protective_levels",
+                ticker=ticker, qty=qty, stop=stop_price, target=target_price,
+            )
+            return None
+
+        managed = [a for a in (self._ib.managedAccounts() or []) if a]
+        if not account_id and len(managed) > 1:
+            logger.error("ibkr_ambiguous_account_for_order", ticker=ticker)
+            return None
+
+        try:
+            from ib_async import LimitOrder, StopOrder, Stock
+
+            contract = Stock(ticker, exchange, currency)
+            qualified = await self._ib.qualifyContractsAsync(contract)
+            if not qualified:
+                logger.error("ibkr_contract_not_found", ticker=ticker)
+                return None
+
+            common = {"tif": "GTC", "outsideRth": False}
+            if account_id:
+                common["account"] = account_id
+
+            target = LimitOrder("SELL", qty, round(target_price, 2), **common)
+            stop = StopOrder("SELL", qty, round(stop_price, 2), **common)
+
+            # ocaType 1 — cancel the sibling and block any over-fill. The
+            # weaker types let both legs partially execute, which is the
+            # scenario this pair exists to make impossible.
+            group = f"STA-{ticker}-PROT-{int(datetime.now(tz=timezone.utc).timestamp())}"
+            for order, suffix in ((target, "TP"), (stop, "SL")):
+                order.ocaGroup = group
+                order.ocaType = 1
+                order.orderRef = f"STA-{ticker}-PROTECT-{suffix}"
+                self._ib.placeOrder(qualified[0], order)
+
+            # Confirm they were accepted rather than reporting a phantom pair —
+            # the caller is about to record this position as protected.
+            await asyncio.sleep(1.0)
+            working = {
+                str(t.order.orderId) for t in self._ib.openTrades()
+                if getattr(t.contract, "symbol", "").upper() == ticker.upper()
+                and t.orderStatus.status not in _REJECTED_STATUSES
+            }
+            if not {str(target.orderId), str(stop.orderId)} & working:
+                logger.error(
+                    "ibkr_protective_orders_not_accepted",
+                    ticker=ticker, qty=qty, oca_group=group,
+                )
+                return None
+
+            logger.info(
+                "ibkr_protective_orders_placed",
+                ticker=ticker, qty=qty,
+                stop=round(stop_price, 2), target=round(target_price, 2),
+                oca_group=group,
+            )
+            return group
+        except Exception as exc:
+            logger.error("ibkr_place_protective_failed", ticker=ticker, error=str(exc))
+            return None
+
     async def cancel_order(self, order_id: str) -> bool:
         """
         Cancel by looking up the live Trade. The previous implementation built a

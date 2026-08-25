@@ -190,12 +190,44 @@ class BrokerAdapter(ABC):
         broker and survives this process dying — which matters because nothing
         here closes a position automatically otherwise.
 
+        The legs always cover exactly `qty`. Protection for a holding larger
+        than one order — a position built by scaling in — is placed separately
+        through `place_protective_orders`, because a bracket leg that covers
+        more shares than are held will sell into a short the moment it fires.
+
         Implementations MUST validate the levels against the entry side and
         refuse rather than submit an inverted bracket.
 
         CIRO: only US-listed securities may be traded through an automated API
         route. Callers are responsible for enforcing that (see
         `trade_manager._is_canadian_listed`).
+        """
+
+    @abstractmethod
+    async def place_protective_orders(
+        self,
+        ticker: str,
+        qty: int,
+        stop_price: float,
+        target_price: float,
+        account_id: str = "",
+        exchange: str = "SMART",
+        currency: str = "USD",
+    ) -> str | None:
+        """
+        Put a stop and a target on a holding that already exists, with no entry
+        order attached. Returns an identifier for the pair, or None on failure.
+
+        A bracket can only be attached to an entry, so it cannot re-protect a
+        position whose legs are already gone — which happens whenever a
+        scale-in cancels them and the replacement order does not go out, and
+        whenever a venue ages orders out from under a position we still hold.
+        Without this, "the position is unprotected" would be a state the system
+        could detect and not fix.
+
+        The two orders MUST be mutually exclusive at the venue (OCA / OCO), or
+        a gap down through the stop could sell the holding twice and leave a
+        short.
         """
 
     @abstractmethod

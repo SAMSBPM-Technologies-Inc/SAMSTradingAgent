@@ -167,7 +167,8 @@ async def place_limit_order(
     """
     Place a limit order. Returns the venue order ID (str) or None on failure.
     Supplying both stop and target submits a bracket; the ID returned is the
-    entry order's.
+    entry order's. A bracket's legs always cover exactly `qty`; protection for
+    a larger holding goes through `place_protective_orders`.
     """
     if _adapter is None:
         logger.error("broker_not_configured", ticker=ticker)
@@ -176,6 +177,25 @@ async def place_limit_order(
         ticker, action, qty, limit_price,
         account_id=account_id, exchange=exchange, currency=currency,
         stop_loss_price=stop_loss_price, take_profit_price=take_profit_price,
+    )
+
+
+async def place_protective_orders(
+    ticker: str,
+    qty: int,
+    stop_price: float,
+    target_price: float,
+    account_id: str = "",
+) -> Optional[str]:
+    """
+    Put a stop and a target on shares already held, with no entry attached.
+    Returns an identifier for the pair, or None on failure.
+    """
+    if _adapter is None:
+        logger.error("broker_not_configured", ticker=ticker)
+        return None
+    return await _adapter.place_protective_orders(
+        ticker, qty, stop_price, target_price, account_id=account_id,
     )
 
 
