@@ -128,6 +128,18 @@ async def run_analysis(ticker: str) -> Optional[dict]:
         "explanation": _build_explanation(ticker, analyst_output, feat, risk),
         # Extended analyst fields
         "analyst_output": analyst_output,
+        # Persisted, not merely returned. `pipeline._needs_analyst_refresh`
+        # reads this field back off the stored document to decide whether a
+        # cached analyst signal exists; the pipeline used to set it on the
+        # in-memory dict only, so the stored document never carried it and
+        # trigger 1 ("no_ai_signal") fired on every cycle. The 60-minute cache
+        # therefore never hit once: Claude was re-called every ingestion cycle
+        # for every ticker that passed the gate. That is what made a borderline
+        # name flip BUY/HOLD eight times in an hour — each flip is a fresh
+        # sampling of the model on unchanged inputs — and it is where the
+        # analyst bill went. `GET /analyze` read the same missing field, so the
+        # UI also reported "analyst did not run" on reports that it wrote.
+        "analyst_used": True,
     }
 
     await db[COLL_SIGNALS].replace_one({"ticker": ticker}, signal_doc, upsert=True)

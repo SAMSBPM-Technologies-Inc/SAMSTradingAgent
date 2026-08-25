@@ -93,6 +93,27 @@ npm run web
    - SELL: score < 0.30
    - HOLD: otherwise
 
+   **A verdict is not published until it holds.** Computing a signal and
+   publishing one are different acts, and `services/signal_stability.py` sits
+   between them. A changed verdict becomes a *candidate*: it publishes only
+   after `SIGNAL_CONFIRMATIONS` consecutive **fresh evaluations** agree (cache
+   hits confirm nothing) and the standing verdict has lasted
+   `SIGNAL_MIN_DWELL_MINUTES`. `classify_signal` additionally takes the previous
+   signal and applies a one-sided `SIGNAL_HYSTERESIS` band, so an established
+   verdict is sticky while a new one still has to clear the full threshold.
+   Omitting `previous_signal` gives the raw rule — that is what calibration
+   replays want.
+
+   **SELL is exempt from every delay**, the same asymmetry that makes BUY the
+   only risk-gated verdict: delaying an exit costs money, delaying an entry
+   costs an opportunity. Never add a brake to the exit path to make the two
+   symmetrical.
+
+   This exists because HXL alerted eight times in 65 minutes on 24 Aug 2026,
+   alternating BUY/HOLD at an unchanged score of 0.61. Alerts fire on published
+   *changes* only — an unconfirmed candidate is not news, and neither is a
+   conviction that was already HIGH last cycle.
+
 4. **AI Analyst** (`analyst.py`): Claude API generates structured JSON bull/bear report, cached per ticker with invalidation triggers (price change ≥3%, score change ≥0.12, VIX spike ≥30). The model is `ANALYST_MODEL` in `.env` (default `claude-sonnet-5` — see `config.py`); do not restate it in docs or UI, both read it from config via `AnalyzeResponse.analyst_model`.
 
 5. **IBKR Trading** (`broker.py`, `trade_manager.py`): Per-user IB Gateway connections (Option C). Credentials stored Fernet-encrypted in MongoDB.

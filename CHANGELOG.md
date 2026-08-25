@@ -14,6 +14,97 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.4.0] — 2026-08-24
+
+A signal only means something if it stops changing. HXL sent eight alerts in
+sixty-five minutes — BUY, HOLD, BUY, HOLD — with the score reported as 61 and
+confidence as 55% in every one of them. Nothing about the stock had changed.
+This release makes a verdict earn its way to your phone.
+
+### Fixed
+
+- **The AI analyst cache never worked.** `analyst_used` was set on the
+  in-memory signal but never written to the document, and the cache check read
+  it back from the database. Every ticker therefore looked like it had no
+  analyst signal, on every cycle: Claude was re-run every five minutes per
+  ticker instead of hourly, roughly a **12× overspend**, and the
+  `/analyze` response reported "the analyst did not run" on reports the analyst
+  had just written. This one line is what made HXL flip — a language model
+  re-sampled twelve times an hour on unchanged inputs will disagree with itself
+  when a call is genuinely marginal, which is also why the price target drifted
+  $101 → $102 → $103 → $104 with the score frozen.
+- **Repeat alerts for a conviction that had not changed.** A HIGH-conviction
+  ticker re-alerted on every evaluation for as long as the analyst held its
+  view. Now only the *transition* into HIGH conviction alerts.
+- **Duplicate proposals.** `PROPOSED` is deliberately not an open position, so
+  nothing stopped the agent queueing the same entry again next cycle. Four
+  identical HXL cards could sit in the Orders queue with no way to tell which
+  was current. One outstanding proposal per ticker; approving or declining it
+  clears the way for the next.
+- **Repeated skip records.** A standing condition — position already open, IB
+  Gateway down — wrote an identical `SKIPPED` row on every evaluation and
+  buried real order history. An unbroken run of the same reason is now recorded
+  once. A *different* reason, or the same one after something else happened, is
+  recorded again.
+
+### Added
+
+- **Signal debouncing** (`services/signal_stability.py`). A changed verdict
+  becomes a *candidate* and publishes only after `SIGNAL_CONFIRMATIONS` (2)
+  consecutive fresh evaluations agree **and** the current verdict has stood for
+  `SIGNAL_MIN_DWELL_MINUTES` (60). An oscillating ticker therefore publishes
+  nothing and says nothing, which is the honest report of a stock sitting on a
+  threshold. **SELL is exempt from both** — delaying an exit costs money,
+  delaying an entry costs an opportunity, and those are not the same price.
+  While a candidate is withheld, the signal's explanation says so.
+- **Hysteresis on the thresholds.** Entering BUY still requires clearing 0.70;
+  leaving it now requires falling under 0.67 (`SIGNAL_HYSTERESIS`). One-sided
+  on purpose: an existing verdict becomes sticky, never easier to acquire. The
+  risk gate still vetoes a BUY the band would otherwise hold, and calibration
+  replays continue to use the raw rule.
+- **Alerts you can act on without opening the app.** A bare
+  `Target: $102.00 | Stop: $87.50` never said what those levels were measured
+  from. Each level is now quoted with its distance from the price the call was
+  made at, alongside the reward-to-risk ratio, the risk score, the analyst's
+  expected horizon, and your configured position size:
+
+  ```
+  📈 HXL signal flipped: HOLD -> BUY
+  Score: 61/100 | Moderate | Confidence: 55% | Risk: 4.2/10
+  Price now: $95.20
+  Target: $102.00 (+7.1%)
+  Stop: $87.50 (-8.1%)
+  Reward:risk 0.9 : 1
+  Expected horizon: 2-4 weeks
+  Your sizing: 5% of account equity, adjusted for volatility
+  ```
+
+  That 0.9 : 1 is the point — the old format hid the fact that this particular
+  setup risked more than it stood to make.
+- **`pending_signal` on `GET /analyze`**, so a withheld candidate is visible
+  rather than merely silent.
+
+### Known gaps
+
+- **The confirmation delay is real.** With the analyst cache working, a genuine
+  BUY can take up to two analyst evaluations — as much as an hour or two — to
+  publish. That is the deliberate trade: fewer, later, more trustworthy entries.
+  It has not yet been measured against `stocks_signal_history` to say what it
+  costs in missed entry price. Set `SIGNAL_CONFIRMATIONS=1` to opt out.
+- **Neither client renders `pending_signal` yet.** The withheld candidate shows
+  up only in the explanation text, which both clients already display. A proper
+  "candidate, unconfirmed" chip on web and mobile is still to do.
+- **There is still no time-based exit.** A position is closed by its stop, its
+  target, or a SELL signal, and by nothing else. The analyst's `time_horizon`
+  is displayed and now included in alerts, but nothing enforces it: a position
+  whose thesis said "2-4 weeks" will sit there indefinitely if neither bracket
+  leg fills. This is the most-asked question about the agent and it deserves a
+  real answer, not a displayed string.
+- The debounce is tuned from a single day's observation of one ticker. The
+  defaults are a judgement call, not a measurement.
+
+---
+
 ## [1.3.0] — 2026-08-24
 
 Closes the security and operability items carried since 1.1.0.

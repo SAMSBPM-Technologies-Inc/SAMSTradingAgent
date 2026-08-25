@@ -135,13 +135,21 @@ def explain_score(feat: dict, user_weights: dict | None = None) -> dict:
     }
 
 
-def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[float, str]:
+def compute_personalized_score(
+    feat: dict, user_weights: dict | None, previous_signal: str | None = None
+) -> tuple[float, str]:
     """
     Apply per-user scoring weights to a feature document and return
     (personalized_score, personalized_signal) without touching the database.
 
     Signal thresholds: BUY > 0.70 AND risk < 6, SELL < 0.30, else HOLD.
     Risk score is expected in feat["risk"]["score"] if available.
+
+    `previous_signal` is the verdict already published for this ticker. Passing
+    it engages the same hysteresis the pipeline uses, so a custom-weighted user
+    does not see a verdict re-decided on every page load while the stored one
+    holds steady — the two paths must agree about stickiness as well as about
+    thresholds.
     """
     if user_weights:
         score = clamp(_weighted_score(feat, _WeightView(effective_weights(user_weights))))
@@ -156,7 +164,7 @@ def compute_personalized_score(feat: dict, user_weights: dict | None) -> tuple[f
     from app.services.signal_generator import classify_signal
 
     risk_score = feat.get("risk", {}).get("score", 5) if isinstance(feat.get("risk"), dict) else 5
-    return round(score, 4), classify_signal(score, risk_score)
+    return round(score, 4), classify_signal(score, risk_score, previous_signal)
 
 
 async def score_ticker(ticker: str) -> dict:

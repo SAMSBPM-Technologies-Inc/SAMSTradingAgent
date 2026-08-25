@@ -165,6 +165,12 @@ class AnalyzeResponse(BaseModel):
     # rule-based path), analyst_model is this server's configured model.
     analyst_used: bool = False
     analyst_model: Optional[str] = None
+    # A verdict this ticker has produced but not yet earned. The stability layer
+    # withholds a flip until it repeats, so without this field a ticker sitting
+    # on a threshold would look settled when it is anything but — which is the
+    # opposite of the honesty the debounce is there to buy. None when the
+    # published verdict is the only one on the table.
+    pending_signal: Optional[SignalType] = None
     # Score attribution and the gate behind the verdict. Optional because the
     # feature document is not always reachable (a signal can outlive the
     # features it was built from), and a missing breakdown is not an error.
@@ -290,7 +296,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.3.0"
+    version: str = "1.4.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.
