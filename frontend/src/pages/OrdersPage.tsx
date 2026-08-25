@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
   Check,
   ClipboardList,
+  Filter as FilterIcon,
   Inbox,
   RefreshCw,
   X,
@@ -152,9 +155,108 @@ function matchesOrderFilters(o: TradeRecord, f: OrderFilters): boolean {
 }
 
 const filterInputCls = 'w-full bg-transparent border border-[var(--color-border)] rounded ' +
-  'px-1.5 py-1 text-[11px] leading-tight text-[var(--color-fg)] ' +
-  'placeholder:text-[var(--color-fg-muted)] focus:outline-none focus:ring-1 ' +
-  'focus:ring-[#f2600c] focus:border-[#f2600c]'
+  'px-1.5 py-1 text-[11px] leading-tight normal-case tracking-normal font-normal ' +
+  'text-[var(--color-fg)] placeholder:text-[var(--color-fg-muted)] focus:outline-none ' +
+  'focus:ring-1 focus:ring-[#f2600c] focus:border-[#f2600c]'
+const filterLabelCls = 'flex flex-col gap-1 text-[10px] uppercase tracking-wide text-[var(--color-fg-muted)]'
+
+const POPOVER_WIDTH = 208
+
+/**
+ * A funnel icon that opens a small popover of column-specific inputs.
+ *
+ * A permanent filter row under every header doubled the header's height and
+ * read as clutter on columns nobody was filtering. Positioned `fixed` and
+ * portalled to `document.body` rather than `absolute` in place, because the
+ * table sits in a horizontally (and, per the CSS overflow spec, therefore
+ * also vertically) auto-scrolling container — an in-flow popover would get
+ * clipped by that same scroll box it needs to escape.
+ */
+function ColumnFilterMenu({
+  label,
+  active,
+  align = 'left',
+  children,
+}: {
+  label: string
+  active: boolean
+  align?: 'left' | 'right'
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const close = (e: Event) => {
+      const target = e.target as Node
+      if (panelRef.current?.contains(target) || btnRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    // Escape returns focus to the trigger; an outside click leaves focus
+    // wherever the user just clicked, which is already where they intended it.
+    const closeOnKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setOpen(false)
+      btnRef.current?.focus()
+    }
+    document.addEventListener('mousedown', close)
+    window.addEventListener('scroll', close, true)
+    document.addEventListener('keydown', closeOnKey)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      window.removeEventListener('scroll', close, true)
+      document.removeEventListener('keydown', closeOnKey)
+    }
+  }, [open])
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect()
+      setPos({
+        top: r.bottom + 6,
+        left: align === 'right' ? r.right - POPOVER_WIDTH : r.left,
+      })
+    }
+    setOpen((o) => !o)
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={toggle}
+        aria-label={label}
+        aria-expanded={open}
+        aria-haspopup="true"
+        className={`inline-flex items-center justify-center w-5 h-5 rounded flex-shrink-0
+                    normal-case tracking-normal transition-colors focus:outline-none
+                    focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
+          active ? 'text-brand-500' : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
+        }`}
+      >
+        <FilterIcon className="w-3 h-3" fill={active ? 'currentColor' : 'none'} />
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label={label}
+          style={{ position: 'fixed', top: pos.top, left: pos.left, width: POPOVER_WIDTH }}
+          className="z-50 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]
+                     shadow-lg p-2.5 flex flex-col gap-1.5 normal-case tracking-normal font-normal
+                     text-[var(--color-fg)]"
+        >
+          {children}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
 
 // ── Proposal queue ────────────────────────────────────────────────────────────
 
@@ -342,6 +444,10 @@ export default function OrdersPage() {
     () => ordersInTab.filter((o) => matchesOrderFilters(o, orderFilters)),
     [ordersInTab, orderFilters],
   )
+
+  const dateFilterActive = orderFilters.dateFrom !== '' || orderFilters.dateTo !== ''
+  const qtyFilterActive = orderFilters.qtyMin !== '' || orderFilters.qtyMax !== ''
+  const priceFilterActive = orderFilters.priceMin !== '' || orderFilters.priceMax !== ''
 
   const load = useCallback(async (spinner = false) => {
     if (spinner) setRefreshing(true)
@@ -543,28 +649,39 @@ export default function OrdersPage() {
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                <div role="tablist" aria-label="Order status" className="flex items-center gap-1 flex-wrap">
-                  {visibleTabs.map((t) => (
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div role="tablist" aria-label="Order status" className="flex items-center gap-1 flex-wrap">
+                    {visibleTabs.map((t) => (
+                      <button
+                        key={t.key}
+                        role="tab"
+                        id={`order-tab-${t.key}`}
+                        aria-selected={activeStatus === t.key}
+                        aria-controls="order-history-panel"
+                        onClick={() => setActiveStatus(t.key)}
+                        className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors
+                          focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
+                          activeStatus === t.key
+                            ? 'bg-brand-500 text-white'
+                            : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
+                        }`}
+                      >
+                        {t.label}
+                        <span className={`ml-1.5 tabular-nums ${activeStatus === t.key ? 'opacity-80' : 'opacity-60'}`}>
+                          {statusCounts[t.key] ?? 0}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {hasActiveFilters && (
                     <button
-                      key={t.key}
-                      role="tab"
-                      id={`order-tab-${t.key}`}
-                      aria-selected={activeStatus === t.key}
-                      aria-controls="order-history-panel"
-                      onClick={() => setActiveStatus(t.key)}
-                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors
-                        focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
-                        activeStatus === t.key
-                          ? 'bg-brand-500 text-white'
-                          : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
-                      }`}
+                      onClick={clearOrderFilters}
+                      className="text-[11px] text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]
+                                 underline underline-offset-2 whitespace-nowrap"
                     >
-                      {t.label}
-                      <span className={`ml-1.5 tabular-nums ${activeStatus === t.key ? 'opacity-80' : 'opacity-60'}`}>
-                        {statusCounts[t.key] ?? 0}
-                      </span>
+                      Clear all filters
                     </button>
-                  ))}
+                  )}
                 </div>
 
                 <div
@@ -576,139 +693,195 @@ export default function OrdersPage() {
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm min-w-[48rem]">
                       <thead>
+                        {/* Status has no funnel of its own — the tab above already is that filter. */}
                         <tr className="border-b border-[var(--color-border)] text-[10.5px]
                                        uppercase tracking-widest text-[var(--color-fg-muted)]">
-                          <th scope="col" className="text-left font-semibold px-4 py-2.5">Date (ET)</th>
-                          <th scope="col" className="text-left font-semibold px-3 py-2.5">Ticker</th>
-                          <th scope="col" className="text-left font-semibold px-3 py-2.5">Side</th>
-                          <th scope="col" className="text-right font-semibold px-3 py-2.5">Qty</th>
-                          <th scope="col" className="text-right font-semibold px-3 py-2.5">Price</th>
-                          <th scope="col" className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
-                          <th scope="col" className="text-left font-semibold px-3 py-2.5">Source</th>
+                          <th scope="col" className="text-left font-semibold px-4 py-2.5">
+                            <div className="flex items-center gap-1">
+                              <span>Date (ET)</span>
+                              <ColumnFilterMenu label="Filter by date" active={dateFilterActive}>
+                                <label className={filterLabelCls}>
+                                  From
+                                  <input
+                                    type="date"
+                                    value={orderFilters.dateFrom}
+                                    onChange={(e) => setOrderFilter('dateFrom', e.target.value)}
+                                    className={filterInputCls}
+                                  />
+                                </label>
+                                <label className={filterLabelCls}>
+                                  To
+                                  <input
+                                    type="date"
+                                    value={orderFilters.dateTo}
+                                    onChange={(e) => setOrderFilter('dateTo', e.target.value)}
+                                    className={filterInputCls}
+                                  />
+                                </label>
+                                {dateFilterActive && (
+                                  <button
+                                    onClick={() => setOrderFilters((f) => ({ ...f, dateFrom: '', dateTo: '' }))}
+                                    className="self-start text-[11px] text-[var(--color-fg-muted)]
+                                               hover:text-[var(--color-fg)] underline underline-offset-2"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </ColumnFilterMenu>
+                            </div>
+                          </th>
+                          <th scope="col" className="text-left font-semibold px-3 py-2.5">
+                            <div className="flex items-center gap-1">
+                              <span>Ticker</span>
+                              <ColumnFilterMenu label="Filter by ticker" active={orderFilters.ticker !== ''}>
+                                <input
+                                  type="text"
+                                  aria-label="Ticker"
+                                  placeholder="Ticker"
+                                  value={orderFilters.ticker}
+                                  onChange={(e) => setOrderFilter('ticker', e.target.value)}
+                                  className={filterInputCls}
+                                />
+                                {orderFilters.ticker !== '' && (
+                                  <button
+                                    onClick={() => setOrderFilter('ticker', '')}
+                                    className="self-start text-[11px] text-[var(--color-fg-muted)]
+                                               hover:text-[var(--color-fg)] underline underline-offset-2"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </ColumnFilterMenu>
+                            </div>
+                          </th>
+                          <th scope="col" className="text-left font-semibold px-3 py-2.5">
+                            <div className="flex items-center gap-1">
+                              <span>Side</span>
+                              <ColumnFilterMenu label="Filter by side" active={orderFilters.side !== ''}>
+                                <select
+                                  aria-label="Side"
+                                  value={orderFilters.side}
+                                  onChange={(e) => setOrderFilter('side', e.target.value)}
+                                  className={filterInputCls}
+                                >
+                                  <option value="">All</option>
+                                  {sideOptions.map((a) => <option key={a} value={a}>{a}</option>)}
+                                </select>
+                              </ColumnFilterMenu>
+                            </div>
+                          </th>
+                          <th scope="col" className="text-right font-semibold px-3 py-2.5">
+                            <div className="flex items-center justify-end gap-1">
+                              <ColumnFilterMenu label="Filter by quantity" active={qtyFilterActive}>
+                                <label className={filterLabelCls}>
+                                  Min
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    placeholder="Min"
+                                    value={orderFilters.qtyMin}
+                                    onChange={(e) => setOrderFilter('qtyMin', e.target.value)}
+                                    className={filterInputCls}
+                                  />
+                                </label>
+                                <label className={filterLabelCls}>
+                                  Max
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    placeholder="Max"
+                                    value={orderFilters.qtyMax}
+                                    onChange={(e) => setOrderFilter('qtyMax', e.target.value)}
+                                    className={filterInputCls}
+                                  />
+                                </label>
+                                {qtyFilterActive && (
+                                  <button
+                                    onClick={() => setOrderFilters((f) => ({ ...f, qtyMin: '', qtyMax: '' }))}
+                                    className="self-start text-[11px] text-[var(--color-fg-muted)]
+                                               hover:text-[var(--color-fg)] underline underline-offset-2"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </ColumnFilterMenu>
+                              <span>Qty</span>
+                            </div>
+                          </th>
+                          <th scope="col" className="text-right font-semibold px-3 py-2.5">
+                            <div className="flex items-center justify-end gap-1">
+                              <ColumnFilterMenu label="Filter by price" active={priceFilterActive} align="right">
+                                <label className={filterLabelCls}>
+                                  Min
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    placeholder="Min"
+                                    value={orderFilters.priceMin}
+                                    onChange={(e) => setOrderFilter('priceMin', e.target.value)}
+                                    className={filterInputCls}
+                                  />
+                                </label>
+                                <label className={filterLabelCls}>
+                                  Max
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    placeholder="Max"
+                                    value={orderFilters.priceMax}
+                                    onChange={(e) => setOrderFilter('priceMax', e.target.value)}
+                                    className={filterInputCls}
+                                  />
+                                </label>
+                                {priceFilterActive && (
+                                  <button
+                                    onClick={() => setOrderFilters((f) => ({ ...f, priceMin: '', priceMax: '' }))}
+                                    className="self-start text-[11px] text-[var(--color-fg-muted)]
+                                               hover:text-[var(--color-fg)] underline underline-offset-2"
+                                  >
+                                    Clear
+                                  </button>
+                                )}
+                              </ColumnFilterMenu>
+                              <span>Price</span>
+                            </div>
+                          </th>
+                          <th scope="col" className="text-right font-semibold px-3 py-2.5">
+                            <div className="flex items-center justify-end gap-1">
+                              <ColumnFilterMenu label="Filter by profit or loss" active={orderFilters.pnl !== ''} align="right">
+                                <select
+                                  aria-label="Profit or loss"
+                                  value={orderFilters.pnl}
+                                  onChange={(e) => setOrderFilter('pnl', e.target.value as OrderFilters['pnl'])}
+                                  className={filterInputCls}
+                                >
+                                  <option value="">All</option>
+                                  <option value="gain">Gain</option>
+                                  <option value="loss">Loss</option>
+                                </select>
+                              </ColumnFilterMenu>
+                              <span>P&amp;L</span>
+                            </div>
+                          </th>
+                          <th scope="col" className="text-left font-semibold px-3 py-2.5">
+                            <div className="flex items-center gap-1">
+                              <span>Source</span>
+                              <ColumnFilterMenu label="Filter by source" active={orderFilters.source !== ''} align="right">
+                                <select
+                                  aria-label="Source"
+                                  value={orderFilters.source}
+                                  onChange={(e) => setOrderFilter('source', e.target.value)}
+                                  className={filterInputCls}
+                                >
+                                  <option value="">All</option>
+                                  <option value="AGENT">Agent</option>
+                                  <option value="APPROVED">Approved</option>
+                                  <option value="YOU">You</option>
+                                </select>
+                              </ColumnFilterMenu>
+                            </div>
+                          </th>
                           <th scope="col" className="text-left font-semibold px-4 py-2.5">Status</th>
-                        </tr>
-                        {/* One filter per column. Status has none of its own — the tab above is that filter. */}
-                        <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg)]/60">
-                          <td className="px-4 py-2 align-top">
-                            <div className="flex flex-col gap-1">
-                              <input
-                                type="date"
-                                aria-label="From date"
-                                value={orderFilters.dateFrom}
-                                onChange={(e) => setOrderFilter('dateFrom', e.target.value)}
-                                className={filterInputCls}
-                              />
-                              <input
-                                type="date"
-                                aria-label="To date"
-                                value={orderFilters.dateTo}
-                                onChange={(e) => setOrderFilter('dateTo', e.target.value)}
-                                className={filterInputCls}
-                              />
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <input
-                              type="text"
-                              aria-label="Filter by ticker"
-                              placeholder="Ticker"
-                              value={orderFilters.ticker}
-                              onChange={(e) => setOrderFilter('ticker', e.target.value)}
-                              className={filterInputCls}
-                            />
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <select
-                              aria-label="Filter by side"
-                              value={orderFilters.side}
-                              onChange={(e) => setOrderFilter('side', e.target.value)}
-                              className={filterInputCls}
-                            >
-                              <option value="">All</option>
-                              {sideOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-                            </select>
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <div className="flex flex-col gap-1">
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                aria-label="Minimum quantity"
-                                placeholder="Min"
-                                value={orderFilters.qtyMin}
-                                onChange={(e) => setOrderFilter('qtyMin', e.target.value)}
-                                className={`${filterInputCls} text-right`}
-                              />
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                aria-label="Maximum quantity"
-                                placeholder="Max"
-                                value={orderFilters.qtyMax}
-                                onChange={(e) => setOrderFilter('qtyMax', e.target.value)}
-                                className={`${filterInputCls} text-right`}
-                              />
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <div className="flex flex-col gap-1">
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                aria-label="Minimum price"
-                                placeholder="Min"
-                                value={orderFilters.priceMin}
-                                onChange={(e) => setOrderFilter('priceMin', e.target.value)}
-                                className={`${filterInputCls} text-right`}
-                              />
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                aria-label="Maximum price"
-                                placeholder="Max"
-                                value={orderFilters.priceMax}
-                                onChange={(e) => setOrderFilter('priceMax', e.target.value)}
-                                className={`${filterInputCls} text-right`}
-                              />
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <select
-                              aria-label="Filter by profit or loss"
-                              value={orderFilters.pnl}
-                              onChange={(e) => setOrderFilter('pnl', e.target.value as OrderFilters['pnl'])}
-                              className={filterInputCls}
-                            >
-                              <option value="">All</option>
-                              <option value="gain">Gain</option>
-                              <option value="loss">Loss</option>
-                            </select>
-                          </td>
-                          <td className="px-3 py-2 align-top">
-                            <select
-                              aria-label="Filter by source"
-                              value={orderFilters.source}
-                              onChange={(e) => setOrderFilter('source', e.target.value)}
-                              className={filterInputCls}
-                            >
-                              <option value="">All</option>
-                              <option value="AGENT">Agent</option>
-                              <option value="APPROVED">Approved</option>
-                              <option value="YOU">You</option>
-                            </select>
-                          </td>
-                          <td className="px-4 py-2 align-top text-right">
-                            {hasActiveFilters && (
-                              <button
-                                onClick={clearOrderFilters}
-                                className="text-[11px] text-[var(--color-fg-muted)]
-                                           hover:text-[var(--color-fg)] underline underline-offset-2
-                                           whitespace-nowrap"
-                              >
-                                Clear filters
-                              </button>
-                            )}
-                          </td>
                         </tr>
                       </thead>
                       <tbody>

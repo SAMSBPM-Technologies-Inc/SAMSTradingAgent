@@ -359,6 +359,9 @@ export interface TradeRecord {
   is_paper: boolean
   opened_at: string
   closed_at?: string
+  filled_qty?: number
+  stop_loss?: number
+  take_profit?: number
 }
 
 export interface AuthResponse {
