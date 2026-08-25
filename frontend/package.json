@@ -1,11 +1,11 @@
 {
   "name": "samsbpm-trading-dashboard",
   "private": true,
-  "version": "1.6.2",
+  "version": "1.6.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint:a11y": "eslint src"
   },

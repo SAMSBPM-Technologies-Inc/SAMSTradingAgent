@@ -14,6 +14,52 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.6.3] — 2026-08-25
+
+### Fixed
+
+- **`npm run build` now actually type-checks**, closing the gap noted in
+  1.6.2. The root `tsconfig.json` is reference-only (`"files": []` plus
+  `references`), which needs `tsc -b` to descend into the referenced
+  projects; the build script ran plain `tsc`, which exits clean regardless of
+  what the code says, so CI had never once caught a type error. Getting there
+  meant actually fixing what `tsc -b` found: `frontend/src/vite-env.d.ts` was
+  missing outright (that's the file that types `import.meta.env`), and
+  `TradeRecord` was missing `filled_qty`, `stop_loss`, and `take_profit` —
+  present on the backend's response, just never declared on the frontend
+  type, despite the Positions table reading all three off it.
+
+### Changed
+
+- **Order history's column filters are funnel icons in the header now, not a
+  permanent row underneath it.** The row doubled every header's height and
+  read as clutter on the five columns nobody was filtering at any given
+  moment. Click the funnel next to a column to open just that column's
+  inputs; the icon fills solid once a filter is set, so an active filter is
+  visible with the popover closed. Panels render through a portal to
+  `document.body` with `position: fixed`, computed from the funnel button's
+  own screen position — the table's horizontal scrollbar also makes the
+  browser compute `overflow-y: auto` on that container per the CSS overflow
+  spec, so an in-flow popover would get clipped by the very box it needs to
+  escape.
+
+### Known gaps
+
+- **Web only.** This was a request against `OrdersPage.tsx` specifically;
+  mobile's order history is unchanged and has neither the status tabs nor the
+  column filters.
+- Filter popovers don't move focus in on open or trap it there; Escape
+  returns focus to the funnel that opened them, but Tab doesn't land inside
+  the panel automatically.
+- Still no live click-through, for the same reason as 1.6.2 — Chrome's
+  extension blocks `localhost` by site permission. Verified via `tsc -b`,
+  `lint:a11y`, and a manual trace of the filter predicate.
+- Unchanged from 1.6.1/1.6.2: the API still emits naive datetimes and both
+  clients compensate in `parseTimestamp`; the analyst "Generated …" stamp is
+  still device-local; none of this has a test.
+
+---
+
 ## [1.6.2] — 2026-08-25
 
 ### Added
