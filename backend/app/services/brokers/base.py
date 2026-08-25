@@ -125,6 +125,16 @@ class Fill:
     executed_at: datetime | None = None
     order_id: str = ""
     exec_id: str = ""
+    #: What the venue charged for this execution, in `commission_currency`.
+    #:
+    #: `None` means the venue did not report one — not that it was free. The
+    #: distinction has to survive, because a missing figure silently read as
+    #: zero understates fee drag, which is precisely the number this field
+    #: exists to make visible. IB attaches the commission in a separate report
+    #: that can lag the execution by a moment, so `None` here is routine and
+    #: usually resolved on a later reconcile pass.
+    commission: float | None = None
+    commission_currency: str = ""
 
 
 @dataclass

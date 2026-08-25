@@ -768,6 +768,24 @@ class IbkrAdapter(BrokerAdapter):
                 # the rest of the app uses.
                 raw_side = str(getattr(ex, "side", "") or "").upper()
                 side = "BUY" if raw_side.startswith("B") else "SELL"
+                # Commission arrives in a *separate* report keyed to the
+                # execution, and IB can deliver it a moment after the fill
+                # itself. Absent means "not told yet", which must not be
+                # flattened to 0.0 — a later reconcile pass will see it.
+                # `commission` can also legitimately be reported as 0.0 on some
+                # venues, so the None/zero distinction is load-bearing.
+                cr = getattr(f, "commissionReport", None)
+                raw_commission = getattr(cr, "commission", None) if cr else None
+                commission = None
+                if raw_commission is not None:
+                    try:
+                        commission = float(raw_commission)
+                    except (TypeError, ValueError):
+                        commission = None
+                    # IB uses this sentinel for "unset" in numeric fields.
+                    if commission is not None and abs(commission) > 1e17:
+                        commission = None
+
                 out.append(Fill(
                     ticker=str(getattr(contract, "symbol", "") or "").upper(),
                     side=side,
@@ -776,6 +794,8 @@ class IbkrAdapter(BrokerAdapter):
                     executed_at=getattr(ex, "time", None),
                     order_id=str(getattr(ex, "orderId", "") or ""),
                     exec_id=str(getattr(ex, "execId", "") or ""),
+                    commission=commission,
+                    commission_currency=str(getattr(cr, "currency", "") or "") if cr else "",
                 ))
             out.sort(key=lambda x: (x.executed_at is None, x.executed_at))
             return out

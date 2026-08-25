@@ -247,6 +247,19 @@ The web client draws from `GET /chart/{ticker}/series` with `lightweight-charts`
 lazy-loaded so the library stays off pages that have no chart. SMA-20/50 are
 computed server-side so the PNG and the interactive chart cannot disagree.
 
+**Gross is what the position did; net is what reached the account.** Every
+trade accrues `commission_paid` from the venue's own execution reports — entry,
+each scale-in add, and the exit — and `/performance/trades` reports net
+alongside gross. Two rules hold the number honest. Accrual is **idempotent by
+execution id** (`commission_exec_ids`), because reconcile re-reads a 24-hour
+fill window every two minutes and a double-count would climb on its own for as
+long as the app stayed up. And a commission the venue has not reported stays
+`None`, never `0.0`: `commission_complete` gates whether `pnl_net` is written at
+all, and unnettable trades surface as `net_unknown` rather than being folded in
+at zero, which would understate cost in one direction every time. Trades closed
+before 1.6.0 can never be netted — IB only serves the current session.
+`wins_lost_to_fees` is the number the sizing thresholds should be argued from.
+
 **Realised performance keeps three buckets apart** (`/performance/trades`):
 `signal_driven` (agent placed it unattended — the only clean read of the
 engine), `approved` (agent proposed, human accepted — biased by what the human

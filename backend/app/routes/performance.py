@@ -124,7 +124,46 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
         losses = [t for t in priced if t["pnl"] < 0]
         open_rows = [t for t in rows if t.get("status") in TradeStatus.OPEN]
         total = sum(t["pnl"] for t in priced)
+
+        # ── Net of commission ────────────────────────────────────────────────
+        # Gross P&L is what the position did; net is what reached the account.
+        # On a small account the gap is not a rounding detail — a $200 entry
+        # pays the same fixed ticket as a $20,000 one, so the round trip can
+        # cost 0.5% against 0.005%, and a strategy that looks profitable gross
+        # can lose money net.
+        #
+        # Only trades whose fee total is known to be complete are counted, and
+        # the rest are reported as `net_unknown` rather than folded in at zero.
+        # Zero would be a *systematic* understatement of cost — flattering in
+        # one direction every time — which is worse than an honest gap. Trades
+        # that closed before this shipped have no commission recorded and can
+        # never get one: IB only serves the current session's executions.
+        netted = [
+            t for t in priced
+            if t.get("pnl_net") is not None and t.get("commission_complete")
+        ]
+        net_total = sum(t["pnl_net"] for t in netted)
+        fees = sum(float(t.get("commission_paid") or 0.0) for t in netted)
+        net_wins = [t for t in netted if t["pnl_net"] > 0]
+        # The headline number: how many trades were profitable before fees and
+        # not after. This is the one that should drive the sizing thresholds.
+        flipped = [t for t in netted if t["pnl"] > 0 >= t["pnl_net"]]
+
         return {
+            "realised_pnl_net": round(net_total, 2) if netted else None,
+            "commission_paid": round(fees, 2) if netted else None,
+            # Fees as a share of the gross P&L they were charged against —
+            # the drag, stated as the fraction of the result it consumed.
+            "commission_drag": (
+                round(fees / abs(sum(t["pnl"] for t in netted)), 4)
+                if netted and sum(t["pnl"] for t in netted) != 0 else None
+            ),
+            "win_rate_net": round(len(net_wins) / len(netted), 4) if netted else None,
+            "netted": len(netted),
+            # Priced, but with no usable commission figure — pre-existing
+            # trades, or a venue that never reported one.
+            "net_unknown": len(priced) - len(netted),
+            "wins_lost_to_fees": len(flipped),
             "closed": len(closed),
             # Closed but unpriceable — the exit exists, the execution behind it
             # does not. Reported separately so the win rate is never computed
@@ -179,6 +218,12 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
                 "entry_price": t.get("entry_price"),
                 "exit_price": t.get("exit_price"),
                 "pnl": t.get("pnl"),
+                "pnl_net": t.get("pnl_net"),
+                "commission_paid": t.get("commission_paid"),
+                # False marks a fee total that is a floor, not a figure — at
+                # least one execution never reported. The row shows gross only.
+                "commission_complete": bool(t.get("commission_complete")),
+                "scale_ins": int(t.get("scale_ins") or 0),
                 "pnl_pct": (
                     round((t["exit_price"] - t["entry_price"]) / t["entry_price"], 4)
                     if t.get("exit_price") and t.get("entry_price") else None

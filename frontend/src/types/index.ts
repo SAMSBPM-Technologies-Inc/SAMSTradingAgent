@@ -407,6 +407,29 @@ export interface TradeStats {
   losses: number
   win_rate: number | null
   realised_pnl: number | null
+  /**
+   * What actually reached the account. Gross P&L is what the position did;
+   * this is what survived commission. On a small account the gap is not a
+   * rounding detail — a $200 entry pays the same fixed ticket as a $20,000
+   * one, so a round trip can cost 0.5% against 0.005%.
+   *
+   * null when no closed trade has a complete fee total (see net_unknown).
+   */
+  realised_pnl_net: number | null
+  commission_paid: number | null
+  /** Fees as a fraction of the gross P&L they were charged against. */
+  commission_drag: number | null
+  win_rate_net: number | null
+  /** Closed and priced trades with a complete fee total — the net denominator. */
+  netted: number
+  /**
+   * Priced, but with no usable commission figure: closed before fee capture
+   * shipped, or an execution the venue never priced. Reported rather than
+   * folded in at zero, which would understate cost in one direction every time.
+   */
+  net_unknown: number
+  /** Profitable before fees, not after. The number that should drive sizing. */
+  wins_lost_to_fees: number
   avg_win: number | null
   avg_loss: number | null
   best: number | null
@@ -420,6 +443,12 @@ export interface ClosedTrade {
   entry_price: number | null
   exit_price: number | null
   pnl: number | null
+  pnl_net: number | null
+  commission_paid: number | null
+  /** false marks a fee total that is a floor, not a figure — show gross only. */
+  commission_complete: boolean
+  /** Adds made to this position; each one paid its own ticket. */
+  scale_ins: number
   pnl_pct: number | null
   stop_loss: number | null
   take_profit: number | null
