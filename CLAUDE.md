@@ -148,6 +148,33 @@ npm run web
    room to average down. Same guard chain as any other entry — see
    `_prepare_entry`. Verify with `runbooks/scale-in-paper-verification.md`.
 
+   **An order costs money to place, so order count is a risk of its own.** A
+   standing `BUY` re-runs `_prepare_entry` every 5-minute cycle — deliberate,
+   because a skip for "gateway down" must retry — which means every add
+   condition is really a *rate* limit. Three bound it: an add must be
+   `SCALE_IN_DIP_PCT` below blended cost (being above the stop is a reason not
+   to panic, not a reason to buy), `MAX_SCALE_INS` caps adds per position, and
+   `MIN_ADD_FRACTION` refuses an add that moves the holding too little to carry
+   its commission.
+
+   **The fee limits apply to adds, not to opening entries**, and that asymmetry
+   is the point. An entry has no alternative — refuse it and there is no
+   position — so a flat floor there just silences a small account and makes the
+   agent look broken. An add's alternative is doing nothing, so it must earn its
+   ticket. `MIN_ADD_FRACTION` is a fraction of the holding rather than a dollar
+   figure so it scales with the account; `MIN_ORDER_NOTIONAL` is an absolute
+   floor across all entries, off by default, for when the account outgrows that.
+   Neither **rounds an order up** to clear itself — that would let a fee rule
+   override the position cap — and neither touches exits, because closing a
+   position must never be blocked.
+
+   **The equity the position cap is measured against is frozen at entry**
+   (`size_basis_equity`), for the same reason the holding is measured at cost.
+   Read live, the cap drifts up all session and hands a full position a share
+   or two of fresh room every few minutes, which the retry loop spends at once.
+   That, not a broken guard, is how NVDA took eight orders on 25 Aug 2026 with
+   seven of them for one or two shares.
+
    **Client quantities are requests.** `POST /trading/order` takes the smaller
    of the requested qty and what the risk model sizes to, so sizing cannot be
    escaped from a form field. Orders carry an `idempotency_key` — the unique

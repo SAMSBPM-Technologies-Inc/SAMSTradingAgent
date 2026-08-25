@@ -10,6 +10,7 @@ Orchestrates signal → order flow:
 
 Called from pipeline._execute_trades() after a signal is generated.
 """
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -178,11 +179,18 @@ def _calculate_qty(
     position_size_pct: float,
     volatility_20d: float | None = None,
 ) -> int:
-    """Whole-share quantity for a given position size, scaled by volatility."""
+    """
+    Whole-share quantity for a given position size, scaled by volatility.
+
+    Rounds *down*, including to zero. The previous `max(1, ...)` floor meant a
+    size that worked out to a fraction of a share still produced a one-share
+    order — the caller's `qty < 1` refusal could never fire, and the floor
+    silently converted "too small to be worth trading" into "trade anyway".
+    """
     if price <= 0 or equity <= 0:
         return 0
     dollar_amount = equity * position_size_pct * _volatility_size_factor(volatility_20d)
-    return max(1, int(dollar_amount / price))
+    return int(dollar_amount / price)
 
 
 async def _ticker_volatility(ticker: str) -> float | None:
@@ -452,6 +460,29 @@ def _blocked_by_open_position(trade: dict) -> str:
     )
 
 
+#: Any run of digits, with the separators and decimals that hang off them.
+_NUMBERS = re.compile(r"[\d][\d,.]*")
+
+
+def _skip_signature(reason: str) -> str:
+    """
+    A refusal stripped of its numbers, for deciding whether it is *the same*
+    refusal as last cycle.
+
+    Skip reasons quote live figures — the current price, the cost basis, the
+    dollar cap — because a user reading their order history needs to see what
+    the agent was looking at. But those figures move every cycle, so comparing
+    the rendered sentences makes every restatement of one standing condition
+    look new, and the history fills with a row every five minutes saying the
+    same thing in slightly different digits.
+
+    The condition is what repeats, not the wording. Masking the numbers
+    compares conditions. A genuinely different refusal still has different
+    words around them.
+    """
+    return _NUMBERS.sub("#", reason)
+
+
 async def _already_skipped_for(user_id: str, ticker: str, reason: str) -> bool:
     """
     Is the newest record for this user+ticker already this same skip?
@@ -469,7 +500,7 @@ async def _already_skipped_for(user_id: str, ticker: str, reason: str) -> bool:
     return bool(
         latest
         and latest.get("status") == TradeStatus.SKIPPED
-        and latest.get("reason") == reason
+        and _skip_signature(latest.get("reason") or "") == _skip_signature(reason)
     )
 
 
@@ -544,6 +575,12 @@ class EntryPlan:
     held_qty: int = 0
     #: Cost basis per share across the combined position, once this fills.
     blended_entry: float | None = None
+    #: Account equity at the moment this position was opened. Persisted so later
+    #: adds measure the position cap against a fixed denominator — a cap that
+    #: tracks live equity drifts upward all session and trickles out room for
+    #: one-share adds. Only meaningful on an opening entry; an add reuses the
+    #: value already stored on the position.
+    size_basis_equity: float = 0.0
 
     @property
     def is_add(self) -> bool:
@@ -579,6 +616,8 @@ async def _prepare_entry(
     the signal), and the whitelist does not apply (it restricts what the *agent*
     may pick, and the user has explicitly chosen this ticker).
     """
+    env = get_settings()
+
     # ── Guard: CIRO restriction ───────────────────────────────────────────────
     if _is_canadian_listed(ticker):
         return None, "Canadian-listed security — API trading prohibited (CIRO rule)"
@@ -601,7 +640,7 @@ async def _prepare_entry(
     existing = await _open_position(user_id, ticker)
     if existing is not None:
         blocked = _blocked_by_open_position(existing)
-        if not get_settings().enable_scale_in:
+        if not env.enable_scale_in:
             return None, blocked
         # Only a settled position can be added to. While the first entry is
         # still working there is no fill price to blend, no held quantity to
@@ -692,6 +731,34 @@ async def _prepare_entry(
                 f"through the level that says the thesis is wrong."
             )
 
+        # ── Guard: adds are finite ────────────────────────────────────────────
+        # `scale_ins` was counted from the day scale-in shipped but never read,
+        # so the only thing bounding adds was the position cap — and the cap
+        # leaks (see the frozen size basis below). Commission is per order, so
+        # an unbounded add count is an unbounded fee bill.
+        scale_ins = int(add_to.get("scale_ins") or 0)
+        if scale_ins >= env.max_scale_ins:
+            return None, (
+                f"{ticker} has already been added to {scale_ins} "
+                f"time{'s' if scale_ins != 1 else ''}, the maximum. Build the rest "
+                f"of the position by hand if you still want it."
+            )
+
+        # ── Guard: an add must be a dip ───────────────────────────────────────
+        # Being above the stop is not a reason to buy more; it is merely not a
+        # reason to panic. This system exists to buy weakness, and without a
+        # floor here a standing BUY verdict re-fires the entry path every
+        # pipeline cycle and adds into strength until the cap stops it.
+        blended_cost = float(add_to.get("entry_price") or add_to.get("limit_price") or price)
+        dip_ceiling = blended_cost * (1.0 - env.scale_in_dip_pct)
+        if env.scale_in_dip_pct > 0 and price > dip_ceiling:
+            return None, (
+                f"{ticker} at ${price:,.2f} is not far enough below your "
+                f"${blended_cost:,.2f} cost basis to add. Needs "
+                f"${dip_ceiling:,.2f} or lower "
+                f"({env.scale_in_dip_pct:.0%} below blended entry)."
+            )
+
         # ── Size against the POSITION, not the order ──────────────────────────
         # position_size_pct caps how much of the account one name may represent.
         # Sized per order it caps nothing: three 5% adds make a 15% position.
@@ -700,8 +767,18 @@ async def _prepare_entry(
         # falling position frees room as it falls, so the agent would buy more
         # of a loser precisely as it got worse — mechanical averaging down,
         # dressed up as risk sizing.
-        held_cost = held_qty * float(add_to.get("entry_price") or add_to.get("limit_price") or price)
-        max_dollars = equity * settings.position_size_pct * _volatility_size_factor(vol)
+        #
+        # The equity the cap is measured against is FROZEN at the opening
+        # entry, for the same reason the holding is measured at cost. Live net
+        # liquidation drifts all session; a rising account quietly lifts
+        # `max_dollars` and frees a share or two of room every few minutes,
+        # which the retry loop spends immediately. That is what turned one NVDA
+        # position into eight orders on 25 Aug 2026 — the cap was never
+        # breached, it just kept moving. `or equity` covers positions opened
+        # before the basis was recorded.
+        held_cost = held_qty * blended_cost
+        size_basis = float(add_to.get("size_basis_equity") or 0.0) or equity
+        max_dollars = size_basis * settings.position_size_pct * _volatility_size_factor(vol)
         room = max_dollars - held_cost
         room_qty = int(room / price) if price > 0 else 0
         if room_qty < 1:
@@ -750,7 +827,6 @@ async def _prepare_entry(
     # whether the cash exists. Every position sizes off the same equity
     # figure, so N positions commit N x pct of it and the account quietly
     # borrows the difference. Size against real available funds instead.
-    env = get_settings()
     available = (
         acct.get("buying_power", 0.0) if env.allow_margin
         else acct.get("total_cash", 0.0)
@@ -781,6 +857,47 @@ async def _prepare_entry(
             f"${available:,.2f}."
         )]))
         qty = reduced
+
+    # ── Guard: worth the commission ───────────────────────────────────────────
+    # Last of the sizing guards on purpose: every rule above can shrink `qty`,
+    # and it is the *final* size that has to carry the fee. A broker charges per
+    # order, so a $150 order pays the same ticket as a $15,000 one.
+    #
+    # Both limits below refuse rather than rounding up to the minimum. Trading a
+    # size the risk model did not choose, purely to clear a fee threshold, is
+    # how a fee guard turns into a sizing guard — and the position cap is not
+    # negotiable to save a commission.
+    notional = qty * limit_price
+
+    if add_to is not None and env.min_add_fraction > 0:
+        # Adds are held to a fraction of the position, not a dollar figure.
+        #
+        # An add is optional in a way an opening entry is not: refusing it
+        # leaves the position exactly as it was, so it has to earn its ticket.
+        # Measured against the holding rather than in dollars because that is
+        # the question actually being asked — does this move the position
+        # enough to be worth paying for? Two shares onto 450 does not, at any
+        # account size, and a fraction says so without needing to be re-tuned
+        # as the account grows. This is the limit that stops the trickle; the
+        # absolute floor below is off by default.
+        min_add_dollars = held_cost * env.min_add_fraction
+        if notional < min_add_dollars:
+            return None, (
+                f"Adding {qty} share{'s' if qty != 1 else ''} of {ticker} "
+                f"(${notional:,.2f}) would move a ${held_cost:,.2f} position by "
+                f"{notional / held_cost:.1%} — under the {env.min_add_fraction:.0%} "
+                f"minimum, so it is not worth the commission."
+            )
+
+    if env.min_order_notional > 0 and notional < env.min_order_notional:
+        # Absolute floor, off by default — see `min_order_notional`. Deliberately
+        # applies to opening entries too, so switching it on is a real decision
+        # about the smallest trade worth making, not just an add limit.
+        return None, (
+            f"{qty} share{'s' if qty != 1 else ''} of {ticker} is ${notional:,.2f}, "
+            f"below the ${env.min_order_notional:,.0f} minimum order — the "
+            f"commission would eat too much of it to be worth placing."
+        )
 
     # ── Protective exits ──────────────────────────────────────────────────────
     blended_entry: float | None = None
@@ -819,6 +936,7 @@ async def _prepare_entry(
         add_to_trade_id=str(add_to["_id"]) if add_to is not None else None,
         held_qty=held_qty,
         blended_entry=blended_entry,
+        size_basis_equity=equity,
     ), None
 
 
@@ -854,6 +972,9 @@ async def _submit_entry(
         # Reflects the gateway session actually in use, not the user's
         # preference — the server's TRADING_MODE decides which account is hit.
         "is_paper": is_paper,
+        # Frozen denominator for the position cap on any later add — see
+        # EntryPlan.size_basis_equity.
+        "size_basis_equity": plan.size_basis_equity,
         "opened_at": now, "closed_at": None,
     }
     if plan.adjustment:

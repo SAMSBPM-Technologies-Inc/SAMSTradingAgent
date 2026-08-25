@@ -18,6 +18,48 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ### Fixed
 
+- **Scaling in no longer churns out one- and two-share orders.** On the morning
+  of 25 Aug 2026 a single NVDA position produced eight orders, seven of them
+  for one or two shares. Commission is charged per order, so those seven cost
+  nearly as much in fees as a full-size trade and bought almost nothing. No
+  risk guard was breached — the guards bounded position *size* and never
+  bounded order size or order count. Four changes, each closing one part of it:
+  - **An add now has to be a real dip.** The only price condition on adding
+    was "above the stop", which is a reason not to panic, not a reason to buy.
+    Meanwhile a standing `BUY` verdict re-runs the entry path every 5-minute
+    pipeline cycle, so a ticker that simply stayed BUY bought more of itself
+    all morning, into strength. An add now requires the price to be at least
+    `SCALE_IN_DIP_PCT` (default 2%) below the position's blended cost. Because
+    blended cost falls after each add, successive adds space themselves out.
+  - **Adds are capped per position.** `MAX_SCALE_INS` (default 2). The
+    `scale_ins` counter had been written since scale-in shipped and never read.
+  - **An add must move the position by at least `MIN_ADD_FRACTION` (default
+    25%) of what is already held.** Two shares onto 450 is not worth a ticket
+    at any account size. This is a fraction rather than a dollar figure on
+    purpose: it scales with the account instead of needing to be re-tuned, and
+    it does not silence a small account the way a flat floor would. An opening
+    entry has no such limit — refuse one and there is no position at all, so
+    the commission is simply the cost of participating; an add always has the
+    alternative of doing nothing, so it has to earn its ticket.
+  - `MIN_ORDER_NOTIONAL` is an absolute floor across every entry path,
+    **disabled by default**. Worth switching on once `position_size_pct` of
+    the account clears it comfortably. Neither limit rounds an order *up* to
+    clear itself — that would let a fee rule override the position cap — and
+    **exits are subject to neither**: you must always be able to close a
+    position, at any size.
+  - **The position cap stopped drifting.** It is `equity × position_size_pct`,
+    and equity was read live. A position sitting at its cap gained a sliver of
+    fresh room every time the account ticked up, and the 5-minute retry loop
+    spent it immediately — the actual engine of the seven small orders. Equity
+    is now frozen at the opening entry and stored on the position, so a cap
+    cannot move under a position that is already full. Positions opened before
+    this release fall back to live equity and are unaffected.
+  - Sizing rounds down to zero instead of flooring at one share, so the
+    existing "quantity < 1" refusal can actually fire.
+  - Repeated refusals collapse to one history row again: skip reasons quote
+    live prices, and comparing the rendered sentences made one standing
+    condition look new every cycle.
+
 - **Orders now notify on WhatsApp and Slack, not just email.** Trades were the
   only event that emailed and nothing else — signal flips, gateway outages and
   the daily digest all reached chat, so the notification that matters most
@@ -85,6 +127,23 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 - **UNRECONCILED trades notify nothing.** A record the broker has no memory of
   is closed silently; there is genuinely nothing truthful to say about it, but
   it does mean a vanished position is only visible in the logs.
+- **Small opening entries are deliberately unlimited, and on a small account
+  they will be mostly fee.** A $200 entry pays the same commission as a
+  $20,000 one — roughly 0.5% round-trip at IBKR's minimum versus 0.005%. That
+  is accepted for now because the alternative is an agent that refuses every
+  order and looks broken, but it is a real cost and it does not show up
+  anywhere in the performance figures yet. Revisit `MIN_ORDER_NOTIONAL` as the
+  account grows.
+- **Nothing verifies any of these numbers against realised fee drag.** The 2%
+  dip, the two-add cap and the 25% add fraction were chosen as reasonable, not
+  fitted — there is no report that shows commission paid against return per
+  position, so we cannot say whether they are right. `/calibration` scores
+  signals, not costs, and `/performance/trades` reports gross.
+- **The frozen size basis never refreshes.** A position held through a large
+  genuine change in account size keeps sizing against the equity it was opened
+  with. That is the intended trade — a fixed denominator is the whole point —
+  but it means a deliberate deposit does not open room in an existing position
+  until it is closed and re-entered.
 
 ---
 

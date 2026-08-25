@@ -219,6 +219,56 @@ class Settings(BaseSettings):
     enable_scale_in: bool = Field(
         default=True, description="Allow a BUY on a held ticker to add to the position"
     )
+    # ── Fee drag ──────────────────────────────────────────────────────────────
+    # Commission is charged per order, not per share, so a small order is
+    # arithmetically a bad order however good the signal behind it is. On
+    # 25 Aug 2026 NVDA took eight orders in one morning, seven of them for one
+    # or two shares — the position had reached its cap and the agent was
+    # spending the sliver of room that rising equity freed up each cycle.
+    #
+    # Seven of those eight were *adds*, and that is the distinction the limits
+    # below are built on.
+    #
+    # An opening entry has no alternative: refuse it and there is no position at
+    # all, so the commission is simply the cost of participating, and a flat
+    # dollar floor on entries just silences a small account entirely. An add
+    # always has an alternative — do nothing, and the position carries on
+    # unchanged — so an add has to justify its own ticket.
+    #
+    # Hence: no floor on entries by default, and the floor that does apply to
+    # adds is a *fraction of the position* rather than a dollar figure, so it
+    # scales with the account instead of needing to be re-tuned as it grows.
+    # An add worth less than this share of what is already held moves the
+    # position too little to be worth a commission.
+    min_add_fraction: float = Field(
+        default=0.25, ge=0.0, le=1.0,
+        description="An add must be at least this fraction of the held position's cost",
+    )
+    # Absolute floor across every entry path, adds included. Off by default: at
+    # a few thousand dollars of equity a $500 minimum refuses *every* order and
+    # the agent does nothing at all, which looks like a broken tool rather than
+    # a deliberate refusal. Worth setting once the account is large enough that
+    # `position_size_pct` of it clears the floor comfortably — until then
+    # `min_add_fraction` is doing the real work.
+    min_order_notional: float = Field(
+        default=0.0, ge=0.0,
+        description="Absolute smallest order value; 0 disables. Refused, never rounded up",
+    )
+    # How far under the position's blended cost an add has to be. Without this
+    # the only price condition on scaling in was "above the stop", so a standing
+    # BUY bought into strength every cycle — the opposite of the dip-buying this
+    # system exists to do. Measured against blended entry, which falls after
+    # each add, so successive adds are self-spacing without needing a timer.
+    scale_in_dip_pct: float = Field(
+        default=0.02, ge=0.0, le=0.50,
+        description="Price must be this far below blended entry before adding to a position",
+    )
+    # Hard ceiling on adds per position. The dip gate bounds *where* adds
+    # happen; this bounds how many times you can pay commission to find out.
+    max_scale_ins: int = Field(
+        default=2, ge=0, le=10,
+        description="Maximum number of adds allowed on one position",
+    )
     # Fallbacks used when the AI analyst supplies no usable level, or supplies
     # one that fails validation (stop above entry, target below entry, etc).
     bracket_stop_loss_pct: float = Field(
