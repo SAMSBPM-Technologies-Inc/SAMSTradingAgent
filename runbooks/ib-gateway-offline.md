@@ -101,22 +101,22 @@ the gateway being ready.
 
 ## Enabling the UI restart button
 
-Off by default. Turning it on means mounting the host Docker socket into the API
-container, and that is **root on the host**: anything that compromises the API
-process can start privileged containers and reach the whole daemon.
+Off by default — set `ALLOW_GATEWAY_RESTART=true` in `.env.production` and
+recreate the API container.
 
-That is a real grant in exchange for one button, and Option B achieves the same
-result without it. Enable it only if the convenience is worth that to you.
+**What you are granting.** The API never sees the host Docker socket. A
+`dockerproxy` sidecar holds it read-only and the API talks HTTP to that, on an
+internal network that is never published to the host. The proxy answers only the
+`/containers` endpoints; images, volumes, networks, exec, swarm and system are
+refused outright.
 
-1. Uncomment the `volumes:` block on the `api` service in
-   `docker-compose.prod.yml`:
-   ```yaml
-   volumes:
-     - /var/run/docker.sock:/var/run/docker.sock
-   ```
-2. Set `ALLOW_GATEWAY_RESTART=true` in `.env.production`. The flag alone does
-   nothing without the mount, and the endpoint reports that distinctly.
-3. Recreate the API container.
+That is a large reduction from the raw socket, and it is **not** a precise
+"restart only" capability — `POST=1` also permits other container verbs. Smaller
+blast radius, not zero. If you would rather grant nothing, leave the flag off
+and use the SSH steps above; they achieve the same result.
+
+`GET /trading/broker/status` reports `restart_available` so the UI never offers a
+button that cannot work, and says which piece is missing when it is unavailable.
 
 `GET /trading/broker/status` reports `restart_available` so the UI never offers
 a button that cannot work.

@@ -143,6 +143,25 @@ jobs:
             inject_secret CLOUDFLARE_TUNNEL_TOKEN "$CLOUDFLARE_TUNNEL_TOKEN"
             inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 
+            # ── JWT signing key ───────────────────────────────────────────────
+            # Never injected from GitHub Secrets: rotating it on every deploy
+            # would invalidate every session. It is set once, by hand, and
+            # persists in .env.production — which means "never set at all" also
+            # persists, silently, because the app falls back to a placeholder
+            # that is committed to this repo. Anyone who reads the source could
+            # then forge a token for any user and reach order placement.
+            #
+            # Generated rather than failed on, so a fresh box comes up secure
+            # instead of blocking the deploy. Only ever fills a missing or
+            # placeholder value; a real key already in place is left alone.
+            CURRENT_JWT=$(grep '^JWT_SECRET_KEY=' "$ENV" 2>/dev/null | head -1 | cut -d= -f2-)
+            if [ -z "$CURRENT_JWT" ] || [ "$CURRENT_JWT" = "change-me-in-production" ]; then
+              echo "::warning::JWT_SECRET_KEY was missing or still the placeholder — generating one. Existing sessions are invalidated; sign in again."
+              _set_key JWT_SECRET_KEY "$(openssl rand -hex 32)"
+            else
+              echo "JWT_SECRET_KEY present (not the placeholder)"
+            fi
+
             # ── IB Gateway credentials + mode ─────────────────────────────────
             # Credentials were previously never written to .env.production, so
             # the ibgateway container had no login and IBC exited immediately.

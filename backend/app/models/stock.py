@@ -290,7 +290,13 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.2.0"
+    version: str = "1.3.0"
+    #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
+    #: which means tokens can be forged. Surfaced here because it is otherwise
+    #: invisible — the deployment works perfectly with a guessable signing key.
+    #: Not gated behind auth deliberately: a forgeable signer makes auth
+    #: meaningless anyway, and the operator needs to see it without logging in.
+    auth_secret_is_default: bool = False
 
 
 # ── Dip-buy scan ──────────────────────────────────────────────────────────────

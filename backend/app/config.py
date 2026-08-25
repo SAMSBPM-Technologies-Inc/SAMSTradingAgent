@@ -8,6 +8,12 @@ from typing import List
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: Placeholder value shipped in the repo. Anyone who reads the source can forge
+#: a token signed with it, which grants every endpoint including order
+#: placement — so it is named here and checked at startup rather than left as a
+#: default that silently works.
+DEFAULT_JWT_SECRET = "change-me-in-production"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -60,10 +66,14 @@ class Settings(BaseSettings):
     #: maintenance window.
     allow_gateway_restart: bool = Field(
         default=False,
-        description="Let the API restart the IB Gateway container (requires the "
-                    "Docker socket mounted — see docker-compose.prod.yml)",
+        description="Let the API restart the IB Gateway container via the "
+                    "filtered Docker proxy — see docker-compose.prod.yml",
     )
     gateway_container_name: str = Field(default="trading_ibgateway")
+    #: Filtered Docker API. The api container never sees the host socket; the
+    #: `dockerproxy` sidecar holds it read-only and answers only the container
+    #: endpoints. Empty disables the restart path regardless of the flag above.
+    docker_proxy_url: str = Field(default="http://dockerproxy:2375")
     #: Alert when the broker has been disconnected for at least this long.
     #: Longer than the reconnect backoff ceiling (300s) so a routine blip that
     #: the loop recovers from on its own never pages anyone.
@@ -71,7 +81,7 @@ class Settings(BaseSettings):
 
     # ── Auth / JWT ────────────────────────────────────────────────────────────
     jwt_secret_key: str = Field(
-        default="change-me-in-production",
+        default=DEFAULT_JWT_SECRET,
         description="Secret key for signing JWTs — set a strong random value in production",
     )
     jwt_algorithm: str = Field(default="HS256")
