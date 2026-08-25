@@ -12,8 +12,20 @@ Run this before scale-in reaches an account with real money in it.
 reports `connected: true`), and a market session — resting limit orders will not
 fill outside RTH, and half of what follows is about fills.
 
-Throughout, `sta.samsbpm.com/orders` shows the position record and
-`docker compose -f docker-compose.prod.yml logs -f backend` shows the decisions.
+Throughout, `sta.samsbpm.com/orders` shows the position record and the API
+container shows the decisions. The compose service is **`api`** (container
+`trading_agent_api`) — there is no `backend` service — and compose needs the
+env file or every variable resolves blank:
+
+```bash
+cd /opt/trading-agent/backend
+docker logs -f trading_agent_api 2>&1 | grep -E \
+  "scale_in|reprotect|position_found_unprotected|position_left_unprotected|ibkr_protective"
+
+# equivalently, via compose:
+docker compose -f docker-compose.prod.yml --env-file .env.production logs -f api
+```
+
 Keep TWS or IB's web portal open on the paper account: **the venue is the source
 of truth for what is protecting the position**, not our UI.
 
