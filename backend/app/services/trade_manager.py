@@ -10,6 +10,7 @@ Orchestrates signal → order flow:
 
 Called from pipeline._execute_trades() after a signal is generated.
 """
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -178,11 +179,18 @@ def _calculate_qty(
     position_size_pct: float,
     volatility_20d: float | None = None,
 ) -> int:
-    """Whole-share quantity for a given position size, scaled by volatility."""
+    """
+    Whole-share quantity for a given position size, scaled by volatility.
+
+    Rounds *down*, including to zero. The previous `max(1, ...)` floor meant a
+    size that worked out to a fraction of a share still produced a one-share
+    order — the caller's `qty < 1` refusal could never fire, and the floor
+    silently converted "too small to be worth trading" into "trade anyway".
+    """
     if price <= 0 or equity <= 0:
         return 0
     dollar_amount = equity * position_size_pct * _volatility_size_factor(volatility_20d)
-    return max(1, int(dollar_amount / price))
+    return int(dollar_amount / price)
 
 
 async def _ticker_volatility(ticker: str) -> float | None:
@@ -236,10 +244,19 @@ async def _get_user_settings(user_id) -> AutoTradeSettings | None:
     return AutoTradeSettings(**raw)
 
 
-async def _trade_email_recipient(user_id) -> str:
+async def _trade_notify_targets(user_id, event: str = "submit") -> dict:
     """
-    Address for trade notifications: the alert_settings override if set,
-    otherwise the account email. Returns "" when the user has opted out.
+    Every channel this user wants notifications on, for one kind of event.
+
+    Email address is the alert_settings override if set, otherwise the account
+    email; Slack and WhatsApp come from the same alert_settings the signal
+    alerts read.
+
+    Submission and fill are gated separately, and deliberately so: "tell me when
+    it actually happened, not when you tried" is a reasonable thing to want, and
+    a single master switch could not express it. Both default on.
+
+    Returns an empty dict when the user has opted out or does not exist.
     """
     from bson import ObjectId
     from bson.errors import InvalidId
@@ -255,23 +272,131 @@ async def _trade_email_recipient(user_id) -> str:
         {"_id": {"$in": candidates}}, {"email": 1, "alert_settings": 1}
     )
     if not user:
-        return ""
+        return {}
     prefs = user.get("alert_settings") or {}
-    if not prefs.get("notify_on_trade", True):
-        return ""
-    return (prefs.get("trade_email") or user.get("email") or "").strip()
+    flag = "notify_on_fill" if event == "fill" else "notify_on_trade"
+    if not prefs.get(flag, True):
+        return {}
+    return {
+        "email": (prefs.get("trade_email") or user.get("email") or "").strip(),
+        "webhook_url": prefs.get("slack_webhook_url") or None,
+        "whatsapp_phone": prefs.get("whatsapp_phone") or None,
+        "whatsapp_apikey": prefs.get("whatsapp_apikey") or None,
+    }
 
 
 async def _notify_trade(user_id, **kwargs) -> None:
-    """Email the user that an order went out. Never raises."""
+    """
+    Tell the user an order went out, on every channel they configured.
+
+    Each channel is dispatched independently: a dead SMTP host must not swallow
+    the WhatsApp message, which is the fast one and the reason the user is
+    holding a phone rather than an inbox.
+    """
     try:
-        to = await _trade_email_recipient(user_id)
-        if not to:
-            return
-        from app.services.notifier import send_trade_email
-        await send_trade_email(to, **kwargs)
+        targets = await _trade_notify_targets(user_id)
     except Exception as exc:
-        logger.warning("trade_email_failed", user_id=str(user_id), error=str(exc))
+        logger.warning("trade_notify_lookup_failed", user_id=str(user_id), error=str(exc))
+        return
+    if not targets:
+        return
+
+    from app.services.notifier import send_trade_alert, send_trade_email
+
+    if targets["email"]:
+        try:
+            await send_trade_email(targets["email"], **kwargs)
+        except Exception as exc:
+            logger.warning("trade_email_failed", user_id=str(user_id), error=str(exc))
+
+    if targets["webhook_url"] or (targets["whatsapp_phone"] and targets["whatsapp_apikey"]):
+        try:
+            await send_trade_alert(
+                webhook_url=targets["webhook_url"],
+                whatsapp_phone=targets["whatsapp_phone"],
+                whatsapp_apikey=targets["whatsapp_apikey"],
+                **kwargs,
+            )
+        except Exception as exc:
+            logger.warning("trade_chat_alert_failed", user_id=str(user_id), error=str(exc))
+
+
+async def _claim_notification(trade_id, key: str) -> bool:
+    """
+    Win the right to send one notification about one trade event, exactly once.
+
+    The reconciler is not serialised with itself: a pass that outruns its
+    two-minute interval overlaps the next one, and both would read the same
+    PENDING record, both write FILLED, and both tell the user. So the claim *is*
+    the write — `$addToSet` under a filter requiring the key to be absent is
+    atomic in Mongo, and only the caller whose write matched may send.
+
+    Keyed rather than a boolean per event because one record can legitimately
+    fill more than once: a scale-in adds to the position it already holds, and
+    each add is a real fill the user wants to hear about, so the key carries the
+    order id. `notified_events` therefore grows by one short string per fill,
+    which is bounded by how many times a position is added to.
+
+    Returns False if someone else already claimed it, or if the claim itself
+    failed: a missed notification is recoverable, a duplicate one at 3am is not.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        oid = ObjectId(str(trade_id))
+    except (InvalidId, TypeError):
+        return False
+    try:
+        db = await get_db()
+        res = await db[COLL_TRADES].update_one(
+            {"_id": oid, "notified_events": {"$ne": key}},
+            {"$addToSet": {"notified_events": key}},
+        )
+        return res.modified_count == 1
+    except Exception as exc:
+        logger.warning("notification_claim_failed", key=key, error=str(exc))
+        return False
+
+
+async def _notify_fill(trade: dict, *, event_key: str | None = None, **kwargs) -> None:
+    """
+    Tell the user an order actually executed — the second half of the pair.
+
+    Submission only proves the agent acted. This is the message that carries a
+    price that was really paid, and on an exit, the realised P&L. Claimed before
+    sending so a reconciler retry cannot repeat it. Never raises: the reconciler
+    must finish reconciling whatever the notifier does.
+    """
+    key = event_key or ("close" if kwargs.get("kind") == "exit" else kwargs.get("kind", "fill"))
+    try:
+        if not await _claim_notification(trade.get("_id"), key):
+            return
+        targets = await _trade_notify_targets(trade.get("user_id"), event="fill")
+    except Exception as exc:
+        logger.warning("fill_notify_lookup_failed", error=str(exc))
+        return
+    if not targets:
+        return
+
+    from app.services.notifier import send_fill_alert, send_fill_email
+
+    if targets["email"]:
+        try:
+            await send_fill_email(targets["email"], **kwargs)
+        except Exception as exc:
+            logger.warning("fill_email_failed", error=str(exc))
+
+    if targets["webhook_url"] or (targets["whatsapp_phone"] and targets["whatsapp_apikey"]):
+        try:
+            await send_fill_alert(
+                webhook_url=targets["webhook_url"],
+                whatsapp_phone=targets["whatsapp_phone"],
+                whatsapp_apikey=targets["whatsapp_apikey"],
+                **kwargs,
+            )
+        except Exception as exc:
+            logger.warning("fill_chat_alert_failed", error=str(exc))
 
 
 async def _get_user_account_id(user_id: str) -> str:
@@ -335,6 +460,29 @@ def _blocked_by_open_position(trade: dict) -> str:
     )
 
 
+#: Any run of digits, with the separators and decimals that hang off them.
+_NUMBERS = re.compile(r"[\d][\d,.]*")
+
+
+def _skip_signature(reason: str) -> str:
+    """
+    A refusal stripped of its numbers, for deciding whether it is *the same*
+    refusal as last cycle.
+
+    Skip reasons quote live figures — the current price, the cost basis, the
+    dollar cap — because a user reading their order history needs to see what
+    the agent was looking at. But those figures move every cycle, so comparing
+    the rendered sentences makes every restatement of one standing condition
+    look new, and the history fills with a row every five minutes saying the
+    same thing in slightly different digits.
+
+    The condition is what repeats, not the wording. Masking the numbers
+    compares conditions. A genuinely different refusal still has different
+    words around them.
+    """
+    return _NUMBERS.sub("#", reason)
+
+
 async def _already_skipped_for(user_id: str, ticker: str, reason: str) -> bool:
     """
     Is the newest record for this user+ticker already this same skip?
@@ -352,7 +500,7 @@ async def _already_skipped_for(user_id: str, ticker: str, reason: str) -> bool:
     return bool(
         latest
         and latest.get("status") == TradeStatus.SKIPPED
-        and latest.get("reason") == reason
+        and _skip_signature(latest.get("reason") or "") == _skip_signature(reason)
     )
 
 
@@ -427,6 +575,12 @@ class EntryPlan:
     held_qty: int = 0
     #: Cost basis per share across the combined position, once this fills.
     blended_entry: float | None = None
+    #: Account equity at the moment this position was opened. Persisted so later
+    #: adds measure the position cap against a fixed denominator — a cap that
+    #: tracks live equity drifts upward all session and trickles out room for
+    #: one-share adds. Only meaningful on an opening entry; an add reuses the
+    #: value already stored on the position.
+    size_basis_equity: float = 0.0
 
     @property
     def is_add(self) -> bool:
@@ -462,6 +616,8 @@ async def _prepare_entry(
     the signal), and the whitelist does not apply (it restricts what the *agent*
     may pick, and the user has explicitly chosen this ticker).
     """
+    env = get_settings()
+
     # ── Guard: CIRO restriction ───────────────────────────────────────────────
     if _is_canadian_listed(ticker):
         return None, "Canadian-listed security — API trading prohibited (CIRO rule)"
@@ -484,7 +640,7 @@ async def _prepare_entry(
     existing = await _open_position(user_id, ticker)
     if existing is not None:
         blocked = _blocked_by_open_position(existing)
-        if not get_settings().enable_scale_in:
+        if not env.enable_scale_in:
             return None, blocked
         # Only a settled position can be added to. While the first entry is
         # still working there is no fill price to blend, no held quantity to
@@ -575,6 +731,34 @@ async def _prepare_entry(
                 f"through the level that says the thesis is wrong."
             )
 
+        # ── Guard: adds are finite ────────────────────────────────────────────
+        # `scale_ins` was counted from the day scale-in shipped but never read,
+        # so the only thing bounding adds was the position cap — and the cap
+        # leaks (see the frozen size basis below). Commission is per order, so
+        # an unbounded add count is an unbounded fee bill.
+        scale_ins = int(add_to.get("scale_ins") or 0)
+        if scale_ins >= env.max_scale_ins:
+            return None, (
+                f"{ticker} has already been added to {scale_ins} "
+                f"time{'s' if scale_ins != 1 else ''}, the maximum. Build the rest "
+                f"of the position by hand if you still want it."
+            )
+
+        # ── Guard: an add must be a dip ───────────────────────────────────────
+        # Being above the stop is not a reason to buy more; it is merely not a
+        # reason to panic. This system exists to buy weakness, and without a
+        # floor here a standing BUY verdict re-fires the entry path every
+        # pipeline cycle and adds into strength until the cap stops it.
+        blended_cost = float(add_to.get("entry_price") or add_to.get("limit_price") or price)
+        dip_ceiling = blended_cost * (1.0 - env.scale_in_dip_pct)
+        if env.scale_in_dip_pct > 0 and price > dip_ceiling:
+            return None, (
+                f"{ticker} at ${price:,.2f} is not far enough below your "
+                f"${blended_cost:,.2f} cost basis to add. Needs "
+                f"${dip_ceiling:,.2f} or lower "
+                f"({env.scale_in_dip_pct:.0%} below blended entry)."
+            )
+
         # ── Size against the POSITION, not the order ──────────────────────────
         # position_size_pct caps how much of the account one name may represent.
         # Sized per order it caps nothing: three 5% adds make a 15% position.
@@ -583,8 +767,18 @@ async def _prepare_entry(
         # falling position frees room as it falls, so the agent would buy more
         # of a loser precisely as it got worse — mechanical averaging down,
         # dressed up as risk sizing.
-        held_cost = held_qty * float(add_to.get("entry_price") or add_to.get("limit_price") or price)
-        max_dollars = equity * settings.position_size_pct * _volatility_size_factor(vol)
+        #
+        # The equity the cap is measured against is FROZEN at the opening
+        # entry, for the same reason the holding is measured at cost. Live net
+        # liquidation drifts all session; a rising account quietly lifts
+        # `max_dollars` and frees a share or two of room every few minutes,
+        # which the retry loop spends immediately. That is what turned one NVDA
+        # position into eight orders on 25 Aug 2026 — the cap was never
+        # breached, it just kept moving. `or equity` covers positions opened
+        # before the basis was recorded.
+        held_cost = held_qty * blended_cost
+        size_basis = float(add_to.get("size_basis_equity") or 0.0) or equity
+        max_dollars = size_basis * settings.position_size_pct * _volatility_size_factor(vol)
         room = max_dollars - held_cost
         room_qty = int(room / price) if price > 0 else 0
         if room_qty < 1:
@@ -633,7 +827,6 @@ async def _prepare_entry(
     # whether the cash exists. Every position sizes off the same equity
     # figure, so N positions commit N x pct of it and the account quietly
     # borrows the difference. Size against real available funds instead.
-    env = get_settings()
     available = (
         acct.get("buying_power", 0.0) if env.allow_margin
         else acct.get("total_cash", 0.0)
@@ -664,6 +857,47 @@ async def _prepare_entry(
             f"${available:,.2f}."
         )]))
         qty = reduced
+
+    # ── Guard: worth the commission ───────────────────────────────────────────
+    # Last of the sizing guards on purpose: every rule above can shrink `qty`,
+    # and it is the *final* size that has to carry the fee. A broker charges per
+    # order, so a $150 order pays the same ticket as a $15,000 one.
+    #
+    # Both limits below refuse rather than rounding up to the minimum. Trading a
+    # size the risk model did not choose, purely to clear a fee threshold, is
+    # how a fee guard turns into a sizing guard — and the position cap is not
+    # negotiable to save a commission.
+    notional = qty * limit_price
+
+    if add_to is not None and env.min_add_fraction > 0:
+        # Adds are held to a fraction of the position, not a dollar figure.
+        #
+        # An add is optional in a way an opening entry is not: refusing it
+        # leaves the position exactly as it was, so it has to earn its ticket.
+        # Measured against the holding rather than in dollars because that is
+        # the question actually being asked — does this move the position
+        # enough to be worth paying for? Two shares onto 450 does not, at any
+        # account size, and a fraction says so without needing to be re-tuned
+        # as the account grows. This is the limit that stops the trickle; the
+        # absolute floor below is off by default.
+        min_add_dollars = held_cost * env.min_add_fraction
+        if notional < min_add_dollars:
+            return None, (
+                f"Adding {qty} share{'s' if qty != 1 else ''} of {ticker} "
+                f"(${notional:,.2f}) would move a ${held_cost:,.2f} position by "
+                f"{notional / held_cost:.1%} — under the {env.min_add_fraction:.0%} "
+                f"minimum, so it is not worth the commission."
+            )
+
+    if env.min_order_notional > 0 and notional < env.min_order_notional:
+        # Absolute floor, off by default — see `min_order_notional`. Deliberately
+        # applies to opening entries too, so switching it on is a real decision
+        # about the smallest trade worth making, not just an add limit.
+        return None, (
+            f"{qty} share{'s' if qty != 1 else ''} of {ticker} is ${notional:,.2f}, "
+            f"below the ${env.min_order_notional:,.0f} minimum order — the "
+            f"commission would eat too much of it to be worth placing."
+        )
 
     # ── Protective exits ──────────────────────────────────────────────────────
     blended_entry: float | None = None
@@ -702,6 +936,7 @@ async def _prepare_entry(
         add_to_trade_id=str(add_to["_id"]) if add_to is not None else None,
         held_qty=held_qty,
         blended_entry=blended_entry,
+        size_basis_equity=equity,
     ), None
 
 
@@ -737,6 +972,9 @@ async def _submit_entry(
         # Reflects the gateway session actually in use, not the user's
         # preference — the server's TRADING_MODE decides which account is hit.
         "is_paper": is_paper,
+        # Frozen denominator for the position cap on any later add — see
+        # EntryPlan.size_basis_equity.
+        "size_basis_equity": plan.size_basis_equity,
         "opened_at": now, "closed_at": None,
     }
     if plan.adjustment:
@@ -1331,6 +1569,21 @@ async def _settle_pending_add(
         ticker=ticker, prior_qty=prior_qty, held_qty=actual, added=added,
         entry_price=update.get("entry_price"), protected=bool(protected),
     )
+    if added > 0:
+        # An add is a real fill and gets its own message — but it reports the
+        # shares *added*, not the whole holding, because that is what just
+        # happened. The claim key carries the add's order id so a position
+        # scaled into twice is announced twice.
+        await _notify_fill(
+            trade,
+            event_key=f"fill:{add_order_id}",
+            kind="entry", action="BUY", ticker=ticker,
+            qty=added, fill_price=add_price,
+            limit_price=pending.get("limit_price"),
+            stop_loss=update.get("stop_loss") or trade.get("stop_loss"),
+            take_profit=update.get("take_profit") or trade.get("take_profit"),
+            is_paper=not get_settings().is_live_trading,
+        )
     return True
 
 
@@ -1518,6 +1771,26 @@ async def reconcile_trades() -> dict:
                 ticker=trade.get("ticker"), order_id=str(order_id),
                 status=update.get("status"), fill_price=update.get("entry_price"),
             )
+            # Only entries and partials are announced here. A dead order is not
+            # a fill, and a filled *exit* is announced by phase 3 with its P&L,
+            # which is the number that makes an exit worth reading about.
+            if update.get("status") in (TradeStatus.FILLED, TradeStatus.PARTIAL) \
+                    and trade.get("action") == "BUY":
+                partial = update["status"] == TradeStatus.PARTIAL
+                await _notify_fill(
+                    trade,
+                    event_key=f"partial:{order_id}" if partial else f"fill:{order_id}",
+                    kind="partial" if partial else "entry",
+                    action="BUY",
+                    ticker=trade.get("ticker"),
+                    qty=update.get("filled_qty") or trade.get("qty"),
+                    ordered_qty=trade.get("qty"),
+                    fill_price=update.get("entry_price") or trade.get("limit_price"),
+                    limit_price=trade.get("limit_price"),
+                    stop_loss=trade.get("stop_loss"),
+                    take_profit=trade.get("take_profit"),
+                    is_paper=not get_settings().is_live_trading,
+                )
 
     # ── Phase 2: recover fills the order status pass could not see ───────────
     try:
@@ -1577,6 +1850,17 @@ async def reconcile_trades() -> dict:
             "trade_fill_recovered",
             ticker=trade.get("ticker"), order_id=str(trade.get("order_id")),
             qty=qty, price=update["entry_price"],
+        )
+        # Same claim key as phase 1 would have used, so a fill that both passes
+        # see is announced once, not twice.
+        await _notify_fill(
+            trade,
+            event_key=f"fill:{trade.get('order_id')}",
+            kind="entry", action="BUY", ticker=trade.get("ticker"),
+            qty=qty, fill_price=update["entry_price"],
+            limit_price=trade.get("limit_price"),
+            stop_loss=trade.get("stop_loss"), take_profit=trade.get("take_profit"),
+            is_paper=not get_settings().is_live_trading,
         )
 
     # ── Phase 2b: settle scale-ins and re-protect what is uncovered ──────────
@@ -1676,6 +1960,19 @@ async def reconcile_trades() -> dict:
             "trade_closed",
             ticker=ticker, entry=entry_price, exit=update.get("exit_price"),
             pnl=update.get("pnl"), reason=update["exit_reason"],
+        )
+        await _notify_fill(
+            trade,
+            event_key="close",
+            kind="exit", action="SELL", ticker=ticker, qty=qty,
+            fill_price=update.get("exit_price"),
+            entry_price=float(entry_price) if entry_price else None,
+            pnl=update.get("pnl"),
+            exit_reason=(
+                "stop or target" if update["exit_reason"] == "bracket_or_manual"
+                else "closed — exit price unavailable"
+            ),
+            is_paper=not get_settings().is_live_trading,
         )
 
     if any(summary.values()):

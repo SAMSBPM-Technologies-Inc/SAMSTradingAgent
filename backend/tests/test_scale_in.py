@@ -14,6 +14,8 @@ The rules that make adding safe, and that these tests pin:
   * the position cap applies to the position, not to each order
   * an add is refused below the stop, where it would be averaging down through
     the level that says the thesis is wrong
+  * an add must be a genuine dip below cost, must be one of a bounded number,
+    and must be big enough to be worth its commission — see "the NVDA morning"
 
 Run with:  pytest backend/tests -q
 """
@@ -26,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.services.trade_manager import (  # noqa: E402
     EntryPlan, _combined_bracket_levels, _volatility_size_factor,
+    _calculate_qty as tm_calculate_qty,
 )
 
 
@@ -239,11 +242,16 @@ def _patch_tm(monkeypatch, *, position=None, broker=None, vol=0.35):
     return tm, broker
 
 
-#: 450 shares bought at $88, protected 83/110, now trading at $95.20.
-#: The levels have to straddle the live price — a position still held at $95
+#: 450 shares bought at $88, protected 83/110, now trading at $85.
+#: The levels have to straddle the live price — a position still held at $85
 #: cannot have a $72 target working, because it would already have fired. The
 #: first draft of this fixture did, and `_combined_bracket_levels` refused it,
 #: which is the guard doing its job.
+#:
+#: The live price used to be $95.20 — above cost. That made every add in this
+#: file an add into strength, which `scale_in_dip_pct` now refuses outright, so
+#: the default is a real dip: $85 is under the $86.24 ceiling (2% below the $88
+#: basis) and still clear of the $83 stop.
 HELD = {
     "_id": "pos-1", "ticker": "HXL", "action": "BUY",
     "status": TradeStatus.FILLED, "qty": 450, "filled_qty": 450,
@@ -252,7 +260,7 @@ HELD = {
 }
 
 
-def _prepare(tm, price=95.20, settings=None, requested_qty=None):
+def _prepare(tm, price=85.00, settings=None, requested_qty=None):
     return asyncio.run(tm._prepare_entry(
         "u1", "HXL", settings or AutoTradeSettings(position_size_pct=0.05),
         price, None, None, requested_qty=requested_qty,
@@ -295,6 +303,182 @@ def test_adding_below_the_stop_is_refused(monkeypatch):
     plan, reason = _prepare(tm, price=82.0)  # stop is 83
     assert plan is None
     assert "stop" in reason and "thesis is wrong" in reason
+
+
+# ── Fee drag: the NVDA morning ───────────────────────────────────────────────
+#
+# On 25 Aug 2026 one NVDA position produced eight orders in a single morning,
+# seven of them for one or two shares. No guard was breached; the guards simply
+# did not bound order *count* or order *size*, and three separate mechanisms
+# each contributed. These tests pin all three.
+
+def test_a_standing_buy_above_cost_no_longer_adds(monkeypatch):
+    """
+    The trigger. `_execute_trades` re-runs the entry path on every pipeline
+    cycle while a verdict stays BUY, and the only price condition on an add was
+    "above the stop". So a ticker holding a BUY bought more of itself every
+    five minutes, into strength — the opposite of dip-buying.
+    """
+    tm, _ = _patch_tm(monkeypatch, position=dict(HELD))
+    plan, reason = _prepare(tm, price=95.20)  # above the $88 basis
+    assert plan is None
+    assert "not far enough below" in reason
+
+
+def test_the_dip_has_to_clear_the_configured_depth(monkeypatch):
+    """A cent under cost is not a dip. The gate is a band, not a sign test."""
+    tm, _ = _patch_tm(monkeypatch, position=dict(HELD))
+    # 2% below $88 is $86.24.
+    assert _prepare(tm, price=87.99)[0] is None
+    assert _prepare(tm, price=86.50)[0] is None
+    assert _prepare(tm, price=86.00)[0] is not None
+
+
+def test_adds_are_capped_and_the_counter_is_actually_read(monkeypatch):
+    """
+    `scale_ins` was incremented from the day scale-in shipped and never read.
+    Commission is charged per order, so an unbounded add count is an unbounded
+    fee bill however good each individual add looks.
+    """
+    from app.config import get_settings
+    maxed = dict(HELD, scale_ins=get_settings().max_scale_ins)
+    tm, _ = _patch_tm(monkeypatch, position=maxed)
+    plan, reason = _prepare(tm)
+    assert plan is None
+    assert "maximum" in reason
+
+
+def test_rising_equity_cannot_trickle_out_room_for_one_share_adds(monkeypatch):
+    """
+    The mechanism behind the seven tiny orders.
+
+    The position cap is `equity x position_size_pct`, and equity is live net
+    liquidation. A position sitting at its cap gets a sliver of fresh room every
+    time the account ticks up, and the five-minute retry loop spends it
+    immediately. Freezing the denominator at the opening entry stops the cap
+    from moving under a position that is already full.
+    """
+    # 450 @ $88 = $39,600, exactly the 5% cap on the $792k equity at entry.
+    full = dict(HELD, entry_price=88.0, size_basis_equity=792_000.0)
+    # The account has since rallied to $1M, which would lift the cap to $50,000
+    # and hand out $10,400 of room the position never earned.
+    tm, _ = _patch_tm(monkeypatch, position=full, broker=_FakeBroker(equity=1_000_000.0))
+    plan, reason = _prepare(tm, price=86.00)
+    assert plan is None
+    assert "full size" in reason
+
+
+def test_a_position_without_a_frozen_basis_falls_back_to_live_equity(monkeypatch):
+    """Positions opened before the basis was recorded must still be addable."""
+    legacy = dict(HELD)  # no size_basis_equity
+    tm, _ = _patch_tm(monkeypatch, position=legacy, broker=_FakeBroker(equity=1_000_000.0))
+    plan, reason = _prepare(tm, price=86.00)
+    assert reason is None and plan.qty > 0
+
+
+def test_a_small_account_can_still_open_a_position(monkeypatch):
+    """
+    An opening entry has no alternative: refuse it and there is no position at
+    all, so the commission is the cost of participating. A flat dollar floor on
+    entries silences a small account completely — the tool does nothing and
+    looks broken. Entries are therefore unfloored by default.
+    """
+    # A $4,000 account at 5% sizes to $200 — one share at $86, and under any
+    # dollar floor worth setting on a larger account.
+    tm, _ = _patch_tm(monkeypatch, position=None, broker=_FakeBroker(
+        cash=4_000.0, equity=4_000.0))
+    plan, reason = _prepare(tm, price=86.00)
+    assert reason is None
+    assert plan is not None and plan.qty >= 1
+
+
+def test_a_dribble_onto_a_held_position_is_still_refused(monkeypatch):
+    """
+    The limit that actually stops the NVDA trickle. An add is optional in a way
+    an entry is not — refusing it leaves the position exactly as it was — so it
+    has to move the position enough to be worth a ticket.
+    """
+    tm, _ = _patch_tm(monkeypatch, position=dict(HELD))
+    # Room for only a few shares against the 450 already held at $88.
+    nearly_full = AutoTradeSettings(position_size_pct=0.0397)  # ~$39,700 cap
+    plan, reason = _prepare(tm, price=86.00, settings=nearly_full)
+    assert plan is None
+    assert "not worth the commission" in reason
+
+
+def test_the_add_floor_scales_with_the_account_not_with_dollars(monkeypatch):
+    """
+    The same two-share add, judged by what it does to the position rather than
+    by its dollar size — and therefore accepted on a small account and refused
+    on a large one. A dollar floor gets this exactly backwards: it refuses every
+    add on the small account and waves through a dribble onto the big position.
+    """
+    # $4k account, 4 shares held ($352). Two more at $86 is +49% — worth it.
+    small = dict(HELD, qty=4, filled_qty=4, entry_price=88.0)
+    tm, _ = _patch_tm(monkeypatch, position=small, broker=_FakeBroker(
+        cash=4_000.0, equity=4_000.0))
+    plan, reason = _prepare(
+        tm, price=86.00, settings=AutoTradeSettings(position_size_pct=0.14))
+    assert reason is None, reason
+    assert plan.qty == 2
+
+    # $1M account, 450 shares held ($39,600). The identical two-share order is
+    # +0.4% — the NVDA case, refused.
+    tm, _ = _patch_tm(monkeypatch, position=dict(HELD))
+    plan, reason = _prepare(
+        tm, price=86.00, settings=AutoTradeSettings(position_size_pct=0.0398))
+    assert plan is None
+    assert "not worth the commission" in reason
+
+
+def test_a_sub_minimum_add_is_not_quietly_grown_to_clear_the_floor(monkeypatch):
+    """
+    The fee guard must not become a sizing guard. Trading a size the risk model
+    did not choose, purely to clear a fee threshold, would let the floor
+    override the position cap.
+    """
+    tm, broker = _patch_tm(monkeypatch, position=dict(HELD))
+    nearly_full = AutoTradeSettings(position_size_pct=0.0397)
+    plan, _ = _prepare(tm, price=86.00, settings=nearly_full)
+    assert plan is None
+    assert broker.orders == []
+
+
+def test_the_absolute_floor_still_binds_when_switched_on(monkeypatch):
+    """
+    Off by default, but when set it applies to opening entries too — turning it
+    on is a decision about the smallest trade worth making, not an add limit.
+    """
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "min_order_notional", 500.0)
+    tm, _ = _patch_tm(monkeypatch, position=None, broker=_FakeBroker(
+        cash=4_000.0, equity=4_000.0))
+    plan, reason = _prepare(tm, price=86.00)
+    assert plan is None
+    assert "minimum order" in reason
+
+
+def test_sizing_rounds_down_to_zero_rather_than_forcing_one_share(monkeypatch):
+    """
+    `_calculate_qty` used to floor at `max(1, ...)`, which meant the caller's
+    `qty < 1` refusal could never fire — "too small to trade" was silently
+    converted into "trade one share".
+    """
+    assert tm_calculate_qty(1_000.0, 10_000, 0.05, 0.35) == 0
+
+
+def test_a_standing_refusal_is_recorded_once_even_as_its_numbers_move():
+    """
+    Skip reasons quote live prices, so comparing rendered sentences makes one
+    standing condition look new every cycle and fills the order history with a
+    row every five minutes. The condition repeats, not the wording.
+    """
+    import app.services.trade_manager as tm
+    a = "NVDA at $181.20 is not far enough below your $180.00 cost basis to add."
+    b = "NVDA at $181.55 is not far enough below your $180.00 cost basis to add."
+    c = "NVDA is at $179.00, at or below your stop of $179.50."
+    assert tm._skip_signature(a) == tm._skip_signature(b)
+    assert tm._skip_signature(a) != tm._skip_signature(c)
 
 
 def test_scale_in_can_be_switched_off(monkeypatch):

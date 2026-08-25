@@ -207,6 +207,20 @@ export interface AlertSettings {
   notify_on_signal_flip: boolean
   notify_on_high_conviction: boolean
   daily_digest: boolean
+  /**
+   * Order lifecycle notifications, gated separately: `trade` fires when the
+   * agent submits an order, `fill` when it actually executes and when a
+   * position closes with its realised P&L.
+   *
+   * Neither has a control on the profile screen yet. They are declared here
+   * because both clients PUT the whole settings object back — the round-trip
+   * has to carry them, and a field the type does not know about survives only
+   * by accident.
+   */
+  notify_on_trade?: boolean
+  notify_on_fill?: boolean
+  /** Blank sends to the account email. */
+  trade_email?: string
 }
 
 /**

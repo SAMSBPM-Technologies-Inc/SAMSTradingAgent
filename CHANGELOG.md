@@ -14,6 +14,139 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.5.1] — 2026-08-25
+
+### Fixed
+
+- **Scaling in no longer churns out one- and two-share orders.** On the morning
+  of 25 Aug 2026 a single NVDA position produced eight orders, seven of them
+  for one or two shares. Commission is charged per order, so those seven cost
+  nearly as much in fees as a full-size trade and bought almost nothing. No
+  risk guard was breached — the guards bounded position *size* and never
+  bounded order size or order count. Four changes, each closing one part of it:
+  - **An add now has to be a real dip.** The only price condition on adding
+    was "above the stop", which is a reason not to panic, not a reason to buy.
+    Meanwhile a standing `BUY` verdict re-runs the entry path every 5-minute
+    pipeline cycle, so a ticker that simply stayed BUY bought more of itself
+    all morning, into strength. An add now requires the price to be at least
+    `SCALE_IN_DIP_PCT` (default 2%) below the position's blended cost. Because
+    blended cost falls after each add, successive adds space themselves out.
+  - **Adds are capped per position.** `MAX_SCALE_INS` (default 2). The
+    `scale_ins` counter had been written since scale-in shipped and never read.
+  - **An add must move the position by at least `MIN_ADD_FRACTION` (default
+    25%) of what is already held.** Two shares onto 450 is not worth a ticket
+    at any account size. This is a fraction rather than a dollar figure on
+    purpose: it scales with the account instead of needing to be re-tuned, and
+    it does not silence a small account the way a flat floor would. An opening
+    entry has no such limit — refuse one and there is no position at all, so
+    the commission is simply the cost of participating; an add always has the
+    alternative of doing nothing, so it has to earn its ticket.
+  - `MIN_ORDER_NOTIONAL` is an absolute floor across every entry path,
+    **disabled by default**. Worth switching on once `position_size_pct` of
+    the account clears it comfortably. Neither limit rounds an order *up* to
+    clear itself — that would let a fee rule override the position cap — and
+    **exits are subject to neither**: you must always be able to close a
+    position, at any size.
+  - **The position cap stopped drifting.** It is `equity × position_size_pct`,
+    and equity was read live. A position sitting at its cap gained a sliver of
+    fresh room every time the account ticked up, and the 5-minute retry loop
+    spent it immediately — the actual engine of the seven small orders. Equity
+    is now frozen at the opening entry and stored on the position, so a cap
+    cannot move under a position that is already full. Positions opened before
+    this release fall back to live equity and are unaffected.
+  - Sizing rounds down to zero instead of flooring at one share, so the
+    existing "quantity < 1" refusal can actually fire.
+  - Repeated refusals collapse to one history row again: skip reasons quote
+    live prices, and comparing the rendered sentences made one standing
+    condition look new every cycle.
+
+- **Orders now notify on WhatsApp and Slack, not just email.** Trades were the
+  only event that emailed and nothing else — signal flips, gateway outages and
+  the daily digest all reached chat, so the notification that matters most
+  (money moved) arrived on the slowest channel. `notify_on_trade` now gates all
+  three channels together; it was never meant to be an email-only switch, and
+  the WhatsApp and Slack credentials are the same ones the signal alerts
+  already use. Nothing to configure if WhatsApp is already set up.
+  - The chat message carries the same numbers as the email — side, quantity,
+    limit, notional, stop and target with their distances and reward:risk —
+    led by PAPER/LIVE, because that is the one thing that has to be legible at
+    a glance on a phone.
+  - Channels dispatch independently: a dead SMTP host no longer swallows the
+    WhatsApp message.
+
+- **A dead WhatsApp API key looked exactly like a delivered message.**
+  CallMeBot answers an invalid key with `203 Non-Authoritative Information` and
+  puts the real outcome in the HTML body. The check was `if status != 200:
+  warn`, so it missed every genuine failure *and* would have cried wolf on
+  successes — 203 is also what a delivered message returns. The body is now
+  what gets inspected.
+  - **Send test reports the truth.** It previously appended "whatsapp" to the
+    success list unconditionally, so the button confirmed a channel that was
+    not working. It now sends through the low-level sender and surfaces
+    CallMeBot's actual refusal, alongside the SMTP reason it already showed.
+  - A half-configured channel (number but no key, or the reverse) is reported
+    as incomplete rather than skipped in silence.
+  - Failure reasons no longer echo the alert text back into logs or the UI —
+    CallMeBot repeats the whole outgoing message before saying what went wrong.
+    Logged phone numbers are masked to their last four digits.
+
+### Added
+
+- **A second notification when the order actually fills.** Submission and
+  execution are different events and only one of them involves a price you
+  really paid, so both are now sent:
+  - *Order placed* — what was asked for, at what limit. Reworded: it used to
+    say "Bought 57 HXL", which was not true until something filled.
+  - *Filled* — the executed price, the cash it cost, and how it compared with
+    your limit. The comparison is unsigned with the direction in words
+    ("$0.02 better"), because a minus sign next to "better" makes a reader stop
+    and decode it.
+  - *Closed* — realised P&L as the headline, since that is the only question an
+    exit answers. A close that cannot be priced says so instead of reporting
+    zero.
+  - Partial fills are announced once, with how much is still working. A
+    scale-in add is announced as the shares *added*, not the new total.
+  - `notify_on_fill` gates these, separately from `notify_on_trade`. Both
+    default on. Separate because "tell me when it happened, not when you tried"
+    is a reasonable preference that one switch could not express.
+  - Each message is claimed atomically before sending, so overlapping
+    reconciler passes cannot announce the same fill twice.
+
+### Known gaps
+
+- **Fill notifications are as timely as the reconciler**, which runs every two
+  minutes — so a fill is reported up to two minutes late. Nothing pushes fills
+  to us; this is polling, not a stream.
+- **A position closed on an earlier day cannot be priced.** IB only serves
+  same-session executions, so those arrive as "Closed HXL" with no P&L rather
+  than a fabricated number.
+- **`notify_on_trade`, `notify_on_fill` and `trade_email` are not on the
+  profile screen.** All three exist in the API, default sensibly, and survive a
+  save untouched, but neither client renders a control — changing them needs an
+  API call.
+- **UNRECONCILED trades notify nothing.** A record the broker has no memory of
+  is closed silently; there is genuinely nothing truthful to say about it, but
+  it does mean a vanished position is only visible in the logs.
+- **Small opening entries are deliberately unlimited, and on a small account
+  they will be mostly fee.** A $200 entry pays the same commission as a
+  $20,000 one — roughly 0.5% round-trip at IBKR's minimum versus 0.005%. That
+  is accepted for now because the alternative is an agent that refuses every
+  order and looks broken, but it is a real cost and it does not show up
+  anywhere in the performance figures yet. Revisit `MIN_ORDER_NOTIONAL` as the
+  account grows.
+- **Nothing verifies any of these numbers against realised fee drag.** The 2%
+  dip, the two-add cap and the 25% add fraction were chosen as reasonable, not
+  fitted — there is no report that shows commission paid against return per
+  position, so we cannot say whether they are right. `/calibration` scores
+  signals, not costs, and `/performance/trades` reports gross.
+- **The frozen size basis never refreshes.** A position held through a large
+  genuine change in account size keeps sizing against the equity it was opened
+  with. That is the intended trade — a fixed denominator is the whole point —
+  but it means a deliberate deposit does not open room in an existing position
+  until it is closed and re-entered.
+
+---
+
 ## [1.5.0] — 2026-08-24
 
 You can now add to a position you already hold. Holding a stock was never a
