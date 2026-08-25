@@ -12,6 +12,57 @@ services:
   #   Connecting to 4001/4002 is refused and is the classic silent failure here.
   #
   # Credentials come from .env.production: TWS_USERID, TWS_PASSWORD, TRADING_MODE.
+  # Filtered Docker API, so the "Restart gateway" button in the UI does not
+  # require handing the api container the raw host socket.
+  #
+  # WHAT THIS DOES AND DOES NOT GRANT — read before assuming it is harmless.
+  #
+  # The raw socket is root on the host: images, volumes, networks, exec into any
+  # container, and creating privileged ones. This proxy answers only the
+  # /containers endpoints and only because POST=1 is set, so image, volume,
+  # network, swarm and system endpoints are refused outright. That is a large
+  # reduction, and it is NOT a precise "restart only" capability: POST=1 also
+  # permits other container verbs. It is a much smaller blast radius than the
+  # socket, not zero.
+  #
+  # The proxy is on an isolated network with the api and is never published to
+  # the host. If you would rather grant nothing at all, delete this service, set
+  # ALLOW_GATEWAY_RESTART=false, and recover over SSH — the runbook covers it.
+  dockerproxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: trading_dockerproxy
+    restart: unless-stopped
+    environment:
+      # Allow: container endpoints, and the POST verb they need.
+      - CONTAINERS=1
+      - POST=1
+      # Refuse everything else explicitly rather than relying on defaults.
+      - IMAGES=0
+      - VOLUMES=0
+      - NETWORKS=0
+      - EXEC=0
+      - BUILD=0
+      - COMMIT=0
+      - CONFIGS=0
+      - SECRETS=0
+      - SERVICES=0
+      - SWARM=0
+      - NODES=0
+      - TASKS=0
+      - PLUGINS=0
+      - SYSTEM=0
+      - INFO=0
+      - AUTH=0
+      - DISTRIBUTION=0
+      - SESSION=0
+    volumes:
+      # Read-only: the proxy reads the socket, the api never touches it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    expose:
+      - "2375"
+    networks:
+      - internal
+
   ibgateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     container_name: trading_ibgateway
@@ -91,19 +142,10 @@ services:
       # mount below — the flag alone does nothing. Off by default; see
       # runbooks/ib-gateway-offline.md for the trade being made.
       - ALLOW_GATEWAY_RESTART=${ALLOW_GATEWAY_RESTART:-false}
-    # OPT-IN: uncomment to let the UI restart the gateway container.
-    #
-    # Read before doing it. The Docker socket is root on the host — anything
-    # that compromises the API process can start privileged containers, read
-    # every other container's state, and reach the whole daemon. That is a real
-    # grant in exchange for one recovery button, and the SSH path in
-    # runbooks/ib-gateway-offline.md achieves the same thing without it.
-    #
-    # `Reconnect` in the UI needs none of this and already handles the common
-    # case; only an unauthenticated gateway needs a restart.
-    #
-    # volumes:
-    #   - /var/run/docker.sock:/var/run/docker.sock
+      # The api never sees the real Docker socket — it talks to the filtered
+      # proxy below. See the dockerproxy service for what that does and does
+      # not allow.
+      - DOCKER_PROXY_URL=${DOCKER_PROXY_URL:-http://dockerproxy:2375}
     depends_on:
       # Start ordering only — the api must come up even if the gateway is still
       # booting or failing, since it also serves the dashboard. broker.py's

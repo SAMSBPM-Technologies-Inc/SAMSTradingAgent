@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Plug, PlugZap, RefreshCw, RotateCcw, Smartphone } from 'lucide-react'
-import { tradingApi } from '../lib/api'
+import { Link } from 'react-router-dom'
+import { BellOff, Plug, PlugZap, RefreshCw, RotateCcw, Smartphone } from 'lucide-react'
+import { alertsApi, tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
 import type { BrokerStatus } from '../types'
 import LoadingSpinner from './LoadingSpinner'
@@ -31,6 +32,19 @@ export default function BrokerPanel() {
   const [busy, setBusy] = useState<'reconnect' | 'restart' | null>(null)
   const [waiting, setWaiting] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  // Alerting is only as good as the channels behind it — the watch job runs
+  // regardless and sends nothing if none are set, which is exactly how an
+  // outage stays unnoticed until someone tries to trade.
+  const [hasAlertChannel, setHasAlertChannel] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    alertsApi.getSettings()
+      .then(({ data }) => setHasAlertChannel(!!(
+        data.slack_webhook_url?.trim()
+        || (data.whatsapp_phone?.trim() && data.whatsapp_apikey?.trim())
+      )))
+      .catch(() => setHasAlertChannel(null))
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -185,6 +199,23 @@ export default function BrokerPanel() {
           Restart gateway
         </button>
       </div>
+
+      {/* The alerting exists but is inert without a channel, and that is worth
+          saying here rather than leaving it to be discovered during the next
+          outage. */}
+      {hasAlertChannel === false && (
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg
+                        bg-amber-500/10 text-amber-700 dark:text-amber-400">
+          <BellOff className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <p className="text-xs leading-relaxed">
+            No alert channel configured, so <strong>nothing will tell you</strong> if the
+            broker drops — you would find out by trying to trade.{' '}
+            <Link to="/profile" className="underline hover:no-underline">
+              Add Slack or WhatsApp in Profile → Alerts
+            </Link>.
+          </p>
+        </div>
+      )}
 
       {/* Say why the button is dead rather than leaving it mysteriously greyed. */}
       {!status.restart_available && status.restart_unavailable_reason && (

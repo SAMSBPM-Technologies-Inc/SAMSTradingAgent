@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, EmailStr, model_validator
 
 from app.db import COLL_USERS, get_db
 from app.dependencies import get_current_user
+from app.services import rate_limit
 from app.services.auth import create_access_token, hash_password, verify_password
 from app.utils.logger import get_logger
 
@@ -59,15 +60,55 @@ class TokenResponse(BaseModel):
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest) -> TokenResponse:
-    """Authenticate and return an access token."""
+async def login(body: LoginRequest, request: Request) -> TokenResponse:
+    """
+    Authenticate and return an access token.
+
+    Rate limited per email and per client address. This endpoint previously had
+    no limit of any kind, so a known email could be guessed against at whatever
+    rate the network allowed.
+    """
+    client_ip = _client_ip(request)
+
+    decision = rate_limit.check_login_allowed(body.email, client_ip)
+    if not decision.allowed:
+        logger.warning("login_rate_limited", email=body.email, client=client_ip)
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed sign-in attempts. Try again shortly.",
+            headers={"Retry-After": str(decision.retry_after)},
+        )
+
     db = await get_db()
     user = await db[COLL_USERS].find_one({"email": body.email})
     if not user or not verify_password(body.password, user["password_hash"]):
+        rate_limit.record_login_failure(body.email, client_ip)
+        # Deliberately identical for "no such user" and "wrong password" — a
+        # distinguishable response enumerates accounts.
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
+    rate_limit.record_login_success(body.email, client_ip)
     logger.info("user_login", email=body.email)
     return TokenResponse(access_token=create_access_token(str(user["_id"]), user["email"]))
+
+
+def _client_ip(request: Request) -> str:
+    """
+    Caller's address, honouring the proxy header.
+
+    Everything reaches this app through Cloudflare, so `request.client.host` is
+    always the tunnel and would collapse every user onto one bucket — the first
+    person to trip the limit would lock out everybody. `CF-Connecting-IP` is set
+    by Cloudflare and cannot be spoofed past it; the chain order for
+    X-Forwarded-For is left-most = original client.
+    """
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 @router.get("/me")

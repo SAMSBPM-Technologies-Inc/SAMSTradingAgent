@@ -11,19 +11,23 @@ this process is holding a dead socket.
 
 `restart_gateway()` restarts the gateway container. It is the only thing that
 helps when the gateway itself is unauthenticated — after IBKR's weekend
-maintenance, or a 2FA prompt nobody answered — and it is **off by default**,
-because restarting a sibling container requires the host Docker socket inside
-the API container, which is effectively root on the host.
+maintenance, or a 2FA prompt nobody answered.
 
-Enable it only if you want that trade: set `ALLOW_GATEWAY_RESTART=true` and
-mount the socket (see docker-compose.prod.yml). The runbook in
-`runbooks/ib-gateway-offline.md` covers doing it over SSH instead, which needs
-no such grant.
+It goes through a **filtered Docker proxy**, never the host socket. Handing this
+container the raw socket would be root on the host; the proxy answers only the
+container endpoints and refuses images, volumes, networks, exec and the rest.
+That is a much smaller grant, not zero — see the `dockerproxy` service in
+docker-compose.prod.yml for exactly what it allows.
+
+Still gated on `ALLOW_GATEWAY_RESTART` so a deployment can decline the capability
+entirely. `runbooks/ib-gateway-offline.md` covers recovering over SSH, which
+needs no grant at all.
 """
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
+
+import httpx
 
 from app.config import get_settings
 from app.services import broker as ibkr
@@ -35,7 +39,9 @@ logger = get_logger(__name__)
 #: present this rather than implying the session is back the moment we return.
 GATEWAY_LOGIN_SECONDS = 120
 
-_DOCKER_SOCKET = "/var/run/docker.sock"
+#: Docker's own default stop timeout before it escalates to SIGKILL. IB Gateway
+#: is a JVM and wants a moment to shut down cleanly.
+_RESTART_TIMEOUT_SECONDS = 30
 
 
 class GatewayControlUnavailable(RuntimeError):
@@ -99,15 +105,13 @@ def restart_available() -> tuple[bool, str]:
     if not settings.allow_gateway_restart:
         return False, (
             "Gateway restart is disabled on this server. Set "
-            "ALLOW_GATEWAY_RESTART=true and mount the Docker socket to enable it, "
-            "or restart the container over SSH."
+            "ALLOW_GATEWAY_RESTART=true to enable it, or restart the container "
+            "over SSH — see runbooks/ib-gateway-offline.md."
         )
-    import os
-
-    if not os.path.exists(_DOCKER_SOCKET):
+    if not settings.docker_proxy_url:
         return False, (
-            "ALLOW_GATEWAY_RESTART is set but the Docker socket is not mounted "
-            "into this container, so it cannot reach the gateway."
+            "ALLOW_GATEWAY_RESTART is set but DOCKER_PROXY_URL is empty, so there "
+            "is no Docker endpoint to reach the gateway through."
         )
     return True, ""
 
@@ -127,26 +131,43 @@ async def restart_gateway() -> RecoveryResult:
 
     settings = get_settings()
     name = settings.gateway_container_name
+    url = f"{settings.docker_proxy_url.rstrip('/')}/containers/{name}/restart"
 
-    # Talked to over the socket with curl rather than pulling in the docker SDK
-    # for one call. The API image already has neither; this keeps the dependency
-    # surface where it is.
-    proc = await asyncio.create_subprocess_exec(
-        "curl", "--silent", "--show-error", "--fail",
-        "--unix-socket", _DOCKER_SOCKET,
-        "-X", "POST",
-        f"http://localhost/containers/{name}/restart?t=30",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await proc.communicate()
-
-    if proc.returncode != 0:
-        message = (stderr or b"").decode().strip() or f"exit {proc.returncode}"
-        logger.error("gateway_restart_failed", container=name, error=message)
+    # Plain HTTP to the filtered proxy — no docker SDK, no unix socket, and
+    # nothing added to the image's dependency surface.
+    try:
+        async with httpx.AsyncClient(timeout=_RESTART_TIMEOUT_SECONDS + 15) as client:
+            resp = await client.post(url, params={"t": _RESTART_TIMEOUT_SECONDS})
+    except Exception as exc:
+        logger.error("gateway_restart_unreachable", container=name, error=str(exc))
         return RecoveryResult(
             action="restart", connected=False,
-            detail=f"Could not restart {name}: {message}",
+            detail=f"Could not reach the Docker proxy to restart {name}: {exc}",
+        )
+
+    # 204 is success. 404 means the container name is wrong, and 403 means the
+    # proxy refused the endpoint — distinct problems worth distinguishing.
+    if resp.status_code == 404:
+        logger.error("gateway_restart_container_missing", container=name)
+        return RecoveryResult(
+            action="restart", connected=False,
+            detail=f"No container named {name}. Check GATEWAY_CONTAINER_NAME.",
+        )
+    if resp.status_code in (401, 403):
+        logger.error("gateway_restart_forbidden", container=name, status=resp.status_code)
+        return RecoveryResult(
+            action="restart", connected=False,
+            detail=(
+                "The Docker proxy refused the restart. It needs CONTAINERS=1 and "
+                "POST=1 — see the dockerproxy service in docker-compose.prod.yml."
+            ),
+        )
+    if resp.status_code >= 400:
+        body = (resp.text or "").strip()[:200]
+        logger.error("gateway_restart_failed", container=name, status=resp.status_code, body=body)
+        return RecoveryResult(
+            action="restart", connected=False,
+            detail=f"Could not restart {name}: HTTP {resp.status_code} {body}",
         )
 
     logger.info("gateway_restart_requested", container=name)

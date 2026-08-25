@@ -14,6 +14,61 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.3.0] — 2026-08-24
+
+Closes the security and operability items carried since 1.1.0.
+
+### Added
+
+- **Login rate limiting.** `/auth/login` had no limit of any kind — a known
+  email could be guessed against as fast as the network allowed. Sliding window
+  per email *and* per client address, both of which must pass: the first stops a
+  slow grind against one account from many addresses, the second stops one
+  address spraying many accounts. 8 attempts per 5 minutes, then a 15-minute
+  lockout. A success clears the email's history so a user who mistypes twice
+  carries no penalty; the client key is *not* cleared, because one valid
+  credential should not buy an address unlimited guesses at every other account.
+  Client identity comes from `CF-Connecting-IP` — everything arrives through
+  Cloudflare, so `request.client.host` is always the tunnel and would collapse
+  every user into one bucket.
+- **The placeholder JWT secret is now impossible to miss.** `JWT_SECRET_KEY` is
+  never injected by the deploy and `.env.production` persists on the server, so
+  "never set" persisted silently while the app fell back to a value committed to
+  this repo — anyone reading the source could forge a token for any user and
+  reach order placement. Now logged at critical on startup, reported as
+  `auth_secret_is_default` on `/health` (unauthenticated, deliberately — a
+  forgeable signer makes auth meaningless anyway), and the deploy generates a
+  real key when it finds the placeholder or nothing.
+- **Unconfigured alerting is surfaced.** The broker watch job sends nothing when
+  no Slack/WhatsApp channel is set, which is exactly how an outage goes
+  unnoticed. The Broker panel now says so and links to Profile → Alerts.
+
+### Changed
+
+- **The gateway restart no longer needs the host Docker socket.** It goes
+  through a `docker-socket-proxy` sidecar that holds the socket read-only and
+  answers only the container endpoints — images, volumes, networks, exec, swarm
+  and system are refused, and the proxy is never published to the host. This is
+  a much smaller grant than the raw socket, *not* a precise "restart only"
+  capability, and the compose comments say so rather than overselling it. Still
+  gated behind `ALLOW_GATEWAY_RESTART` so a deployment can decline entirely.
+  The restart call distinguishes a refused endpoint (403) from a missing
+  container (404), which are different problems.
+
+### Known gaps
+
+- The restart path has **still never been exercised against a live Docker
+  daemon** — only its refusal behaviour is tested.
+- Rate-limit counters are in-process: they reset on restart, and a second API
+  replica would keep its own. Fine for a single container, and the module says
+  so rather than leaving it to be discovered.
+- `JWT_SECRET_KEY` on the existing server has not been inspected. If it was
+  already set by hand, nothing changes; if it was the placeholder, the next
+  deploy replaces it and **all existing sessions are invalidated** — sign in
+  again.
+
+---
+
 ## [1.2.0] — 2026-08-24
 
 ### Added

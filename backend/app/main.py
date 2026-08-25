@@ -25,6 +25,41 @@ setup_logging()
 logger = get_logger(__name__)
 
 
+def _check_jwt_secret() -> bool:
+    """
+    Refuse to let a placeholder token-signing key pass unnoticed.
+
+    `JWT_SECRET_KEY` is not injected by the deploy workflow, and
+    `.env.production` persists on the server — so it is set by hand or not at
+    all, and "not at all" silently works. Anyone who reads the repo can then
+    forge a token for any user id and reach every endpoint, order placement
+    included.
+
+    Deliberately not fatal. Killing startup over this would take the API down
+    for a config problem, and an outage caused by a safety check is still an
+    outage. It is logged as critical and surfaced on /health instead, so it is
+    visible without being weaponised — and `scripts/` deploys fail the check
+    before it ever ships.
+
+    Returns True when the secret is the placeholder.
+    """
+    from app.config import DEFAULT_JWT_SECRET
+
+    settings = get_settings()
+    if settings.jwt_secret_key != DEFAULT_JWT_SECRET:
+        return False
+
+    logger.critical(
+        "jwt_secret_is_default",
+        impact="tokens can be forged by anyone with the source — every endpoint, "
+               "including order placement, is reachable without credentials",
+        fix="set JWT_SECRET_KEY in .env.production to a strong random value "
+            "(openssl rand -hex 32) and restart the api container",
+        note="existing sessions are invalidated when it changes; sign in again",
+    )
+    return True
+
+
 async def _check_owner_account() -> None:
     """Log a warning on startup if no user accounts exist yet.
     Run scripts/create_user.py to create the first account.
@@ -40,6 +75,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Startup / shutdown sequence."""
     # ── Startup ───────────────────────────────────────────────────────────────
     logger.info("app_starting")
+    _check_jwt_secret()
     await connect_db()
     await _check_owner_account()
     start_scheduler()
@@ -97,7 +133,7 @@ def create_app() -> FastAPI:
             "Ingests market data, computes technical indicators, generates "
             "risk scores, and produces BUY/SELL/HOLD signals."
         ),
-        version="1.2.0",
+        version="1.3.0",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
