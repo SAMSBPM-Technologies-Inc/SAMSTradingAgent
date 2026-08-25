@@ -14,6 +14,80 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.5.1] — 2026-08-25
+
+### Fixed
+
+- **Orders now notify on WhatsApp and Slack, not just email.** Trades were the
+  only event that emailed and nothing else — signal flips, gateway outages and
+  the daily digest all reached chat, so the notification that matters most
+  (money moved) arrived on the slowest channel. `notify_on_trade` now gates all
+  three channels together; it was never meant to be an email-only switch, and
+  the WhatsApp and Slack credentials are the same ones the signal alerts
+  already use. Nothing to configure if WhatsApp is already set up.
+  - The chat message carries the same numbers as the email — side, quantity,
+    limit, notional, stop and target with their distances and reward:risk —
+    led by PAPER/LIVE, because that is the one thing that has to be legible at
+    a glance on a phone.
+  - Channels dispatch independently: a dead SMTP host no longer swallows the
+    WhatsApp message.
+
+- **A dead WhatsApp API key looked exactly like a delivered message.**
+  CallMeBot answers an invalid key with `203 Non-Authoritative Information` and
+  puts the real outcome in the HTML body. The check was `if status != 200:
+  warn`, so it missed every genuine failure *and* would have cried wolf on
+  successes — 203 is also what a delivered message returns. The body is now
+  what gets inspected.
+  - **Send test reports the truth.** It previously appended "whatsapp" to the
+    success list unconditionally, so the button confirmed a channel that was
+    not working. It now sends through the low-level sender and surfaces
+    CallMeBot's actual refusal, alongside the SMTP reason it already showed.
+  - A half-configured channel (number but no key, or the reverse) is reported
+    as incomplete rather than skipped in silence.
+  - Failure reasons no longer echo the alert text back into logs or the UI —
+    CallMeBot repeats the whole outgoing message before saying what went wrong.
+    Logged phone numbers are masked to their last four digits.
+
+### Added
+
+- **A second notification when the order actually fills.** Submission and
+  execution are different events and only one of them involves a price you
+  really paid, so both are now sent:
+  - *Order placed* — what was asked for, at what limit. Reworded: it used to
+    say "Bought 57 HXL", which was not true until something filled.
+  - *Filled* — the executed price, the cash it cost, and how it compared with
+    your limit. The comparison is unsigned with the direction in words
+    ("$0.02 better"), because a minus sign next to "better" makes a reader stop
+    and decode it.
+  - *Closed* — realised P&L as the headline, since that is the only question an
+    exit answers. A close that cannot be priced says so instead of reporting
+    zero.
+  - Partial fills are announced once, with how much is still working. A
+    scale-in add is announced as the shares *added*, not the new total.
+  - `notify_on_fill` gates these, separately from `notify_on_trade`. Both
+    default on. Separate because "tell me when it happened, not when you tried"
+    is a reasonable preference that one switch could not express.
+  - Each message is claimed atomically before sending, so overlapping
+    reconciler passes cannot announce the same fill twice.
+
+### Known gaps
+
+- **Fill notifications are as timely as the reconciler**, which runs every two
+  minutes — so a fill is reported up to two minutes late. Nothing pushes fills
+  to us; this is polling, not a stream.
+- **A position closed on an earlier day cannot be priced.** IB only serves
+  same-session executions, so those arrive as "Closed HXL" with no P&L rather
+  than a fabricated number.
+- **`notify_on_trade`, `notify_on_fill` and `trade_email` are not on the
+  profile screen.** All three exist in the API, default sensibly, and survive a
+  save untouched, but neither client renders a control — changing them needs an
+  API call.
+- **UNRECONCILED trades notify nothing.** A record the broker has no memory of
+  is closed silently; there is genuinely nothing truthful to say about it, but
+  it does mean a vanished position is only visible in the logs.
+
+---
+
 ## [1.5.0] — 2026-08-24
 
 You can now add to a position you already hold. Holding a stock was never a

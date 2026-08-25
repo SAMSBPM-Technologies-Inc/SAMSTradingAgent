@@ -22,10 +22,15 @@ class AlertSettings(BaseModel):
     notify_on_signal_flip: bool = True
     notify_on_high_conviction: bool = True
     daily_digest: bool = False
-    # Emailed on every order the agent submits. Defaults on: the whole point of
-    # the channel is that automated trades are otherwise invisible until you
-    # happen to open the dashboard.
+    # Sent when the agent submits an order. Defaults on: the whole point of the
+    # channel is that automated trades are otherwise invisible until you happen
+    # to open the dashboard.
     notify_on_trade: bool = True
+    # Sent when that order actually executes, and when a position closes with
+    # its realised P&L. Gated separately from submission on purpose — "tell me
+    # when it happened, not when you tried" is a reasonable thing to want, and
+    # one switch could not express it.
+    notify_on_fill: bool = True
     # Optional override; blank sends to the account email.
     trade_email: Optional[str] = None
 
@@ -41,6 +46,7 @@ async def get_alert_settings(current_user: dict = Depends(get_current_user)) -> 
         notify_on_high_conviction=prefs.get("notify_on_high_conviction", True),
         daily_digest=prefs.get("daily_digest", False),
         notify_on_trade=prefs.get("notify_on_trade", True),
+        notify_on_fill=prefs.get("notify_on_fill", True),
         trade_email=prefs.get("trade_email"),
     )
 
@@ -59,6 +65,7 @@ async def update_alert_settings(
         "notify_on_high_conviction": body.notify_on_high_conviction,
         "daily_digest": body.daily_digest,
         "notify_on_trade": body.notify_on_trade,
+        "notify_on_fill": body.notify_on_fill,
         "trade_email": (body.trade_email or "").strip() or None,
     }
     await db[COLL_USERS].update_one(
@@ -105,23 +112,27 @@ async def send_test_alert(current_user: dict = Depends(get_current_user)) -> dic
         )
         sent.append("slack")
 
+    # WhatsApp goes through the low-level sender rather than send_signal_alert,
+    # because only the low-level one reports whether CallMeBot accepted it.
+    # Reporting "whatsapp" as sent regardless is what let a dead API key look
+    # healthy — the button said it worked, and the message never arrived.
     phone = prefs.get("whatsapp_phone")
     apikey = prefs.get("whatsapp_apikey")
     if phone and apikey:
-        await send_signal_alert(
-            webhook_url=None,
-            ticker="TEST",
-            old_signal="HOLD",
-            new_signal="BUY",
-            score=0.74,
-            conviction="HIGH",
-            confidence=0.81,
-            price_target=35.0,
-            stop_loss=28.5,
-            whatsapp_phone=phone,
-            whatsapp_apikey=apikey,
+        from app.services.notifier import _whatsapp_send
+        reason = await _whatsapp_send(
+            phone, apikey,
+            "✅ SAMSBPM Trading Agent — WhatsApp notifications are working.\n"
+            "Order placed, order filled, and position closed alerts will arrive here.",
         )
-        sent.append("whatsapp")
+        if reason:
+            errors["whatsapp"] = reason
+        else:
+            sent.append("whatsapp")
+    elif phone or apikey:
+        errors["whatsapp"] = (
+            "incomplete — CallMeBot needs both a phone number and an API key"
+        )
 
     if not sent and not errors:
         return {"status": "no_channels", "message": "No notification channels configured."}

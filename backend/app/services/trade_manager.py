@@ -236,10 +236,19 @@ async def _get_user_settings(user_id) -> AutoTradeSettings | None:
     return AutoTradeSettings(**raw)
 
 
-async def _trade_email_recipient(user_id) -> str:
+async def _trade_notify_targets(user_id, event: str = "submit") -> dict:
     """
-    Address for trade notifications: the alert_settings override if set,
-    otherwise the account email. Returns "" when the user has opted out.
+    Every channel this user wants notifications on, for one kind of event.
+
+    Email address is the alert_settings override if set, otherwise the account
+    email; Slack and WhatsApp come from the same alert_settings the signal
+    alerts read.
+
+    Submission and fill are gated separately, and deliberately so: "tell me when
+    it actually happened, not when you tried" is a reasonable thing to want, and
+    a single master switch could not express it. Both default on.
+
+    Returns an empty dict when the user has opted out or does not exist.
     """
     from bson import ObjectId
     from bson.errors import InvalidId
@@ -255,23 +264,131 @@ async def _trade_email_recipient(user_id) -> str:
         {"_id": {"$in": candidates}}, {"email": 1, "alert_settings": 1}
     )
     if not user:
-        return ""
+        return {}
     prefs = user.get("alert_settings") or {}
-    if not prefs.get("notify_on_trade", True):
-        return ""
-    return (prefs.get("trade_email") or user.get("email") or "").strip()
+    flag = "notify_on_fill" if event == "fill" else "notify_on_trade"
+    if not prefs.get(flag, True):
+        return {}
+    return {
+        "email": (prefs.get("trade_email") or user.get("email") or "").strip(),
+        "webhook_url": prefs.get("slack_webhook_url") or None,
+        "whatsapp_phone": prefs.get("whatsapp_phone") or None,
+        "whatsapp_apikey": prefs.get("whatsapp_apikey") or None,
+    }
 
 
 async def _notify_trade(user_id, **kwargs) -> None:
-    """Email the user that an order went out. Never raises."""
+    """
+    Tell the user an order went out, on every channel they configured.
+
+    Each channel is dispatched independently: a dead SMTP host must not swallow
+    the WhatsApp message, which is the fast one and the reason the user is
+    holding a phone rather than an inbox.
+    """
     try:
-        to = await _trade_email_recipient(user_id)
-        if not to:
-            return
-        from app.services.notifier import send_trade_email
-        await send_trade_email(to, **kwargs)
+        targets = await _trade_notify_targets(user_id)
     except Exception as exc:
-        logger.warning("trade_email_failed", user_id=str(user_id), error=str(exc))
+        logger.warning("trade_notify_lookup_failed", user_id=str(user_id), error=str(exc))
+        return
+    if not targets:
+        return
+
+    from app.services.notifier import send_trade_alert, send_trade_email
+
+    if targets["email"]:
+        try:
+            await send_trade_email(targets["email"], **kwargs)
+        except Exception as exc:
+            logger.warning("trade_email_failed", user_id=str(user_id), error=str(exc))
+
+    if targets["webhook_url"] or (targets["whatsapp_phone"] and targets["whatsapp_apikey"]):
+        try:
+            await send_trade_alert(
+                webhook_url=targets["webhook_url"],
+                whatsapp_phone=targets["whatsapp_phone"],
+                whatsapp_apikey=targets["whatsapp_apikey"],
+                **kwargs,
+            )
+        except Exception as exc:
+            logger.warning("trade_chat_alert_failed", user_id=str(user_id), error=str(exc))
+
+
+async def _claim_notification(trade_id, key: str) -> bool:
+    """
+    Win the right to send one notification about one trade event, exactly once.
+
+    The reconciler is not serialised with itself: a pass that outruns its
+    two-minute interval overlaps the next one, and both would read the same
+    PENDING record, both write FILLED, and both tell the user. So the claim *is*
+    the write — `$addToSet` under a filter requiring the key to be absent is
+    atomic in Mongo, and only the caller whose write matched may send.
+
+    Keyed rather than a boolean per event because one record can legitimately
+    fill more than once: a scale-in adds to the position it already holds, and
+    each add is a real fill the user wants to hear about, so the key carries the
+    order id. `notified_events` therefore grows by one short string per fill,
+    which is bounded by how many times a position is added to.
+
+    Returns False if someone else already claimed it, or if the claim itself
+    failed: a missed notification is recoverable, a duplicate one at 3am is not.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        oid = ObjectId(str(trade_id))
+    except (InvalidId, TypeError):
+        return False
+    try:
+        db = await get_db()
+        res = await db[COLL_TRADES].update_one(
+            {"_id": oid, "notified_events": {"$ne": key}},
+            {"$addToSet": {"notified_events": key}},
+        )
+        return res.modified_count == 1
+    except Exception as exc:
+        logger.warning("notification_claim_failed", key=key, error=str(exc))
+        return False
+
+
+async def _notify_fill(trade: dict, *, event_key: str | None = None, **kwargs) -> None:
+    """
+    Tell the user an order actually executed — the second half of the pair.
+
+    Submission only proves the agent acted. This is the message that carries a
+    price that was really paid, and on an exit, the realised P&L. Claimed before
+    sending so a reconciler retry cannot repeat it. Never raises: the reconciler
+    must finish reconciling whatever the notifier does.
+    """
+    key = event_key or ("close" if kwargs.get("kind") == "exit" else kwargs.get("kind", "fill"))
+    try:
+        if not await _claim_notification(trade.get("_id"), key):
+            return
+        targets = await _trade_notify_targets(trade.get("user_id"), event="fill")
+    except Exception as exc:
+        logger.warning("fill_notify_lookup_failed", error=str(exc))
+        return
+    if not targets:
+        return
+
+    from app.services.notifier import send_fill_alert, send_fill_email
+
+    if targets["email"]:
+        try:
+            await send_fill_email(targets["email"], **kwargs)
+        except Exception as exc:
+            logger.warning("fill_email_failed", error=str(exc))
+
+    if targets["webhook_url"] or (targets["whatsapp_phone"] and targets["whatsapp_apikey"]):
+        try:
+            await send_fill_alert(
+                webhook_url=targets["webhook_url"],
+                whatsapp_phone=targets["whatsapp_phone"],
+                whatsapp_apikey=targets["whatsapp_apikey"],
+                **kwargs,
+            )
+        except Exception as exc:
+            logger.warning("fill_chat_alert_failed", error=str(exc))
 
 
 async def _get_user_account_id(user_id: str) -> str:
@@ -1331,6 +1448,21 @@ async def _settle_pending_add(
         ticker=ticker, prior_qty=prior_qty, held_qty=actual, added=added,
         entry_price=update.get("entry_price"), protected=bool(protected),
     )
+    if added > 0:
+        # An add is a real fill and gets its own message — but it reports the
+        # shares *added*, not the whole holding, because that is what just
+        # happened. The claim key carries the add's order id so a position
+        # scaled into twice is announced twice.
+        await _notify_fill(
+            trade,
+            event_key=f"fill:{add_order_id}",
+            kind="entry", action="BUY", ticker=ticker,
+            qty=added, fill_price=add_price,
+            limit_price=pending.get("limit_price"),
+            stop_loss=update.get("stop_loss") or trade.get("stop_loss"),
+            take_profit=update.get("take_profit") or trade.get("take_profit"),
+            is_paper=not get_settings().is_live_trading,
+        )
     return True
 
 
@@ -1518,6 +1650,26 @@ async def reconcile_trades() -> dict:
                 ticker=trade.get("ticker"), order_id=str(order_id),
                 status=update.get("status"), fill_price=update.get("entry_price"),
             )
+            # Only entries and partials are announced here. A dead order is not
+            # a fill, and a filled *exit* is announced by phase 3 with its P&L,
+            # which is the number that makes an exit worth reading about.
+            if update.get("status") in (TradeStatus.FILLED, TradeStatus.PARTIAL) \
+                    and trade.get("action") == "BUY":
+                partial = update["status"] == TradeStatus.PARTIAL
+                await _notify_fill(
+                    trade,
+                    event_key=f"partial:{order_id}" if partial else f"fill:{order_id}",
+                    kind="partial" if partial else "entry",
+                    action="BUY",
+                    ticker=trade.get("ticker"),
+                    qty=update.get("filled_qty") or trade.get("qty"),
+                    ordered_qty=trade.get("qty"),
+                    fill_price=update.get("entry_price") or trade.get("limit_price"),
+                    limit_price=trade.get("limit_price"),
+                    stop_loss=trade.get("stop_loss"),
+                    take_profit=trade.get("take_profit"),
+                    is_paper=not get_settings().is_live_trading,
+                )
 
     # ── Phase 2: recover fills the order status pass could not see ───────────
     try:
@@ -1577,6 +1729,17 @@ async def reconcile_trades() -> dict:
             "trade_fill_recovered",
             ticker=trade.get("ticker"), order_id=str(trade.get("order_id")),
             qty=qty, price=update["entry_price"],
+        )
+        # Same claim key as phase 1 would have used, so a fill that both passes
+        # see is announced once, not twice.
+        await _notify_fill(
+            trade,
+            event_key=f"fill:{trade.get('order_id')}",
+            kind="entry", action="BUY", ticker=trade.get("ticker"),
+            qty=qty, fill_price=update["entry_price"],
+            limit_price=trade.get("limit_price"),
+            stop_loss=trade.get("stop_loss"), take_profit=trade.get("take_profit"),
+            is_paper=not get_settings().is_live_trading,
         )
 
     # ── Phase 2b: settle scale-ins and re-protect what is uncovered ──────────
@@ -1676,6 +1839,19 @@ async def reconcile_trades() -> dict:
             "trade_closed",
             ticker=ticker, entry=entry_price, exit=update.get("exit_price"),
             pnl=update.get("pnl"), reason=update["exit_reason"],
+        )
+        await _notify_fill(
+            trade,
+            event_key="close",
+            kind="exit", action="SELL", ticker=ticker, qty=qty,
+            fill_price=update.get("exit_price"),
+            entry_price=float(entry_price) if entry_price else None,
+            pnl=update.get("pnl"),
+            exit_reason=(
+                "stop or target" if update["exit_reason"] == "bracket_or_manual"
+                else "closed — exit price unavailable"
+            ),
+            is_paper=not get_settings().is_live_trading,
         )
 
     if any(summary.values()):
