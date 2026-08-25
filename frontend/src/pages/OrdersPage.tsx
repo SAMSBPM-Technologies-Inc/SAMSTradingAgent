@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
-import { formatDate, formatTime, relativeTime } from '../lib/format'
+import { dateKey, formatDate, formatTime, relativeTime } from '../lib/format'
 import type { Proposal, TradeRecord } from '../types'
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
@@ -70,13 +70,91 @@ function StatusPill({ status }: { status: string }) {
 }
 
 /** How an order came to exist — the distinction the performance page rests on. */
-function SourceLabel({ signalType }: { signalType?: string | null }) {
-  const label = signalType === 'MANUAL' ? 'You'
-    : signalType === 'PROPOSAL_APPROVED' ? 'Approved'
-    : signalType ? 'Agent'
-    : '—'
-  return <span className="text-[0.65rem] text-[var(--color-fg-muted)]">{label}</span>
+type SourceKey = 'AGENT' | 'APPROVED' | 'YOU'
+const SOURCE_LABEL: Record<SourceKey, string> = { AGENT: 'Agent', APPROVED: 'Approved', YOU: 'You' }
+
+function sourceKey(signalType?: string | null): SourceKey | null {
+  if (signalType === 'MANUAL') return 'YOU'
+  if (signalType === 'PROPOSAL_APPROVED') return 'APPROVED'
+  if (signalType) return 'AGENT'
+  return null
 }
+
+function SourceLabel({ signalType }: { signalType?: string | null }) {
+  const key = sourceKey(signalType)
+  return (
+    <span className="text-[0.65rem] text-[var(--color-fg-muted)]">
+      {key ? SOURCE_LABEL[key] : '—'}
+    </span>
+  )
+}
+
+// ── Order history: tabs + column filters ───────────────────────────────────────
+//
+// One status per tab rather than one "All" table with a status filter, because
+// the ten possible statuses (see TradeStatus in the backend) span three
+// different questions — is it open, is it a proposal awaiting you, is it a
+// guard's refusal — and a single sorted list buries that distinction. Filled
+// is the default: it's the tab that answers "what did the agent actually do".
+const STATUS_TABS: { key: string; label: string }[] = [
+  { key: 'FILLED', label: 'Filled' },
+  { key: 'PARTIAL', label: 'Partial' },
+  { key: 'PENDING', label: 'Pending' },
+  { key: 'PROPOSED', label: 'Proposed' },
+  { key: 'CLOSED', label: 'Closed' },
+  { key: 'CANCELLED', label: 'Cancelled' },
+  { key: 'SKIPPED', label: 'Skipped' },
+  { key: 'DECLINED', label: 'Declined' },
+  { key: 'REJECTED', label: 'Rejected' },
+  { key: 'UNRECONCILED', label: 'Unreconciled' },
+]
+
+interface OrderFilters {
+  dateFrom: string
+  dateTo: string
+  ticker: string
+  side: string
+  qtyMin: string
+  qtyMax: string
+  priceMin: string
+  priceMax: string
+  pnl: '' | 'gain' | 'loss'
+  source: string
+}
+
+const EMPTY_ORDER_FILTERS: OrderFilters = {
+  dateFrom: '', dateTo: '', ticker: '', side: '',
+  qtyMin: '', qtyMax: '', priceMin: '', priceMax: '', pnl: '', source: '',
+}
+
+function matchesOrderFilters(o: TradeRecord, f: OrderFilters): boolean {
+  if (f.dateFrom || f.dateTo) {
+    const key = dateKey(o.opened_at)
+    if (!key) return false
+    if (f.dateFrom && key < f.dateFrom) return false
+    if (f.dateTo && key > f.dateTo) return false
+  }
+  if (f.ticker && !o.ticker.toLowerCase().includes(f.ticker.trim().toLowerCase())) return false
+  if (f.side && o.action !== f.side) return false
+  if (f.qtyMin && !(o.qty >= Number(f.qtyMin))) return false
+  if (f.qtyMax && !(o.qty <= Number(f.qtyMax))) return false
+
+  const price = o.entry_price ?? o.limit_price ?? null
+  if (f.priceMin && (price == null || price < Number(f.priceMin))) return false
+  if (f.priceMax && (price == null || price > Number(f.priceMax))) return false
+
+  if (f.pnl === 'gain' && !(o.pnl != null && o.pnl > 0.005)) return false
+  if (f.pnl === 'loss' && !(o.pnl != null && o.pnl < -0.005)) return false
+
+  if (f.source && sourceKey(o.signal_type) !== f.source) return false
+
+  return true
+}
+
+const filterInputCls = 'w-full bg-transparent border border-[var(--color-border)] rounded ' +
+  'px-1.5 py-1 text-[11px] leading-tight text-[var(--color-fg)] ' +
+  'placeholder:text-[var(--color-fg-muted)] focus:outline-none focus:ring-1 ' +
+  'focus:ring-[#f2600c] focus:border-[#f2600c]'
 
 // ── Proposal queue ────────────────────────────────────────────────────────────
 
@@ -233,6 +311,37 @@ export default function OrdersPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [closing, setClosing] = useState<string | null>(null)
+  const [activeStatus, setActiveStatus] = useState<string>('FILLED')
+  const [orderFilters, setOrderFilters] = useState<OrderFilters>(EMPTY_ORDER_FILTERS)
+
+  const setOrderFilter = (key: keyof OrderFilters, value: string) =>
+    setOrderFilters((f) => ({ ...f, [key]: value }))
+  const hasActiveFilters = Object.values(orderFilters).some((v) => v !== '')
+  const clearOrderFilters = () => setOrderFilters(EMPTY_ORDER_FILTERS)
+
+  // Tab counts reflect the full history regardless of the column filters, so
+  // switching tabs never hides a status because a filter from a different one
+  // is still applied. Filled always shows even at zero — it's the default.
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const o of orders) counts[o.status] = (counts[o.status] ?? 0) + 1
+    return counts
+  }, [orders])
+  const visibleTabs = STATUS_TABS.filter((t) => t.key === 'FILLED' || (statusCounts[t.key] ?? 0) > 0)
+  const activeTabLabel = STATUS_TABS.find((t) => t.key === activeStatus)?.label ?? activeStatus
+
+  const sideOptions = useMemo(
+    () => Array.from(new Set(orders.map((o) => o.action))).sort(),
+    [orders],
+  )
+  const ordersInTab = useMemo(
+    () => orders.filter((o) => o.status === activeStatus),
+    [orders, activeStatus],
+  )
+  const filteredOrders = useMemo(
+    () => ordersInTab.filter((o) => matchesOrderFilters(o, orderFilters)),
+    [ordersInTab, orderFilters],
+  )
 
   const load = useCallback(async (spinner = false) => {
     if (spinner) setRefreshing(true)
@@ -433,63 +542,227 @@ export default function OrdersPage() {
                 </p>
               </div>
             ) : (
-              <div className="card overflow-hidden p-0">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm min-w-[44rem]">
-                    <thead>
-                      <tr className="border-b border-[var(--color-border)] text-[10.5px]
-                                     uppercase tracking-widest text-[var(--color-fg-muted)]">
-                        <th scope="col" className="text-left font-semibold px-4 py-2.5">Date (ET)</th>
-                        <th scope="col" className="text-left font-semibold px-3 py-2.5">Ticker</th>
-                        <th scope="col" className="text-left font-semibold px-3 py-2.5">Side</th>
-                        <th scope="col" className="text-right font-semibold px-3 py-2.5">Qty</th>
-                        <th scope="col" className="text-right font-semibold px-3 py-2.5">Price</th>
-                        <th scope="col" className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
-                        <th scope="col" className="text-left font-semibold px-3 py-2.5">Source</th>
-                        <th scope="col" className="text-left font-semibold px-4 py-2.5">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orders.map((o) => (
-                        <tr key={o.id} className="border-b border-[var(--color-border)]/50 last:border-0">
-                          <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] whitespace-nowrap">
-                            {/* Several orders can land in one session, so the
-                                clock time is what tells them apart. */}
-                            <div className="text-[var(--color-fg)]">{formatDate(o.opened_at)}</div>
-                            <div className="tabular-nums">{formatTime(o.opened_at)}</div>
-                          </td>
-                          <td className="px-3 py-3">
-                            <button
-                              onClick={() => navigate(`/ticker/${o.ticker}`)}
-                              className="font-semibold text-[var(--color-fg)] hover:text-brand-500"
-                              style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
-                            >
-                              {o.ticker}
-                            </button>
-                          </td>
-                          <td className="px-3 py-3 text-xs text-[var(--color-fg)]">{o.action}</td>
-                          <td className="px-3 py-3 text-right tabular-nums text-[var(--color-fg)]">
-                            {o.qty || '—'}
-                          </td>
-                          <td className="px-3 py-3 text-right tabular-nums text-[var(--color-fg-muted)]">
-                            {money(o.entry_price ?? o.limit_price ?? null)}
-                          </td>
-                          <td className="px-3 py-3 text-right"><Pnl value={o.pnl} /></td>
-                          <td className="px-3 py-3"><SourceLabel signalType={o.signal_type} /></td>
-                          <td className="px-4 py-3">
-                            <div className="flex flex-col gap-0.5">
-                              <StatusPill status={o.status} />
-                              {o.reason && (
-                                <span className="text-[0.6rem] text-[var(--color-fg-muted)] max-w-[16rem]">
-                                  {o.reason}
-                                </span>
-                              )}
+              <div className="flex flex-col gap-3">
+                <div role="tablist" aria-label="Order status" className="flex items-center gap-1 flex-wrap">
+                  {visibleTabs.map((t) => (
+                    <button
+                      key={t.key}
+                      role="tab"
+                      id={`order-tab-${t.key}`}
+                      aria-selected={activeStatus === t.key}
+                      aria-controls="order-history-panel"
+                      onClick={() => setActiveStatus(t.key)}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
+                        activeStatus === t.key
+                          ? 'bg-brand-500 text-white'
+                          : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
+                      }`}
+                    >
+                      {t.label}
+                      <span className={`ml-1.5 tabular-nums ${activeStatus === t.key ? 'opacity-80' : 'opacity-60'}`}>
+                        {statusCounts[t.key] ?? 0}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <div
+                  id="order-history-panel"
+                  role="tabpanel"
+                  aria-labelledby={`order-tab-${activeStatus}`}
+                  className="card overflow-hidden p-0"
+                >
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm min-w-[48rem]">
+                      <thead>
+                        <tr className="border-b border-[var(--color-border)] text-[10.5px]
+                                       uppercase tracking-widest text-[var(--color-fg-muted)]">
+                          <th scope="col" className="text-left font-semibold px-4 py-2.5">Date (ET)</th>
+                          <th scope="col" className="text-left font-semibold px-3 py-2.5">Ticker</th>
+                          <th scope="col" className="text-left font-semibold px-3 py-2.5">Side</th>
+                          <th scope="col" className="text-right font-semibold px-3 py-2.5">Qty</th>
+                          <th scope="col" className="text-right font-semibold px-3 py-2.5">Price</th>
+                          <th scope="col" className="text-right font-semibold px-3 py-2.5">P&amp;L</th>
+                          <th scope="col" className="text-left font-semibold px-3 py-2.5">Source</th>
+                          <th scope="col" className="text-left font-semibold px-4 py-2.5">Status</th>
+                        </tr>
+                        {/* One filter per column. Status has none of its own — the tab above is that filter. */}
+                        <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg)]/60">
+                          <td className="px-4 py-2 align-top">
+                            <div className="flex flex-col gap-1">
+                              <input
+                                type="date"
+                                aria-label="From date"
+                                value={orderFilters.dateFrom}
+                                onChange={(e) => setOrderFilter('dateFrom', e.target.value)}
+                                className={filterInputCls}
+                              />
+                              <input
+                                type="date"
+                                aria-label="To date"
+                                value={orderFilters.dateTo}
+                                onChange={(e) => setOrderFilter('dateTo', e.target.value)}
+                                className={filterInputCls}
+                              />
                             </div>
                           </td>
+                          <td className="px-3 py-2 align-top">
+                            <input
+                              type="text"
+                              aria-label="Filter by ticker"
+                              placeholder="Ticker"
+                              value={orderFilters.ticker}
+                              onChange={(e) => setOrderFilter('ticker', e.target.value)}
+                              className={filterInputCls}
+                            />
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <select
+                              aria-label="Filter by side"
+                              value={orderFilters.side}
+                              onChange={(e) => setOrderFilter('side', e.target.value)}
+                              className={filterInputCls}
+                            >
+                              <option value="">All</option>
+                              {sideOptions.map((a) => <option key={a} value={a}>{a}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="flex flex-col gap-1">
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                aria-label="Minimum quantity"
+                                placeholder="Min"
+                                value={orderFilters.qtyMin}
+                                onChange={(e) => setOrderFilter('qtyMin', e.target.value)}
+                                className={`${filterInputCls} text-right`}
+                              />
+                              <input
+                                type="number"
+                                inputMode="numeric"
+                                aria-label="Maximum quantity"
+                                placeholder="Max"
+                                value={orderFilters.qtyMax}
+                                onChange={(e) => setOrderFilter('qtyMax', e.target.value)}
+                                className={`${filterInputCls} text-right`}
+                              />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <div className="flex flex-col gap-1">
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                aria-label="Minimum price"
+                                placeholder="Min"
+                                value={orderFilters.priceMin}
+                                onChange={(e) => setOrderFilter('priceMin', e.target.value)}
+                                className={`${filterInputCls} text-right`}
+                              />
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                aria-label="Maximum price"
+                                placeholder="Max"
+                                value={orderFilters.priceMax}
+                                onChange={(e) => setOrderFilter('priceMax', e.target.value)}
+                                className={`${filterInputCls} text-right`}
+                              />
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <select
+                              aria-label="Filter by profit or loss"
+                              value={orderFilters.pnl}
+                              onChange={(e) => setOrderFilter('pnl', e.target.value as OrderFilters['pnl'])}
+                              className={filterInputCls}
+                            >
+                              <option value="">All</option>
+                              <option value="gain">Gain</option>
+                              <option value="loss">Loss</option>
+                            </select>
+                          </td>
+                          <td className="px-3 py-2 align-top">
+                            <select
+                              aria-label="Filter by source"
+                              value={orderFilters.source}
+                              onChange={(e) => setOrderFilter('source', e.target.value)}
+                              className={filterInputCls}
+                            >
+                              <option value="">All</option>
+                              <option value="AGENT">Agent</option>
+                              <option value="APPROVED">Approved</option>
+                              <option value="YOU">You</option>
+                            </select>
+                          </td>
+                          <td className="px-4 py-2 align-top text-right">
+                            {hasActiveFilters && (
+                              <button
+                                onClick={clearOrderFilters}
+                                className="text-[11px] text-[var(--color-fg-muted)]
+                                           hover:text-[var(--color-fg)] underline underline-offset-2
+                                           whitespace-nowrap"
+                              >
+                                Clear filters
+                              </button>
+                            )}
+                          </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {filteredOrders.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
+                              {hasActiveFilters
+                                ? 'No orders match these filters.'
+                                : `No ${activeTabLabel.toLowerCase()} orders.`}
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredOrders.map((o) => (
+                            <tr key={o.id} className="border-b border-[var(--color-border)]/50 last:border-0">
+                              <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] whitespace-nowrap">
+                                {/* Several orders can land in one session, so the
+                                    clock time is what tells them apart. */}
+                                <div className="text-[var(--color-fg)]">{formatDate(o.opened_at)}</div>
+                                <div className="tabular-nums">{formatTime(o.opened_at)}</div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <button
+                                  onClick={() => navigate(`/ticker/${o.ticker}`)}
+                                  className="font-semibold text-[var(--color-fg)] hover:text-brand-500"
+                                  style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
+                                >
+                                  {o.ticker}
+                                </button>
+                              </td>
+                              <td className="px-3 py-3 text-xs text-[var(--color-fg)]">{o.action}</td>
+                              <td className="px-3 py-3 text-right tabular-nums text-[var(--color-fg)]">
+                                {o.qty || '—'}
+                              </td>
+                              <td className="px-3 py-3 text-right tabular-nums text-[var(--color-fg-muted)]">
+                                {money(o.entry_price ?? o.limit_price ?? null)}
+                              </td>
+                              <td className="px-3 py-3 text-right"><Pnl value={o.pnl} /></td>
+                              <td className="px-3 py-3"><SourceLabel signalType={o.signal_type} /></td>
+                              <td className="px-4 py-3">
+                                <div className="flex flex-col gap-0.5">
+                                  <StatusPill status={o.status} />
+                                  {o.reason && (
+                                    <span className="text-[0.6rem] text-[var(--color-fg-muted)] max-w-[16rem]">
+                                      {o.reason}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
