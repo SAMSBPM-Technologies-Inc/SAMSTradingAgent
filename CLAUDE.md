@@ -135,6 +135,19 @@ npm run web
    two documented ways: no signal-score threshold (the human is the signal) and
    no whitelist (that restricts what the *agent* may pick).
 
+   **A stop protects a position; a bracket only protects an order.** That
+   distinction is the whole of scale-in. A `BUY` on a held ticker adds to the
+   existing position record — never a second record, because `execute_exit`
+   loads exactly one and would orphan the rest. The add goes out **unbracketed**
+   and the existing legs are **left working**; `reconcile_trades` then cancels
+   them and places one OCA pair (`place_protective_orders`) sized to what the
+   venue says is held. Two rules must not be broken: protective orders may never
+   cover more shares than are held (that sells into a short), and an add may
+   never loosen the stop already on the holding. `position_size_pct` caps the
+   *position* and is measured on cost basis, so a falling price cannot free up
+   room to average down. Same guard chain as any other entry — see
+   `_prepare_entry`. Verify with `runbooks/scale-in-paper-verification.md`.
+
    **Client quantities are requests.** `POST /trading/order` takes the smaller
    of the requested qty and what the risk model sizes to, so sizing cannot be
    escaped from a form field. Orders carry an `idempotency_key` — the unique

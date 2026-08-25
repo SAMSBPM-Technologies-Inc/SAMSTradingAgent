@@ -78,6 +78,63 @@ def _bracket_levels(
     return stop, target
 
 
+def _combined_bracket_levels(
+    *,
+    blended_entry: float,
+    current_price: float,
+    existing_stop: float | None,
+    existing_target: float | None,
+    analyst_stop: float | None,
+    analyst_target: float | None,
+) -> tuple[float | None, float | None]:
+    """
+    Resolve the stop and target for a position that just grew.
+
+    Two rules, and the first one is the whole point:
+
+    **A scale-in may never weaken the protection already on the holding.** The
+    naive move is to recompute from the new blended cost — but adding lower
+    drags the blended entry down, which drags a percentage-derived stop down
+    with it, and the shares bought first end up with a looser stop than they
+    had before the "improvement". So the combined stop is the *higher* of what
+    the blend implies and what is already working, and the target the higher of
+    the two likewise.
+
+    **The result must be live-able.** A stop at or above the current price
+    triggers the moment it reaches the venue and liquidates the position
+    instantly; a target at or below it fills into the spread. Both are rejected
+    outright rather than clamped, because a level quietly moved to somewhere it
+    was not chosen is not protection, and the caller can leave the existing
+    bracket alone — which is the safe failure.
+
+    Returns (stop, target), or (None, None) if no valid pair exists.
+    """
+    implied_stop, implied_target = _bracket_levels(
+        blended_entry, analyst_stop, analyst_target
+    )
+    if implied_stop is None or implied_target is None:
+        return None, None
+
+    stop = max(implied_stop, existing_stop or 0.0)
+    target = max(implied_target, existing_target or 0.0)
+
+    if not (stop < current_price < target):
+        logger.warning(
+            "scale_in_levels_unusable",
+            blended_entry=blended_entry, current_price=current_price,
+            stop=stop, target=target,
+            hint="combined stop/target would not straddle the live price",
+        )
+        return None, None
+    if not (stop < blended_entry < target):
+        logger.warning(
+            "scale_in_levels_straddle_failed",
+            blended_entry=blended_entry, stop=stop, target=target,
+        )
+        return None, None
+    return round(stop, 2), round(target, 2)
+
+
 #: Annualised volatility that `position_size_pct` is calibrated for. A name at
 #: this level gets exactly the configured size; quieter names get more, wilder
 #: names less, so each position carries comparable risk rather than comparable
@@ -361,6 +418,24 @@ class EntryPlan:
     account_id: str
     #: Set when the requested size was cut to what the account can actually fund.
     adjustment: str | None = None
+    #: Set when this order adds to a holding instead of opening one. Carries the
+    #: id of the position record to update — an add must never insert a second
+    #: record, because `execute_exit` loads exactly one and would leave the
+    #: remainder held, unprotected and unowned by any trade the agent can see.
+    add_to_trade_id: str | None = None
+    #: Shares already held. The protective legs must cover `qty + held_qty`.
+    held_qty: int = 0
+    #: Cost basis per share across the combined position, once this fills.
+    blended_entry: float | None = None
+
+    @property
+    def is_add(self) -> bool:
+        return self.add_to_trade_id is not None
+
+    @property
+    def total_qty(self) -> int:
+        """Shares held once this order fills — what protection must cover."""
+        return self.qty + self.held_qty
 
 
 async def _prepare_entry(
@@ -396,10 +471,42 @@ async def _prepare_entry(
         if ticker.upper() not in [t.upper() for t in settings.allowed_tickers]:
             return None, f"Ticker not in allowed list: {settings.allowed_tickers}"
 
-    # ── Guard: no duplicate open position ─────────────────────────────────────
+    # ── Existing position: add to it, or refuse ───────────────────────────────
+    # Holding a stock is not a reason to refuse buying more of it. What the
+    # refusal actually protected was the bracket: a second entry used to attach
+    # a second, independent stop and target to one holding, and `execute_exit`
+    # cancels every working order for the ticker but closes only the single
+    # record it loads — so an exit left the remainder held, unprotected, and
+    # invisible to the agent. Scaling in is that missing feature, not a relaxed
+    # guard: one position record, one bracket, sized to the whole holding.
+    add_to: dict | None = None
+    held_qty = 0
     existing = await _open_position(user_id, ticker)
     if existing is not None:
-        return None, _blocked_by_open_position(existing)
+        blocked = _blocked_by_open_position(existing)
+        if not get_settings().enable_scale_in:
+            return None, blocked
+        # Only a settled position can be added to. While the first entry is
+        # still working there is no fill price to blend, no held quantity to
+        # size legs against, and the resting order may yet fill or die — the
+        # combined bracket would be built on a guess.
+        if existing.get("status") != TradeStatus.FILLED:
+            return None, blocked
+        held_qty = int(existing.get("filled_qty") or existing.get("qty") or 0)
+        if held_qty < 1:
+            return None, blocked
+        # One add at a time. A second would cancel the bracket the first is
+        # waiting on, and the two orders would each believe they own the
+        # combined size.
+        working_add = existing.get("pending_add")
+        if working_add:
+            when = working_add.get("submitted_at")
+            when_str = when.strftime("%d %b %H:%M") if hasattr(when, "strftime") else "earlier"
+            return None, (
+                f"An add of {working_add.get('qty')} shares to {ticker} from "
+                f"{when_str} is still working. Wait for it to fill or cancel it."
+            )
+        add_to = existing
 
     # ── Guard: no duplicate outstanding proposal ──────────────────────────────
     # PROPOSED is deliberately not in TradeStatus.OPEN — a proposal commits
@@ -419,8 +526,13 @@ async def _prepare_entry(
         )
 
     # ── Guard: max open positions ─────────────────────────────────────────────
-    if await _count_open_positions(user_id) >= settings.max_open_positions:
-        return None, f"Max open positions reached ({settings.max_open_positions})"
+    # Skipped for an add: the cap counts positions, and adding to one does not
+    # create another. Applying it here would refuse every add once the book was
+    # full, which is backwards — concentrating into a name you already hold uses
+    # no new slot and is the cheaper risk of the two.
+    if add_to is None:
+        if await _count_open_positions(user_id) >= settings.max_open_positions:
+            return None, f"Max open positions reached ({settings.max_open_positions})"
 
     # ── Guard: broker connectivity ────────────────────────────────────────────
     if not ibkr.is_connected():
@@ -448,16 +560,59 @@ async def _prepare_entry(
     sized_qty = _calculate_qty(price, equity, settings.position_size_pct, vol)
 
     adjustment: str | None = None
+
+    if add_to is not None:
+        # ── Guard: don't add into a position that is already failing ──────────
+        # The stop is the level at which this thesis is declared wrong. Buying
+        # more below it is not scaling in, it is overriding the exit you already
+        # decided on, and it is the single most reliable way to turn a bounded
+        # loss into an unbounded one.
+        existing_stop = float(add_to.get("stop_loss") or 0.0)
+        if existing_stop > 0 and price <= existing_stop:
+            return None, (
+                f"{ticker} is at ${price:,.2f}, at or below your stop of "
+                f"${existing_stop:,.2f}. Adding here would be averaging down "
+                f"through the level that says the thesis is wrong."
+            )
+
+        # ── Size against the POSITION, not the order ──────────────────────────
+        # position_size_pct caps how much of the account one name may represent.
+        # Sized per order it caps nothing: three 5% adds make a 15% position.
+        #
+        # Room is measured on COST BASIS, deliberately. On market value a
+        # falling position frees room as it falls, so the agent would buy more
+        # of a loser precisely as it got worse — mechanical averaging down,
+        # dressed up as risk sizing.
+        held_cost = held_qty * float(add_to.get("entry_price") or add_to.get("limit_price") or price)
+        max_dollars = equity * settings.position_size_pct * _volatility_size_factor(vol)
+        room = max_dollars - held_cost
+        room_qty = int(room / price) if price > 0 else 0
+        if room_qty < 1:
+            return None, (
+                f"Already at your full size for {ticker}: {held_qty:g} shares cost "
+                f"${held_cost:,.2f} against a {settings.position_size_pct:.0%} "
+                f"limit of ${max_dollars:,.2f}."
+            )
+        if room_qty < sized_qty:
+            adjustment = (
+                f"Adding {room_qty} shares to {held_qty:g} already held — the rest "
+                f"of a full-size order would breach your "
+                f"{settings.position_size_pct:.0%} limit for one name."
+            )
+        sized_qty = min(sized_qty, room_qty)
+
     if requested_qty is not None:
         # A client-supplied quantity is a request, never an instruction. Take
         # the smaller of what was asked for and what the risk model sizes to,
         # so the sizing rules cannot be escaped by editing a form field.
         qty = min(int(requested_qty), sized_qty) if sized_qty >= 1 else 0
         if qty < int(requested_qty):
-            adjustment = (
+            # Appended, not assigned: an add can already carry a note about the
+            # position cap, and overwriting it would hide why the size moved.
+            adjustment = " ".join(filter(None, [adjustment, (
                 f"Requested {int(requested_qty)} shares; reduced to {qty} to stay "
                 f"within your {settings.position_size_pct:.0%} position size."
-            )
+            )]))
     else:
         qty = sized_qty
 
@@ -504,25 +659,49 @@ async def _prepare_entry(
             user_id=user_id, ticker=ticker,
             requested_qty=qty, funded_qty=reduced, available=round(available, 2),
         )
-        adjustment = (
+        adjustment = " ".join(filter(None, [adjustment, (
             f"Reduced from {qty} to {reduced} shares — available funds "
             f"${available:,.2f}."
-        )
+        )]))
         qty = reduced
 
     # ── Protective exits ──────────────────────────────────────────────────────
-    stop_price, target_price = _bracket_levels(
-        limit_price, analyst_stop_loss, analyst_price_target
-    )
-    if stop_price is None or target_price is None:
-        # Refuse rather than open a position nothing will ever close. The
-        # app only sells on a SELL signal, which requires it to be running.
-        return None, "Could not derive a valid stop-loss — refusing unprotected entry"
+    blended_entry: float | None = None
+    if add_to is not None:
+        held_price = float(add_to.get("entry_price") or add_to.get("limit_price") or limit_price)
+        blended_entry = round(
+            (held_qty * held_price + qty * limit_price) / (held_qty + qty), 4
+        )
+        stop_price, target_price = _combined_bracket_levels(
+            blended_entry=blended_entry,
+            current_price=limit_price,
+            existing_stop=float(add_to.get("stop_loss") or 0.0) or None,
+            existing_target=float(add_to.get("take_profit") or 0.0) or None,
+            analyst_stop=analyst_stop_loss,
+            analyst_target=analyst_price_target,
+        )
+        if stop_price is None or target_price is None:
+            return None, (
+                f"Could not build a valid stop and target for the combined "
+                f"{held_qty + qty:g}-share position — leaving the existing "
+                f"bracket in place rather than replacing it with a worse one."
+            )
+    else:
+        stop_price, target_price = _bracket_levels(
+            limit_price, analyst_stop_loss, analyst_price_target
+        )
+        if stop_price is None or target_price is None:
+            # Refuse rather than open a position nothing will ever close. The
+            # app only sells on a SELL signal, which requires it to be running.
+            return None, "Could not derive a valid stop-loss — refusing unprotected entry"
 
     return EntryPlan(
         ticker=ticker, qty=qty, limit_price=limit_price,
         stop_price=stop_price, target_price=target_price,
         account_id=account_id, adjustment=adjustment,
+        add_to_trade_id=str(add_to["_id"]) if add_to is not None else None,
+        held_qty=held_qty,
+        blended_entry=blended_entry,
     ), None
 
 
@@ -542,6 +721,12 @@ async def _submit_entry(
     """
     now = utcnow()
     is_paper = not get_settings().is_live_trading
+
+    if plan.is_add:
+        return await _submit_add(
+            user_id, plan,
+            signal_score=signal_score, signal_type=signal_type, trigger=trigger,
+        )
 
     record = {
         "user_id": user_id, "ticker": plan.ticker, "action": "BUY",
@@ -586,6 +771,107 @@ async def _submit_entry(
         limit_price=plan.limit_price, order_id=order_id,
         stop_loss=plan.stop_price, take_profit=plan.target_price,
         is_paper=is_paper, account_id=plan.account_id, trigger=trigger,
+        signal_score=signal_score,
+    )
+    return trade_id, TradeStatus.PENDING, order_id
+
+
+async def _submit_add(
+    user_id: str,
+    plan: EntryPlan,
+    *,
+    signal_score: float | None,
+    signal_type: str,
+    trigger: str,
+) -> tuple[str, str, object | None]:
+    """
+    Add to a holding, without ever taking down the protection it already has.
+
+    The obvious implementation — cancel the old bracket, submit the add with
+    legs covering the combined position — is wrong twice over, and both faults
+    are worse than the problem being solved:
+
+      * **The cancel comes first, so the holding is naked while the add rests.**
+        A day limit order can sit unfilled for hours. Protection that was
+        working is gone for all of it.
+      * **Legs sized to the combined position over-protect a partial fill.** IB
+        activates a bracket's children when the parent *begins* to fill, so 30
+        of a 100-share add going through leaves a 550-share stop against 480
+        held. Firing it sells 70 shares that do not exist — a naked short, in an
+        account where shorting is prohibited outright.
+
+    So the existing bracket is left alone and the add goes out as a plain limit
+    order. Nothing is cancelled, nothing is over-covered, and if the add is
+    rejected there is nothing to undo. `reconcile_trades` consolidates once the
+    add resolves: it cancels the old legs and places one protective pair sized
+    to what is *actually* held.
+
+    The cost is a gap the other way — between the fill and the next
+    reconciliation pass (at most two minutes) the added shares have no stop,
+    while the original shares keep theirs. That is under-protection, which
+    costs market risk on part of a position for a couple of minutes.
+    Over-protection costs a short. They are not close.
+
+    Returns (trade_id, status, order_id), matching `_submit_entry`.
+    """
+    trade_id = plan.add_to_trade_id or ""
+    is_paper = not get_settings().is_live_trading
+    total_qty = plan.total_qty
+
+    # Deliberately unbracketed: the position's existing stop and target stay
+    # working and untouched, and consolidation happens after the fill.
+    order_id = await ibkr.place_limit_order(
+        plan.ticker, "BUY", plan.qty, plan.limit_price,
+        account_id=plan.account_id,
+    )
+
+    if order_id is None:
+        logger.warning(
+            "scale_in_rejected",
+            user_id=user_id, ticker=plan.ticker, qty=plan.qty,
+            hint="nothing was cancelled; the position keeps the bracket it had",
+        )
+        return trade_id, TradeStatus.REJECTED, None
+
+    # ── Record the pending add on the position ────────────────────────────────
+    # qty stays at what is actually held. It becomes `total_qty` only when the
+    # add fills, which reconcile settles — claiming 550 shares before the fill
+    # would size the next exit to stock we do not own.
+    # The stop and target the *combined* position should end up with are stored
+    # alongside the pending add rather than written over the live ones: until
+    # the add fills, the working bracket still covers only the original shares
+    # and `stop_loss`/`take_profit` must keep describing it. Claiming the new
+    # levels early would make an exit size itself against a bracket that is not
+    # there.
+    await _update_trade(trade_id, {
+        "pending_add": {
+            "qty": plan.qty,
+            "limit_price": plan.limit_price,
+            "order_id": order_id,
+            "total_qty": total_qty,
+            "blended_entry": plan.blended_entry,
+            "combined_stop": plan.stop_price,
+            "combined_target": plan.target_price,
+            "submitted_at": utcnow(),
+            "signal_score": signal_score,
+            "trigger": trigger,
+        },
+    })
+
+    logger.info(
+        "scale_in_submitted",
+        user_id=user_id, ticker=plan.ticker,
+        add_qty=plan.qty, held_qty=plan.held_qty, total_qty=total_qty,
+        limit_price=plan.limit_price, order_id=order_id,
+        stop_loss=plan.stop_price, take_profit=plan.target_price,
+        blended_entry=plan.blended_entry, paper=is_paper, trigger=trigger,
+    )
+    await _notify_trade(
+        user_id, action="BUY", ticker=plan.ticker, qty=plan.qty,
+        limit_price=plan.limit_price, order_id=order_id,
+        stop_loss=plan.stop_price, take_profit=plan.target_price,
+        is_paper=is_paper, account_id=plan.account_id,
+        trigger=f"{trigger} (adding to {plan.held_qty:g} held)",
         signal_score=signal_score,
     )
     return trade_id, TradeStatus.PENDING, order_id
@@ -820,6 +1106,16 @@ async def execute_exit(
             return
 
         qty = open_trade.get("qty", 0)
+        # A scale-in that filled between reconciliation passes has not yet been
+        # written back to `qty`, so the record can understate the holding. Add
+        # the pending quantity to what we claim to own — `min(qty, held)` below
+        # still keeps the sell inside what the venue actually reports, and the
+        # cap exists to avoid liquidating shares of the same ticker the user
+        # bought outside the agent. Without this a close sells the original 450
+        # and orphans the 100 just added, with its record marked closed.
+        pending_add = open_trade.get("pending_add") or {}
+        if pending_add:
+            qty += int(pending_add.get("qty") or 0)
         if qty < 1:
             return
 
@@ -944,6 +1240,196 @@ async def execute_exit(
 _CLOSURE_GRACE_MINUTES = 3
 
 
+async def _settle_pending_add(
+    trade: dict,
+    statuses: dict,
+    buys_by_order: dict,
+    held: dict,
+    account_id: str,
+) -> bool:
+    """
+    Finish a scale-in: adopt what actually filled, then make the protective
+    orders cover exactly what is held.
+
+    Called for every open trade on every reconciliation pass — two minutes is
+    the worst-case lifetime of the gap `_submit_add` deliberately accepts.
+
+    The consolidation is driven by the venue's position, never by the order we
+    sent. A partial fill, a cancel, and a full fill all end in the same place:
+    cancel whatever legs are working and place one pair sized to `held`. Sizing
+    protection from an order's intent rather than from the position is precisely
+    how a stop ends up selling shares that were never bought.
+
+    Returns True if anything changed.
+    """
+    pending = trade.get("pending_add")
+    if not pending:
+        return False
+
+    ticker = str(trade.get("ticker", "")).upper()
+    add_order_id = str(pending.get("order_id") or "")
+    st = statuses.get(add_order_id)
+
+    # Still working — leave it. `is_dead` covers cancelled/rejected/inactive.
+    if st is not None and not (st.is_filled or st.is_dead):
+        if not st.is_partial:
+            return False
+
+    actual = int(held.get(ticker, 0))
+    prior_qty = int(trade.get("filled_qty") or trade.get("qty") or 0)
+
+    if actual <= 0:
+        # The position is gone — the original bracket fired while the add was
+        # resting, or someone closed by hand. Cancel the add so it cannot open a
+        # fresh, unprotected position into a thesis that has already exited, and
+        # let phase 3 close the record.
+        await ibkr.cancel_open_orders(ticker, account_id=account_id)
+        await _update_trade(str(trade["_id"]), {"pending_add": None})
+        logger.warning(
+            "scale_in_abandoned_position_closed",
+            ticker=ticker, add_order_id=add_order_id,
+            hint="position exited while the add was still working",
+        )
+        return True
+
+    # Adopt the venue's quantity and blend the cost basis over what really
+    # filled, not over what was requested.
+    added = actual - prior_qty
+    update: dict = {"pending_add": None}
+    if added > 0:
+        prior_price = float(trade.get("entry_price") or trade.get("limit_price") or 0.0)
+        fills = buys_by_order.get(add_order_id) or []
+        if fills:
+            add_price = sum(f.qty * f.price for f in fills) / sum(f.qty for f in fills)
+        elif st is not None and st.avg_fill_price > 0:
+            add_price = st.avg_fill_price
+        else:
+            add_price = float(pending.get("limit_price") or prior_price)
+        update["qty"] = actual
+        update["filled_qty"] = actual
+        if prior_price > 0:
+            update["entry_price"] = round(
+                (prior_qty * prior_price + added * add_price) / actual, 4
+            )
+        update["scaled_in_at"] = utcnow()
+        update["scale_ins"] = int(trade.get("scale_ins") or 0) + 1
+
+    # Consolidate protection onto the real holding.
+    stop = float(pending.get("combined_stop") or trade.get("stop_loss") or 0.0)
+    target = float(pending.get("combined_target") or trade.get("take_profit") or 0.0)
+    protected = await _reprotect(ticker, actual, stop, target, account_id)
+    if protected:
+        update["stop_loss"] = round(stop, 2)
+        update["take_profit"] = round(target, 2)
+        update["unprotected_since"] = None
+    else:
+        update["unprotected_since"] = trade.get("unprotected_since") or utcnow()
+
+    await _update_trade(str(trade["_id"]), update)
+    logger.info(
+        "scale_in_settled",
+        ticker=ticker, prior_qty=prior_qty, held_qty=actual, added=added,
+        entry_price=update.get("entry_price"), protected=bool(protected),
+    )
+    return True
+
+
+async def _heal_unprotected(trade: dict, held: dict, account_id: str) -> bool:
+    """
+    Put protection back on a filled position that has none working.
+
+    Deliberately narrow. It acts only when the venue reports the shares held
+    *and* reports no working order of any kind for the ticker — an absence, not
+    a judgement. It never second-guesses a bracket that exists, never adjusts a
+    level, and refuses when the stored levels do not straddle nothing useful.
+
+    Skips a position with a pending add: `_settle_pending_add` owns that one,
+    and its resting buy order counts as working anyway.
+    """
+    if trade.get("action") != "BUY" or trade.get("closed_at") is not None:
+        return False
+    if trade.get("status") != TradeStatus.FILLED or trade.get("pending_add"):
+        return False
+
+    ticker = str(trade.get("ticker", "")).upper()
+    qty = int(held.get(ticker, 0))
+    if qty < 1:
+        return False  # not held — phase 3 decides what happened
+
+    stop = float(trade.get("stop_loss") or 0.0)
+    target = float(trade.get("take_profit") or 0.0)
+    if not (0 < stop < target):
+        # Nothing usable to restore. Recomputing a stop here would invent a
+        # level nobody chose, on a position that may be days old.
+        if not trade.get("unprotected_since"):
+            logger.warning(
+                "position_unprotected_no_levels",
+                ticker=ticker, qty=qty,
+                hint="no stop/target on the record — close or bracket by hand",
+            )
+        return False
+
+    if await ibkr.has_open_orders(ticker, account_id=account_id):
+        # Something is working. If we had flagged it, clear the flag.
+        if trade.get("unprotected_since"):
+            await _update_trade(str(trade["_id"]), {"unprotected_since": None})
+        return False
+
+    logger.warning(
+        "position_found_unprotected",
+        ticker=ticker, qty=qty, stop=stop, target=target,
+        since=str(trade.get("unprotected_since") or "just now"),
+    )
+    pair = await _reprotect(ticker, qty, stop, target, account_id)
+    await _update_trade(str(trade["_id"]), {
+        "unprotected_since": None if pair else (trade.get("unprotected_since") or utcnow()),
+    })
+    return bool(pair)
+
+
+async def _reprotect(
+    ticker: str, qty: int, stop: float, target: float, account_id: str
+) -> str | None:
+    """
+    Replace whatever is working on `ticker` with one stop/target pair for `qty`.
+
+    Cancel-then-place, with the cancellation confirmed. Placing first would put
+    two stops on one holding for the overlap, and cancelling without confirming
+    would do the same silently — a read-only gateway session refuses cancels
+    exactly as it refuses orders.
+
+    Returns the new pair's identifier, or None if the position was left
+    uncovered. A None here is a real exposure, not a warning: the caller stamps
+    `unprotected_since` so it is visible in the position record and retried on
+    the next pass.
+    """
+    if qty < 1 or not (0 < stop < target):
+        logger.error(
+            "reprotect_invalid", ticker=ticker, qty=qty, stop=stop, target=target,
+        )
+        return None
+
+    await ibkr.cancel_open_orders(ticker, account_id=account_id)
+    if await ibkr.has_open_orders(ticker, account_id=account_id):
+        logger.error(
+            "reprotect_aborted_orders_still_working",
+            ticker=ticker,
+            hint="old legs survived cancellation; not adding a second pair",
+        )
+        return None
+
+    pair = await ibkr.place_protective_orders(
+        ticker, qty, stop, target, account_id=account_id
+    )
+    if not pair:
+        logger.error(
+            "position_left_unprotected",
+            ticker=ticker, qty=qty, stop=stop, target=target,
+            hint="holding has no automatic exit; retried next reconciliation",
+        )
+    return pair
+
+
 async def reconcile_trades() -> dict:
     """
     Bring local trade records in line with what the broker actually did.
@@ -957,7 +1443,7 @@ async def reconcile_trades() -> dict:
     Returns a counts summary for logging. Never raises.
     """
     summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0,
-               "unpriced": 0, "unreconciled": 0}
+               "unpriced": 0, "unreconciled": 0, "scaled": 0, "reprotected": 0}
 
     if not ibkr.is_connected():
         logger.debug("reconcile_skipped_broker_disconnected")
@@ -1092,6 +1578,33 @@ async def reconcile_trades() -> dict:
             ticker=trade.get("ticker"), order_id=str(trade.get("order_id")),
             qty=qty, price=update["entry_price"],
         )
+
+    # ── Phase 2b: settle scale-ins and re-protect what is uncovered ──────────
+    for trade in open_trades:
+        try:
+            if await _settle_pending_add(trade, statuses, buys_by_order, held, account_id):
+                summary["scaled"] += 1
+        except Exception as exc:
+            logger.error(
+                "scale_in_settle_failed",
+                ticker=trade.get("ticker"), error=str(exc),
+            )
+
+    # A held position with nothing working at the venue has no automatic exit.
+    # Scaling in is one way to arrive here — a consolidation that could not
+    # place its pair — but not the only one: a venue can age orders out, a
+    # gateway session can roll, a leg can be cancelled by hand. Detecting it and
+    # not fixing it would be the worst of both.
+    if get_settings().enable_bracket_orders:
+        for trade in open_trades:
+            try:
+                if await _heal_unprotected(trade, held, account_id):
+                    summary["reprotected"] += 1
+            except Exception as exc:
+                logger.error(
+                    "reprotect_check_failed",
+                    ticker=trade.get("ticker"), error=str(exc),
+                )
 
     # ── Phase 3: detect closures and price them ──────────────────────────────
     now = utcnow()

@@ -206,6 +206,19 @@ class Settings(BaseSettings):
     enable_bracket_orders: bool = Field(
         default=True, description="Submit entries as bracket orders (entry + stop + target)"
     )
+    # Adding to a holding rather than refusing the signal. Off means the old
+    # behaviour: a BUY on something already held is skipped.
+    #
+    # This is safe only because it is *one* bracket covering the whole position.
+    # The refusal it replaces was never about owning the stock — it was that a
+    # second entry attached a second, independent stop, and `execute_exit`
+    # cancels every working order for a ticker while closing only the one
+    # record it loads, so an exit left the remainder held and unprotected.
+    # Scale-in cancels the working legs, submits the add with legs sized to the
+    # combined holding, and updates the single position record in place.
+    enable_scale_in: bool = Field(
+        default=True, description="Allow a BUY on a held ticker to add to the position"
+    )
     # Fallbacks used when the AI analyst supplies no usable level, or supplies
     # one that fails validation (stop above entry, target below entry, etc).
     bracket_stop_loss_pct: float = Field(
