@@ -63,6 +63,19 @@ export function formatTime(value: string | Date | null | undefined): string {
   return d ? TIME_FMT.format(d) : '—'
 }
 
+// en-CA renders as yyyy-mm-dd, the exact format `<input type="date">` uses —
+// so a date-range filter can compare this against its own value as strings,
+// in Toronto's calendar day rather than the browser's.
+const DATE_KEY_FMT = new Intl.DateTimeFormat('en-CA', {
+  year: 'numeric', month: '2-digit', day: '2-digit', timeZone: DISPLAY_TZ,
+})
+
+/** Toronto calendar day as "yyyy-mm-dd", for range comparisons. Null if unparseable. */
+export function dateKey(value: string | Date | null | undefined): string | null {
+  const d = parseTimestamp(value)
+  return d ? DATE_KEY_FMT.format(d) : null
+}
+
 /**
  * Compact age of a timestamp: "just now", "7m ago", "3h ago", "2d ago".
  *

@@ -14,6 +14,26 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Order history is a tab per status, with Filled the default.** The ten
+  possible statuses (see `TradeStatus` in the backend) span three different
+  questions — what the agent actually filled, what's still awaiting you as a
+  proposal, what a risk guard refused — and one long sorted list buried that
+  distinction under whatever sorted first. A tab only appears once an order
+  reaches that status, so a fresh account isn't shown nine empty tabs; Filled
+  is the exception and always shows, since it's the one that answers "what did
+  the agent do".
+- **Every column in order history filters.** Date range, ticker substring,
+  side, quantity range, price range, gain/loss, and source (Agent / Approved /
+  You) — Status doesn't get its own filter because the tab you're on already
+  is one. Filters persist across tab switches; a "Clear filters" control
+  appears once any are set.
+
+---
+
 ## [1.6.1] — 2026-08-25
 
 ### Fixed
