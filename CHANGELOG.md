@@ -14,7 +14,7 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
-## [Unreleased]
+## [1.6.2] — 2026-08-25
 
 ### Added
 
@@ -31,6 +31,29 @@ a release note that only lists wins is the kind of document nobody trusts twice.
   You) — Status doesn't get its own filter because the tab you're on already
   is one. Filters persist across tab switches; a "Clear filters" control
   appears once any are set.
+
+### Known gaps
+
+- **`npm run build`'s `tsc` step has been silently checking nothing.** The
+  root `tsconfig.json` is reference-only (`"files": []` plus `references`),
+  which needs `tsc -b` to actually descend into the referenced projects; plain
+  `tsc` (what the build script and this session's earlier verification both
+  ran) exits clean regardless of what the code says. Running it correctly
+  (`tsc -b --force`) turned up two **pre-existing** issues this change did not
+  introduce: `filled_qty`, `stop_loss`, and `take_profit` aren't declared on
+  `TradeRecord` but are read off it in the Positions table, and
+  `import.meta.env` isn't typed in `lib/api.ts`. Neither is fixed here, and CI
+  has not actually been catching type errors — the build script should move to
+  `tsc -b`.
+- **No live click-through.** Chrome's extension blocked `localhost` by site
+  permission, so the tabs and filters were verified by type-checking against
+  the real `TradeRecord` shape, `lint:a11y`, and tracing the filter predicate
+  by hand against fixtures covering all ten statuses, the UTC-day-boundary
+  case, gains/losses, and all three sources — not by clicking the page.
+- Unchanged from 1.6.1: the API still emits naive datetimes and both clients
+  compensate in `parseTimestamp`; the analyst "Generated …" stamp on both
+  ticker pages is still device-local; none of the timestamp handling has a
+  test.
 
 ---
 
