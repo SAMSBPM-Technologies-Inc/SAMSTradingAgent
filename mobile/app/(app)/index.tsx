@@ -592,7 +592,7 @@ export default function DashboardScreen() {
               {/* Page header */}
               <View style={{ marginBottom: 20 }}>
                 <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg }}>
-                  Your Watchlist
+                  Trade
                 </Text>
                 {!isLoading && (
                   <Text style={{ fontSize: 13, color: C.fgMuted, marginTop: 2 }}>

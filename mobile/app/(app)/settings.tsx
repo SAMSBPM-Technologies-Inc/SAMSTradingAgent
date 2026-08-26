@@ -4,8 +4,8 @@ import {
 } from 'react-native'
 import Slider from '@react-native-community/slider'
 import {
-  AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut,
-  Pencil, User, Wifi, WifiOff, X, BookOpen,
+  AlertTriangle, BarChart2, Bell, Bot, Check, ExternalLink, LogOut,
+  Pencil, Target, User, Wifi, WifiOff, X, BookOpen,
 } from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
@@ -588,7 +588,7 @@ function AutoTradingCard() {
 
 // ── Profile Screen ────────────────────────────────────────────────────────────
 
-export default function ProfileScreen() {
+export default function SettingsScreen() {
   const { user, logout } = useAuth()
   const [isEditing, setIsEditing] = useState(false)
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
@@ -635,7 +635,7 @@ export default function ProfileScreen() {
         contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 20, paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg, marginBottom: 20 }}>Profile</Text>
+        <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg, marginBottom: 20 }}>Settings</Text>
 
         {/* Avatar + name card */}
         <View style={{ ...card, flexDirection: 'row', alignItems: 'flex-start', gap: 14 }}>
@@ -729,25 +729,49 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        {/* Trading guide link */}
-        <Pressable
-          onPress={() => router.push('/(app)/guide')}
-          style={({ pressed }) => ({
-            ...card,
-            flexDirection: 'row', alignItems: 'center', gap: 12,
-            opacity: pressed ? 0.7 : 1,
-          })}
-        >
-          <View style={{
-            width: 36, height: 36, borderRadius: 10,
-            backgroundColor: 'rgba(242,96,12,0.1)',
-            alignItems: 'center', justifyContent: 'center',
+        {/* ── More screens ─────────────────────────────────────────────────
+            The 1.7 tab bar carries three destinations, matching the web app.
+            Performance moved off it, so this is now the only way to reach it —
+            which makes these rows load-bearing, not decoration. Calibration is
+            reached from Performance, as it was before. */}
+        <View style={card}>
+          <Text style={{
+            fontSize: 11, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4,
           }}>
-            <BookOpen size={18} color={C.brand} />
-          </View>
-          <Text style={{ fontSize: 14, fontWeight: '500', color: C.fg, flex: 1 }}>Trading Guide</Text>
-          <ExternalLink size={14} color={C.fgMuted} />
-        </Pressable>
+            More
+          </Text>
+          {([
+            { icon: BarChart2, label: 'Performance', note: 'Signal accuracy and win rate', to: '/(app)/performance' },
+            { icon: Target, label: 'Calibration', note: 'Do the thresholds hold up?', to: '/(app)/calibration' },
+            { icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' },
+          ] as const).map(({ icon: Icon, label, note, to }) => (
+            <Pressable
+              key={label}
+              onPress={() => router.push(to)}
+              accessibilityRole="button"
+              accessibilityLabel={label}
+              style={({ pressed }) => ({
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                paddingVertical: 10, borderTopWidth: 1, borderTopColor: `${C.border}80`,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <View style={{
+                width: 32, height: 32, borderRadius: 9,
+                backgroundColor: 'rgba(242,96,12,0.1)',
+                alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Icon size={16} color={C.brand} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '500', color: C.fg }}>{label}</Text>
+                <Text style={{ fontSize: 11, color: C.fgMuted }}>{note}</Text>
+              </View>
+              <ExternalLink size={14} color={C.fgMuted} />
+            </Pressable>
+          ))}
+        </View>
 
         <AlertSettingsCard />
         <AutoTradingCard />
