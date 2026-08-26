@@ -14,6 +14,122 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.7.0] — 2026-08-26
+
+A full UI redesign, from a Claude Design handoff. Ten routes become three
+destinations — **Trade**, **Positions**, **Settings** — without retiring a
+single feature.
+
+### Changed
+
+- **Trade replaces the Dashboard, the Ticker page, Search, and the buy flow.**
+  Three columns: the watchlist on the left, the selected ticker in the middle,
+  the order ticket on the right. These were four screens answering one
+  question — what should I do about this name, and why — and answering it used
+  to cost two navigations and lose the list you were working through. Picking
+  a row navigates, so every selection is still deep-linkable and Back walks the
+  names you looked at.
+- **Every verdict now leads with a plain-English "Why" line**, above the
+  numbers rather than buried under them. It prefers the model's own thesis and
+  otherwise derives a sentence from the gate the engine actually applied. It
+  never invents a rationale.
+- **Positions merges Holdings and Orders.** They were split along a line that
+  meant nothing to a reader: one asked the broker what it holds, the other
+  asked our records what we sent, and "am I up or down" needed both. Open
+  positions now carry a **Source** column — Agent, Approved, or You.
+- **Closed trades show gross, fees, and net side by side.** Where the venue
+  never reported a complete fee total the Net cell is a dash and a banner says
+  how many trades are affected — they are excluded from the net figures rather
+  than folded in at zero, which would understate cost in one direction every
+  time.
+- **Settings replaces Profile, and autonomy leads it.** The old page stacked
+  seven cards with the autonomy ladder below alert webhooks and the risk limits
+  behind a master toggle. Risk limits now carry live notes computed from your
+  real equity and watchlist: "about $4,227 per position", "6 positions commit
+  at most 48% of equity", "3 of your 6 watched tickers score at or above this".
+- **Switching order routing to live money asks for confirmation**, and says
+  plainly that live must also be enabled server-side or the orders are refused.
+- **⌘K searches screens and actions as well as tickers.** With three tabs in
+  the header this is the flat index of everything the app can do.
+- **The chart gains a 1M range and dashed stop/target guides.** They are drawn
+  as price lines rather than data series, so a distant stop cannot rescale the
+  pane and flatten the price action into a band.
+- **Mobile moves to the same three tabs** and merges Holdings into Positions.
+  Holdings there now load on arrival rather than on demand — a screen called
+  Positions that shows nothing until you press a button reads as broken.
+
+### Added
+
+- Two alert toggles the settings type already carried but no screen exposed:
+  **order submitted** and **fills and closes**.
+- The watchlist rail marks a **timing trigger with a round dot** and a **held
+  position with a square**. Different shapes rather than two colours of one
+  shape: one is an opinion and the other is a fact, and colour alone would not
+  separate them for a red-green colourblind reader.
+
+### Fixed
+
+- **The same order could be labelled "Agent" on one screen and counted as
+  manual on another.** Order history classified any `signal_type` that was not
+  `MANUAL` or `PROPOSAL_APPROVED` as agent-placed, while the backend counts
+  only `BUY`/`SELL`/`EXIT_ALERT` as agent. Mobile had a third copy with the
+  same defect. Both clients now share a helper that mirrors
+  `backend/app/routes/performance.py`.
+- **Approving a live-money proposal on the Trade screen requires typing the
+  ticker back**, matching the order ticket. Approving a proposal *is* placing
+  an order; the agent having chosen the name does not make it a smaller
+  commitment.
+- **The header pill, the order ticket and Settings can no longer disagree about
+  paper versus live.** All three read one shared copy of the auto-trade
+  document; previously each fetched its own, so flipping to live in Settings
+  left a header still reading PAPER and a ticket still willing to submit
+  without confirmation.
+- One jsx-a11y suppression removed — the Settings restructure made the label
+  association real rather than promised in a comment. One suppression remains
+  in the tree, with its reason written beside it.
+
+### Deliberate departures from the handoff
+
+- **The autonomy pill opens a menu instead of cycling on click.** One of those
+  three transitions hands an unattended process permission to spend money, and
+  a blind cycle put it one mis-click away from the theme toggle. Climbing to
+  AUTO confirms; stepping down never does.
+- **The wordmark uses `--color-fg`, not the specified `#281F13`.** That literal
+  is the light-mode ink colour and would be near-invisible on the dark surface.
+- **The chart stays `lightweight-charts`** rather than becoming a flat SVG
+  line. Candles, volume and SMA-50 are existing functionality.
+- **Signal-weight sliders do not live-rescore the watchlist.** Scoring is
+  server-side; the copy says weights apply at the next scoring rather than
+  promising what the prototype mocked.
+- **There is no Day P&L tile.** The broker summary carries no day-open figure,
+  and a "day" number derived from something else would be a different quantity
+  wearing the same label.
+
+### Known gaps
+
+- **The redesign has not been looked at.** `tsc -b`, `vite build` and
+  `lint:a11y` are clean and the mobile typecheck gained no new errors, but no
+  screen in this release has been seen rendered — Chrome's site permissions
+  blocked `localhost` and no headless browser was available in the environment.
+  Layout, spacing and dark-mode contrast are unverified. Treat the first manual
+  pass as part of shipping this, not as a formality.
+- **Mobile is an IA change, not a visual redesign.** The three tabs and the
+  Positions merge landed; the phone screens still use their own hardcoded
+  light-only `C` palette and their previous type scale. Web and mobile now
+  agree on structure but not on appearance.
+- **"Agent activity" on the Trade screen is derived from order records**, not a
+  real event feed — there is no agent-log endpoint. It shows orders, so a guard
+  that declined to act leaves no trace there.
+- **Performance and Calibration keep their old visual design.** They were kept
+  reachable rather than restyled; they will look like 1.6 inside a 1.7 shell.
+- The company name is not shown in the ticker header. `AnalyzeResponse` has no
+  name field and inventing one was not worth a lookup round-trip.
+- Fee-drag verification from 1.6.0 is still outstanding — the closed-trades
+  table now makes `net_unknown` visible, which should make checking it easier,
+  but it has not been checked.
+
+---
+
 ## [1.6.3] — 2026-08-25
 
 ### Fixed
