@@ -3,7 +3,7 @@ import { tradingApi } from '../lib/api'
 import type { AccountSummaryResponse } from '../types'
 
 /**
- * Persistent broker account strip, pinned under the header on every page.
+ * Persistent broker account strip, pinned under the header on every screen.
  *
  * Shows the account being traded, cash available to trade, capital currently
  * deployed, and unrealised P&L.
@@ -12,6 +12,10 @@ import type { AccountSummaryResponse } from '../types'
  * red and wrapped in parentheses rather than carrying a minus sign. Values
  * within half a cent of zero stay neutral, so a flat account doesn't read as a
  * gain and float dust or -0 can't render as a phantom loss.
+ *
+ * The 1.7 redesign takes it full-bleed at 34px to match the header rather than
+ * inheriting the old page width cap — it belongs to the chrome, not to the
+ * screen underneath, and the Trade screen has no width cap to inherit.
  */
 
 const usd = new Intl.NumberFormat('en-US', {
@@ -26,22 +30,16 @@ function money(value: number): string {
   return usd.format(Math.abs(value ?? 0))
 }
 
-function SignedMoney({ value }: { value: number }) {
-  const v = value ?? 0
-  const isLoss = v < -0.005
-  const isGain = v > 0.005
-  const tone = isLoss ? 'text-red-500' : isGain ? 'text-green-500' : 'text-[var(--color-fg)]'
-  return (
-    <span className={`tabular-nums font-medium ${tone}`}>
-      {isLoss ? `(${money(v)})` : money(v)}
-    </span>
-  )
+function signedTone(v: number): string {
+  if (v < -0.005) return 'var(--accent-sell)'
+  if (v > 0.005) return 'var(--accent-buy)'
+  return 'var(--color-fg)'
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline gap-1.5 flex-shrink-0 whitespace-nowrap">
-      <span className="text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)]">
+    <div className="flex flex-shrink-0 items-baseline gap-1.5 whitespace-nowrap">
+      <span className="text-[10px] uppercase tracking-[0.11em] text-[var(--color-fg-muted)]">
         {label}
       </span>
       {children}
@@ -49,17 +47,22 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+function Value({ children, color }: { children: React.ReactNode; color?: string }) {
+  return (
+    <span className="num text-[12.5px] font-semibold" style={{ color: color ?? 'var(--color-fg)' }}>
+      {children}
+    </span>
+  )
+}
+
 /** Shell so the bar occupies identical space in every state (no layout shift). */
 function Bar({ children }: { children: React.ReactNode }) {
   return (
     <div
-      className="sticky top-14 md:top-[60px] z-20 flex-shrink-0
-                 bg-[var(--color-surface)] border-b border-[var(--color-border)]
-                 transition-colors duration-200"
+      className="scrollbar-none sticky top-12 z-20 flex h-[34px] flex-shrink-0 items-center gap-5
+                 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3.5"
     >
-      <div className="max-w-5xl mx-auto w-full px-4 md:px-6 h-10 flex items-center gap-4 md:gap-6 overflow-x-auto scrollbar-none">
-        {children}
-      </div>
+      {children}
     </div>
   )
 }
@@ -76,7 +79,7 @@ export default function AccountBar() {
         const { data } = await tradingApi.getAccount()
         if (!cancelled) setAccount(data)
       } catch {
-        // Non-fatal — this strip must never break the page it sits above.
+        // Non-fatal — this strip must never break the screen it sits above.
         if (!cancelled) setAccount(null)
       } finally {
         if (!cancelled) setLoading(false)
@@ -94,9 +97,9 @@ export default function AccountBar() {
   if (loading) {
     return (
       <Bar>
-        <div className="h-3 w-28 rounded bg-[var(--color-border)]/60 animate-pulse" />
-        <div className="h-3 w-32 rounded bg-[var(--color-border)]/40 animate-pulse" />
-        <div className="h-3 w-28 rounded bg-[var(--color-border)]/40 animate-pulse" />
+        <div className="h-2.5 w-28 animate-pulse rounded bg-[var(--color-border)]/60" />
+        <div className="h-2.5 w-32 animate-pulse rounded bg-[var(--color-border)]/40" />
+        <div className="h-2.5 w-28 animate-pulse rounded bg-[var(--color-border)]/40" />
       </Bar>
     )
   }
@@ -104,8 +107,8 @@ export default function AccountBar() {
   if (!account?.connected) {
     return (
       <Bar>
-        <span className="flex items-center gap-2 text-xs text-[var(--color-fg-muted)] whitespace-nowrap">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-fg-muted)]" />
+        <span className="flex flex-shrink-0 items-center gap-2 whitespace-nowrap text-[11px] text-[var(--color-fg-muted)]">
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--color-fg-muted)]" />
           Broker disconnected — balances unavailable
         </span>
       </Bar>
@@ -114,39 +117,27 @@ export default function AccountBar() {
 
   return (
     <Bar>
-      <Field label="Acct">
-        <span className="tabular-nums font-medium text-[var(--color-fg)] text-sm">
-          {account.account_id || '—'}
-        </span>
-      </Field>
+      <span className="flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] text-[var(--color-fg-muted)]">
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--accent-buy)]" />
+        IBKR
+      </span>
 
-      <Field label="Available">
-        <span className="tabular-nums font-medium text-[var(--color-fg)] text-sm">
-          {money(account.buying_power)}
-        </span>
-      </Field>
-
-      <Field label="In Trade">
-        <span className="tabular-nums font-medium text-[var(--color-fg)] text-sm">
-          {money(account.gross_position_value)}
-        </span>
-      </Field>
-
+      <Field label="Acct"><Value>{account.account_id || '—'}</Value></Field>
+      <Field label="Available"><Value>{money(account.buying_power)}</Value></Field>
+      <Field label="In trade"><Value>{money(account.gross_position_value)}</Value></Field>
       <Field label="Unrealised">
-        <span className="text-sm">
-          <SignedMoney value={account.unrealized_pnl} />
-        </span>
+        <Value color={signedTone(account.unrealized_pnl)}>
+          {account.unrealized_pnl < -0.005
+            ? `(${money(account.unrealized_pnl)})`
+            : money(account.unrealized_pnl)}
+        </Value>
       </Field>
 
-      {/* Net liquidation is the least volatile figure — desktop only, keeps the
-          mobile strip to the three numbers that actually change intraday. */}
-      <div className="hidden sm:flex items-baseline gap-1.5 flex-shrink-0 whitespace-nowrap ml-auto">
-        <span className="text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)]">
-          Net Liq
-        </span>
-        <span className="tabular-nums font-medium text-[var(--color-fg)] text-sm">
-          {money(account.net_liquidation)}
-        </span>
+      {/* Net liquidation is the least volatile figure — it drops out first on a
+          narrow viewport, keeping the strip to the numbers that move intraday. */}
+      <div className="ml-auto hidden flex-shrink-0 items-baseline gap-1.5 whitespace-nowrap min-[1000px]:flex">
+        <span className="text-[10px] uppercase tracking-[0.11em] text-[var(--color-fg-muted)]">Net liq</span>
+        <Value>{money(account.net_liquidation)}</Value>
       </div>
     </Bar>
   )

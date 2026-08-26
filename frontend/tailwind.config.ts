@@ -27,6 +27,18 @@ const config: Config = {
         'surface-border': 'var(--color-border)',
         fg: 'var(--color-fg)',
         'fg-muted': 'var(--color-fg-muted)',
+        // Verdict palette. Named here so a component writes `text-accent-buy`
+        // instead of `text-[var(--accent-buy)]` — the token stays the single
+        // definition either way, but the short form is what stops someone
+        // reaching for a raw green hex when they're in a hurry.
+        elev: 'var(--color-elev)',
+        wash: 'var(--color-hover)',
+        'tint-buy': 'var(--tint-buy)',
+        'tint-sell': 'var(--tint-sell)',
+        'tint-hold': 'var(--tint-hold)',
+        'accent-buy': 'var(--accent-buy)',
+        'accent-sell': 'var(--accent-sell)',
+        'accent-hold': 'var(--accent-hold)',
       },
       fontFamily: {
         archivo: ['Archivo', 'system-ui', 'sans-serif'],

@@ -13,6 +13,7 @@ import SearchPage from './pages/SearchPage'
 import CalibrationPage from './pages/CalibrationPage'
 import OrdersPage from './pages/OrdersPage'
 import { ToastProvider } from './lib/toast-context'
+import { TradingSettingsProvider } from './lib/trading-context'
 import LoadingSpinner from './components/LoadingSpinner'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -45,14 +46,18 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      {/* The three destinations of the 1.7 IA. `/holdings`, `/orders` and
+          `/profile` still resolve — they redirect here, so bookmarks and the
+          mobile app's older deep links keep working. */}
       <Route
-        path="/holdings"
+        path="/positions"
         element={
           <ProtectedRoute>
             <HoldingsPage />
           </ProtectedRoute>
         }
       />
+      <Route path="/holdings" element={<Navigate to="/positions" replace />} />
       {/* Declared before /ticker/:symbol so the mobile "Analyze" tab resolves
           to the lookup screen rather than being read as a symbol named
           "search" — which is exactly what it used to do. */}
@@ -97,13 +102,14 @@ function AppRoutes() {
         }
       />
       <Route
-        path="/profile"
+        path="/settings"
         element={
           <ProtectedRoute>
             <ProfilePage />
           </ProtectedRoute>
         }
       />
+      <Route path="/profile" element={<Navigate to="/settings" replace />} />
       <Route
         path="/guide"
         element={
@@ -124,9 +130,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <ToastProvider>
-          <AppRoutes />
-        </ToastProvider>
+        <TradingSettingsProvider>
+          <ToastProvider>
+            <AppRoutes />
+          </ToastProvider>
+        </TradingSettingsProvider>
       </AuthProvider>
     </ThemeProvider>
   )
