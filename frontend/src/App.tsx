@@ -7,10 +7,9 @@ import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
 import ProfilePage from './pages/ProfilePage'
 import GuidePage from './pages/GuidePage'
-import HoldingsPage from './pages/HoldingsPage'
+import PositionsPage from './pages/PositionsPage'
 import SearchPage from './pages/SearchPage'
 import CalibrationPage from './pages/CalibrationPage'
-import OrdersPage from './pages/OrdersPage'
 import { ToastProvider } from './lib/toast-context'
 import { TradingSettingsProvider } from './lib/trading-context'
 import LoadingSpinner from './components/LoadingSpinner'
@@ -55,7 +54,7 @@ function AppRoutes() {
         path="/positions"
         element={
           <ProtectedRoute>
-            <HoldingsPage />
+            <PositionsPage />
           </ProtectedRoute>
         }
       />
@@ -95,14 +94,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
-      <Route
-        path="/orders"
-        element={
-          <ProtectedRoute>
-            <OrdersPage />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/orders" element={<Navigate to="/positions" replace />} />
       <Route
         path="/settings"
         element={
