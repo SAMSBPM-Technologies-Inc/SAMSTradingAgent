@@ -3,16 +3,15 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from './lib/theme-context'
 import { AuthProvider, useAuth } from './lib/auth-context'
 import AuthPage from './pages/AuthPage'
-import DashboardPage from './pages/DashboardPage'
-import TickerPage from './pages/TickerPage'
+import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
-import ProfilePage from './pages/ProfilePage'
+import SettingsPage from './pages/SettingsPage'
 import GuidePage from './pages/GuidePage'
-import HoldingsPage from './pages/HoldingsPage'
+import PositionsPage from './pages/PositionsPage'
 import SearchPage from './pages/SearchPage'
 import CalibrationPage from './pages/CalibrationPage'
-import OrdersPage from './pages/OrdersPage'
 import { ToastProvider } from './lib/toast-context'
+import { TradingSettingsProvider } from './lib/trading-context'
 import LoadingSpinner from './components/LoadingSpinner'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -37,22 +36,29 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/auth" element={<AuthPage />} />
+      {/* Trade answers "what should I do about this name, and why". `/` shows
+          the first watched ticker; `/ticker/:symbol` deep-links to any name,
+          watched or not. Both render the same screen. */}
       <Route
         path="/"
         element={
           <ProtectedRoute>
-            <DashboardPage />
+            <TradePage />
           </ProtectedRoute>
         }
       />
+      {/* The three destinations of the 1.7 IA. `/holdings`, `/orders` and
+          `/profile` still resolve — they redirect here, so bookmarks and the
+          mobile app's older deep links keep working. */}
       <Route
-        path="/holdings"
+        path="/positions"
         element={
           <ProtectedRoute>
-            <HoldingsPage />
+            <PositionsPage />
           </ProtectedRoute>
         }
       />
+      <Route path="/holdings" element={<Navigate to="/positions" replace />} />
       {/* Declared before /ticker/:symbol so the mobile "Analyze" tab resolves
           to the lookup screen rather than being read as a symbol named
           "search" — which is exactly what it used to do. */}
@@ -68,7 +74,7 @@ function AppRoutes() {
         path="/ticker/:symbol"
         element={
           <ProtectedRoute>
-            <TickerPage />
+            <TradePage />
           </ProtectedRoute>
         }
       />
@@ -88,22 +94,16 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      <Route path="/orders" element={<Navigate to="/positions" replace />} />
       <Route
-        path="/orders"
+        path="/settings"
         element={
           <ProtectedRoute>
-            <OrdersPage />
+            <SettingsPage />
           </ProtectedRoute>
         }
       />
-      <Route
-        path="/profile"
-        element={
-          <ProtectedRoute>
-            <ProfilePage />
-          </ProtectedRoute>
-        }
-      />
+      <Route path="/profile" element={<Navigate to="/settings" replace />} />
       <Route
         path="/guide"
         element={
@@ -124,9 +124,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <ToastProvider>
-          <AppRoutes />
-        </ToastProvider>
+        <TradingSettingsProvider>
+          <ToastProvider>
+            <AppRoutes />
+          </ToastProvider>
+        </TradingSettingsProvider>
       </AuthProvider>
     </ThemeProvider>
   )

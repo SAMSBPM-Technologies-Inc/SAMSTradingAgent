@@ -8,24 +8,27 @@ import { AlertCircle, Check, Inbox, X } from 'lucide-react-native'
 import { tradingApi } from '../../src/lib/api'
 import { useToast } from '../../src/lib/toast-context'
 import { formatDate, formatTime } from '../../src/lib/format'
-import type { Proposal, TradeRecord } from '../../src/types'
+import { SOURCE_LABEL, tradeSource } from '../../src/lib/trade-source'
+import type { Holding, Proposal, TradeRecord } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import Disclaimer from '../../src/components/Disclaimer'
+import { usePalette, type Palette } from '../../src/lib/palette'
+import AppHeader from '../../src/components/AppHeader'
 
 /**
- * Orders, positions, and the agent's proposal queue — the phone counterpart of
- * the web `OrdersPage`.
+ * Positions — holdings, the proposal queue, and every order ever sent.
  *
- * On a phone this is arguably the more important of the two screens: approving
- * a proposal is the thing you want to do from wherever you are, and the
- * watchlist is the thing you read at a desk.
+ * The phone counterpart of the web `PositionsPage`, and merged along the same
+ * line: Holdings asked the broker what it holds, Orders asked our records what
+ * we sent, and "am I up or down" needed both. On a phone that mattered more
+ * than on a desktop — it was two taps and a lost scroll position.
+ *
+ * Broker holdings load on mount here rather than on demand as the old Holdings
+ * tab did. That tab existed to be visited deliberately; this one is where you
+ * land, and a screen called Positions that shows no positions until you press
+ * a button reads as broken.
  */
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  red: '#b91c1c', green: '#15803d', amber: '#b45309',
-}
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
@@ -35,6 +38,7 @@ function money(v: number | null | undefined): string {
 
 /** Broker-statement convention: gains green, losses red in parentheses. */
 function Pnl({ value }: { value: number | null | undefined }) {
+  const C = usePalette()
   if (value == null) return <Text style={{ color: C.fgMuted, fontSize: 12 }}>—</Text>
   const loss = value < -0.005
   const gain = value > 0.005
@@ -48,18 +52,22 @@ function Pnl({ value }: { value: number | null | undefined }) {
   )
 }
 
-const STATUS_TONE: Record<string, { bg: string; fg: string }> = {
-  FILLED: { bg: 'rgba(21,128,61,0.12)', fg: C.green },
-  PENDING: { bg: 'rgba(180,83,9,0.12)', fg: C.amber },
-  PARTIAL: { bg: 'rgba(180,83,9,0.12)', fg: C.amber },
-  PROPOSED: { bg: 'rgba(242,96,12,0.12)', fg: C.brand },
-  REJECTED: { bg: 'rgba(185,28,28,0.12)', fg: C.red },
-  UNRECONCILED: { bg: 'rgba(185,28,28,0.12)', fg: C.red },
+/** Tint is the accent at low alpha, so the pair flips with the theme together. */
+function statusTone(C: Palette): Record<string, { bg: string; fg: string }> {
+  return {
+    FILLED: { bg: `${C.green}20`, fg: C.green },
+    PENDING: { bg: `${C.amber}20`, fg: C.amber },
+    PARTIAL: { bg: `${C.amber}20`, fg: C.amber },
+    PROPOSED: { bg: `${C.brand}20`, fg: C.brand },
+    REJECTED: { bg: `${C.red}20`, fg: C.red },
+    UNRECONCILED: { bg: `${C.red}20`, fg: C.red },
+  }
 }
-const STATUS_DEFAULT = { bg: `${C.border}90`, fg: C.fgMuted }
+const statusDefault = (C: Palette) => ({ bg: `${C.border}90`, fg: C.fgMuted })
 
 function StatusPill({ status }: { status: string }) {
-  const tone = STATUS_TONE[status] ?? STATUS_DEFAULT
+  const C = usePalette()
+  const tone = statusTone(C)[status] ?? statusDefault(C)
   return (
     <View style={{
       paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
@@ -72,12 +80,11 @@ function StatusPill({ status }: { status: string }) {
 
 /** Who decided — the distinction the performance split rests on. */
 function sourceLabel(signalType?: string | null): string {
-  if (signalType === 'MANUAL') return 'You'
-  if (signalType === 'PROPOSAL_APPROVED') return 'Approved'
-  return signalType ? 'Agent' : '—'
+  return signalType ? SOURCE_LABEL[tradeSource(signalType)] : '—'
 }
 
 function SectionTitle({ children, note }: { children: string; note?: string }) {
+  const C = usePalette()
   return (
     <View style={{ marginBottom: 10 }}>
       <Text style={{
@@ -101,6 +108,7 @@ function ProposalCard({ proposal, onResolved }: {
   proposal: Proposal
   onResolved: () => void
 }) {
+  const C = usePalette()
   const { toast } = useToast()
   const [busy, setBusy] = useState<'approve' | 'decline' | null>(null)
   // A live-money proposal must not be approvable in one tap. The order ticket
@@ -254,11 +262,14 @@ function ProposalCard({ proposal, onResolved }: {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
-export default function OrdersScreen() {
+export default function PositionsScreen() {
+  const C = usePalette()
   const { toast, toastWithUndo } = useToast()
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [positions, setPositions] = useState<TradeRecord[]>([])
   const [orders, setOrders] = useState<TradeRecord[]>([])
+  const [holdings, setHoldings] = useState<Holding[]>([])
+  const [brokerConnected, setBrokerConnected] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -266,14 +277,17 @@ export default function OrdersScreen() {
   const load = useCallback(async () => {
     setError(null)
     try {
-      const [p, pos, ord] = await Promise.all([
+      const [p, pos, ord, hold] = await Promise.all([
         tradingApi.getProposals().catch(() => ({ data: [] as Proposal[] })),
         tradingApi.getPositions(),
         tradingApi.getOrders(),
+        tradingApi.getHoldings().catch(() => null),
       ])
       setProposals(p.data)
       setPositions(pos.data)
       setOrders(ord.data)
+      setBrokerConnected(hold?.data.connected ?? false)
+      setHoldings(hold?.data.connected ? hold.data.holdings.filter((h) => h.qty !== 0) : [])
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })
         ?.response?.data?.detail
@@ -318,15 +332,16 @@ export default function OrdersScreen() {
           />
         }
       >
-        <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg }}>Orders</Text>
+        <AppHeader />
+        <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg }}>Positions</Text>
         <Text style={{ fontSize: 13, color: C.fgMuted, marginTop: 2, marginBottom: 20 }}>
-          Proposals awaiting you, open positions, and everything sent.
+          What is held, what is waiting on you, and everything ever sent.
         </Text>
 
         {error && (
           <View style={{
             flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 16,
-            backgroundColor: 'rgba(185,28,28,0.10)', borderRadius: 10, padding: 12,
+            backgroundColor: `${C.red}1a`, borderRadius: 10, padding: 12,
           }}>
             <AlertCircle size={16} color={C.red} />
             <Text style={{ flex: 1, fontSize: 13, color: C.red }}>{error}</Text>
@@ -351,9 +366,67 @@ export default function OrdersScreen() {
               </View>
             )}
 
+            {/* ── Holdings ─────────────────────────────────────────────────
+                What the broker says is held, which is the authority. The block
+                below it is our own record of *why* each one exists — they are
+                different questions and can legitimately disagree, so they are
+                shown as two lists rather than silently reconciled here. */}
+            <View style={{ marginBottom: 28 }}>
+              <SectionTitle
+                note={brokerConnected ? undefined : 'Broker disconnected'}
+              >
+                {`Holdings (${holdings.length})`}
+              </SectionTitle>
+              {holdings.length === 0 ? (
+                <View style={{
+                  backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
+                  borderColor: C.border, padding: 24, alignItems: 'center',
+                }}>
+                  <Text style={{ fontSize: 13, color: C.fgMuted, textAlign: 'center' }}>
+                    {brokerConnected
+                      ? 'No open positions in this account.'
+                      : 'Broker disconnected — holdings unavailable.'}
+                  </Text>
+                </View>
+              ) : (
+                <View style={{
+                  backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
+                  borderColor: C.border, overflow: 'hidden',
+                }}>
+                  {holdings.map((h, i) => (
+                    <Pressable
+                      key={h.ticker}
+                      onPress={() => router.push(`/ticker/${h.ticker}`)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${h.ticker}, ${h.qty} shares`}
+                      style={{
+                        paddingHorizontal: 14, paddingVertical: 12, gap: 6,
+                        borderTopWidth: i === 0 ? 0 : 1, borderTopColor: `${C.border}80`,
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Text style={{ fontSize: 14, fontWeight: '700', color: C.fg }}>{h.ticker}</Text>
+                        <Pnl value={h.unrealized_pnl} />
+                      </View>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ fontSize: 11, color: C.fgMuted, fontVariant: ['tabular-nums'] }}>
+                          {h.qty.toLocaleString()} @ {money(h.avg_cost)}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: C.fg, fontVariant: ['tabular-nums'] }}>
+                          {money(h.market_value)}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </View>
+
             {/* ── Open positions ───────────────────────────────────────── */}
             <View style={{ marginBottom: 28 }}>
-              <SectionTitle>{`Open positions (${positions.length})`}</SectionTitle>
+              <SectionTitle note="the agent's own record, with its bracket levels">
+                {`Tracked positions (${positions.length})`}
+              </SectionTitle>
               {positions.length === 0 ? (
                 <View style={{
                   backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,

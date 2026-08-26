@@ -27,6 +27,9 @@ import type { Signal, Trigger, WatchlistItem, WatchlistSetupCounts } from '../..
 import SignalBadge from '../../src/components/SignalBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
+import AccountStrip from '../../src/components/AccountStrip'
+import { usePalette } from '../../src/lib/palette'
+import AppHeader from '../../src/components/AppHeader'
 
 // One filter bar mixes two axes deliberately: the verdict (BUY/HOLD/SELL) and
 // the timing setup (DIP/PROFIT). They were separate tabs answering the same
@@ -43,11 +46,16 @@ const FILTER_LABEL: Record<Filter, string> = {
   SELL: 'Sell',
 }
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  green: '#16a34a', amber: '#d97706', red: '#ef4444',
-}
+
+/**
+ * Width of the Signal column, shared by the header and every row so the two
+ * cannot drift apart.
+ *
+ * Sized to the longest badge rather than eyeballed: 'SELL'/'HOLD' at 11pt bold
+ * with 0.5 letter-spacing runs ~31pt, plus SignalBadge's 8pt horizontal padding
+ * either side. At the previous 42pt both wrapped mid-word — "HOL / D".
+ */
+const SIGNAL_COL_W = 54
 
 function matchesFilter(item: WatchlistItem, f: Filter): boolean {
   if (f === 'ALL') return true
@@ -62,6 +70,7 @@ function FilterBar({
 }: {
   active: Filter; onChange: (f: Filter) => void; counts: Record<Filter, number>
 }) {
+  const C = usePalette()
   return (
     <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
       {FILTERS.map((f) => {
@@ -69,7 +78,7 @@ function FilterBar({
         const setupColor = f === 'ENTRY' ? C.green : C.amber
         const activeBg = isSetup ? setupColor : C.brand
         const idleBg = isSetup && counts[f] > 0
-          ? f === 'ENTRY' ? 'rgba(22,163,74,0.12)' : 'rgba(217,119,6,0.12)'
+          ? f === 'ENTRY' ? `${C.green}1f` : `${C.amber}1f`
           : `${C.border}80`
         const idleFg = isSetup && counts[f] > 0 ? setupColor : C.fgMuted
 
@@ -98,14 +107,15 @@ function FilterBar({
 // ── Setup badge ───────────────────────────────────────────────────────────────
 
 function SetupBadge({ trigger }: { trigger: Trigger }) {
+  const C = usePalette()
   if (trigger === 'NEUTRAL') {
     return <Text style={{ fontSize: 11, color: C.fgMuted }}>—</Text>
   }
 
   const cfg = trigger === 'ENTRY'
-    ? { bg: 'rgba(22,163,74,0.14)', fg: C.green, label: 'DIP', Icon: TrendingDown }
+    ? { bg: `${C.green}24`, fg: C.green, label: 'DIP', Icon: TrendingDown }
     : trigger === 'EXIT_ALERT'
-      ? { bg: 'rgba(217,119,6,0.14)', fg: C.amber, label: 'PROFIT', Icon: TrendingUp }
+      ? { bg: `${C.amber}24`, fg: C.amber, label: 'PROFIT', Icon: TrendingUp }
       : { bg: `${C.border}99`, fg: C.fgMuted, label: 'WAIT', Icon: Clock }
 
   const { bg, fg, label, Icon } = cfg
@@ -130,10 +140,11 @@ function IndicatorBar({ label, value, format }: {
   value?: number
   format?: (v: number) => string
 }) {
+  const C = usePalette()
   if (value == null) return null
   const pct = Math.min(100, Math.max(0, value))
   // High is the danger end for all three: overbought means the dip has passed.
-  const color = pct > 75 ? C.red : pct > 50 ? '#f59e0b' : C.green
+  const color = pct > 75 ? C.red : pct > 50 ? C.amber : C.green
 
   return (
     <View style={{ gap: 3 }}>
@@ -153,6 +164,7 @@ function IndicatorBar({ label, value, format }: {
 // ── Expanded row detail ───────────────────────────────────────────────────────
 
 function RowDetail({ item }: { item: WatchlistItem }) {
+  const C = usePalette()
   const hasIndicators = item.rsi_14 != null || item.stoch_rsi != null || item.bb_pct != null
 
   return (
@@ -228,6 +240,7 @@ function RowDetail({ item }: { item: WatchlistItem }) {
 // ── Skeleton row ──────────────────────────────────────────────────────────────
 
 function SkeletonRow() {
+  const C = usePalette()
   return (
     <View style={{
       flexDirection: 'row', alignItems: 'center', gap: 12,
@@ -250,6 +263,7 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
   onToggle: () => void
   onRemove: (t: string) => void
 }) {
+  const C = usePalette()
   const [removing, setRemoving] = useState(false)
   const scorePct = Math.round(item.score * 100)
 
@@ -283,14 +297,15 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
       >
         {/* Ticker + setup */}
         <View style={{ width: 52, flexShrink: 0, gap: 3 }}>
-          <Text style={{ fontSize: 13, fontWeight: '700', color: C.fg }}>
+          {/* An over-long symbol must not wrap and grow the row's height. */}
+          <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: '700', color: C.fg }}>
             {item.ticker}
           </Text>
           <SetupBadge trigger={item.trigger} />
         </View>
 
         {/* Signal */}
-        <View style={{ width: 42, flexShrink: 0 }}>
+        <View style={{ width: SIGNAL_COL_W, flexShrink: 0 }}>
           <SignalBadge signal={item.signal} />
         </View>
 
@@ -314,7 +329,7 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
               {item.day_change_pct != null && (
                 <Text style={{
                   fontSize: 10,
-                  color: item.day_change_pct >= 0 ? '#22c55e' : C.red,
+                  color: item.day_change_pct >= 0 ? C.green : C.red,
                 }}>
                   {item.day_change_pct >= 0 ? '+' : ''}{item.day_change_pct.toFixed(2)}%
                 </Text>
@@ -345,6 +360,7 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
 // ── Add ticker form ───────────────────────────────────────────────────────────
 
 function AddTickerForm({ onAdded }: { onAdded: () => void }) {
+  const C = usePalette()
   const [value, setValue] = useState('')
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -474,7 +490,7 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
         <View style={{
           flexDirection: 'row', alignItems: 'center', gap: 10,
           paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10,
-          backgroundColor: 'rgba(242,96,12,0.08)', borderWidth: 1, borderColor: 'rgba(242,96,12,0.25)',
+          backgroundColor: `${C.brand}14`, borderWidth: 1, borderColor: `${C.brand}40`,
           marginTop: 10,
         }}>
           <LoadingSpinner size="sm" />
@@ -486,8 +502,8 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
 
       {error && (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
-          <AlertCircle size={13} color="#ef4444" />
-          <Text style={{ fontSize: 12, color: '#ef4444' }}>{error}</Text>
+          <AlertCircle size={13} color={C.red} />
+          <Text style={{ fontSize: 12, color: C.red }}>{error}</Text>
         </View>
       )}
     </View>
@@ -497,11 +513,12 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
 // ── Empty state ───────────────────────────────────────────────────────────────
 
 function EmptyState() {
+  const C = usePalette()
   return (
     <View style={{ alignItems: 'center', paddingVertical: 64 }}>
       <View style={{
         width: 64, height: 64, borderRadius: 18,
-        backgroundColor: 'rgba(242,96,12,0.1)',
+        backgroundColor: `${C.brand}1a`,
         alignItems: 'center', justifyContent: 'center', marginBottom: 16,
       }}>
         <TrendingUp size={32} color={C.brand} />
@@ -521,6 +538,7 @@ function EmptyState() {
 const EMPTY_SETUPS: WatchlistSetupCounts = { entry: 0, exit_alert: 0, neutral: 0, pending: 0 }
 
 export default function DashboardScreen() {
+  const C = usePalette()
   const [items, setItems] = useState<WatchlistItem[]>([])
   const [setups, setSetups] = useState<WatchlistSetupCounts>(EMPTY_SETUPS)
   const [isLoading, setIsLoading] = useState(true)
@@ -590,9 +608,10 @@ export default function DashboardScreen() {
           ListHeaderComponent={
             <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
               {/* Page header */}
+              <AppHeader />
               <View style={{ marginBottom: 20 }}>
                 <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg }}>
-                  Your Watchlist
+                  Trade
                 </Text>
                 {!isLoading && (
                   <Text style={{ fontSize: 13, color: C.fgMuted, marginTop: 2 }}>
@@ -606,6 +625,9 @@ export default function DashboardScreen() {
                 )}
               </View>
 
+              {/* Broker balances — parity with the web AccountBar. */}
+              <AccountStrip />
+
               {/* Add ticker */}
               <AddTickerForm onAdded={fetchWatchlist} />
 
@@ -614,11 +636,11 @@ export default function DashboardScreen() {
                 <View style={{
                   flexDirection: 'row', alignItems: 'center', gap: 10,
                   paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10,
-                  backgroundColor: 'rgba(239,68,68,0.08)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)',
+                  backgroundColor: `${C.red}14`, borderWidth: 1, borderColor: `${C.red}33`,
                   marginBottom: 16,
                 }}>
-                  <AlertCircle size={16} color="#ef4444" />
-                  <Text style={{ fontSize: 13, color: '#ef4444', flex: 1 }}>{error}</Text>
+                  <AlertCircle size={16} color={C.red} />
+                  <Text style={{ fontSize: 13, color: C.red, flex: 1 }}>{error}</Text>
                 </View>
               )}
 
@@ -658,7 +680,7 @@ export default function DashboardScreen() {
                       <Text key={h} style={{
                         fontSize: 9, fontWeight: '700', color: C.fgMuted,
                         textTransform: 'uppercase', letterSpacing: 0.8,
-                        width: h === 'Ticker' ? 52 : h === 'Signal' ? 42 : h === 'Score' ? 64 : undefined,
+                        width: h === 'Ticker' ? 52 : h === 'Signal' ? SIGNAL_COL_W : h === 'Score' ? 64 : undefined,
                         flex: h === 'Price' ? 1 : undefined,
                       }}>
                         {h}

@@ -3,6 +3,7 @@ import { ActivityIndicator, LayoutChangeEvent, Pressable, Text, View } from 'rea
 import Svg, { Line, Path, Rect } from 'react-native-svg'
 import { chartApi } from '../lib/api'
 import type { ChartSeries } from '../types'
+import { usePalette } from '../lib/palette'
 
 /**
  * Candlestick chart with SMA-20/50 and a volume strip.
@@ -17,11 +18,6 @@ import type { ChartSeries } from '../types'
  * gestures inside a ScrollView is worse than a clean static chart.
  */
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  up: '#15803d', down: '#b91c1c',
-}
 
 const RANGES = [
   { label: '3M', days: 90 },
@@ -38,6 +34,7 @@ const usd = new Intl.NumberFormat('en-US', {
 })
 
 export default function PriceChart({ ticker }: { ticker: string }) {
+  const C = usePalette()
   const [days, setDays] = useState<number>(180)
   const [data, setData] = useState<ChartSeries | null>(null)
   const [loading, setLoading] = useState(true)

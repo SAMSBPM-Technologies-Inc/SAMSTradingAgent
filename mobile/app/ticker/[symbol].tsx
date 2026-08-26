@@ -17,22 +17,21 @@ import Disclaimer from '../../src/components/Disclaimer'
 import OrderTicket from '../../src/components/OrderTicket'
 import PriceChart from '../../src/components/PriceChart'
 import { FactorBreakdown, RiskPanel } from '../../src/components/ScorePanels'
+import { usePalette, type Palette } from '../../src/lib/palette'
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-}
 
-const card = {
+const cardStyle = (C: Palette) => ({
   backgroundColor: C.surface, borderRadius: 12,
   borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 10,
-}
+})
 
 // ── Score gauge ───────────────────────────────────────────────────────────────
 
 function ScoreGauge({ score }: { score: number }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   const pct = Math.round(score * 100)
-  const color = pct >= 70 ? '#22c55e' : pct >= 40 ? '#f97316' : '#ef4444'
+  const color = pct >= 70 ? C.green : pct >= 40 ? C.amber : C.red
   const dashLen = (pct / 100) * 176
 
   return (
@@ -68,6 +67,8 @@ function StatCell({ label, value, icon: Icon, color }: {
   label: string; value: string
   icon?: React.FC<{ size: number; color: string }>; color?: string
 }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return (
     <View style={{
       flex: 1, padding: 12, borderRadius: 10,
@@ -85,6 +86,8 @@ function StatCell({ label, value, icon: Icon, color }: {
 // ── Section block ─────────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return (
     <View style={card}>
       <Text style={{ fontSize: 15, fontWeight: '500', color: C.fg, marginBottom: 10 }}>{title}</Text>
@@ -96,6 +99,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 // ── Bullet list ───────────────────────────────────────────────────────────────
 
 function BulletList({ items, color }: { items: string[]; color?: string }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return (
     <View style={{ gap: 8 }}>
       {items.map((item, i) => (
@@ -114,6 +119,8 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
 // ── Collapsible ───────────────────────────────────────────────────────────────
 
 function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   const [open, setOpen] = useState(true)
   return (
     <View>
@@ -132,17 +139,19 @@ function Collapsible({ title, children }: { title: string; children: React.React
 // ── Sentiment pill ────────────────────────────────────────────────────────────
 
 function SentimentPill({ label, value }: { label: string; value: string | null | undefined }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   if (!value) return null
   const bullish = ['BULLISH', 'MILDLY_BULLISH', 'LOW'].includes(value)
   const bearish = ['BEARISH', 'MILDLY_BEARISH', 'HIGH'].includes(value)
   return (
     <View style={{
       paddingHorizontal: 7, paddingVertical: 2, borderRadius: 20,
-      backgroundColor: bullish ? 'rgba(34,197,94,0.1)' : bearish ? 'rgba(239,68,68,0.1)' : `${C.border}80`,
+      backgroundColor: bullish ? `${C.green}1a` : bearish ? `${C.red}1a` : `${C.border}80`,
     }}>
       <Text style={{
         fontSize: 10, fontWeight: '600',
-        color: bullish ? '#16a34a' : bearish ? '#dc2626' : C.fgMuted,
+        color: bullish ? C.green : bearish ? C.red : C.fgMuted,
       }}>
         {label}: {value.replace('_', ' ')}
       </Text>
@@ -153,6 +162,8 @@ function SentimentPill({ label, value }: { label: string; value: string | null |
 // ── Alt data row ──────────────────────────────────────────────────────────────
 
 function AltDataRow({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return (
     <View style={{
       flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start',
@@ -170,6 +181,8 @@ function AltDataRow({ label, value, sub }: { label: string; value: string; sub?:
 // ── Alternative data section ──────────────────────────────────────────────────
 
 function AlternativeDataSection({ data }: { data: AlternativeData }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   const si = data.short_interest
   const opt = data.options_flow
   const ins = data.insider_trades
@@ -265,6 +278,8 @@ function AlternativeDataSection({ data }: { data: AlternativeData }) {
 // ── Analyst note bullet split ─────────────────────────────────────────────────
 
 function AnalystNoteSummary({ note }: { note: string }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   const sentences = note
     .split(/(?<=[.!?])\s+/)
     .map((s) => s.trim())
@@ -311,6 +326,8 @@ function buildExportText(data: AnalyzeResponse): string {
 // ── Ticker Screen ─────────────────────────────────────────────────────────────
 
 export default function TickerScreen() {
+  const C = usePalette()
+  const card = cardStyle(C)
   const { symbol } = useLocalSearchParams<{ symbol: string }>()
   const [data, setData] = useState<AnalyzeResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -355,7 +372,7 @@ export default function TickerScreen() {
   if (error) {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16 }}>
-        <AlertCircle size={40} color="#ef4444" />
+        <AlertCircle size={40} color={C.red} />
         <Text style={{ fontSize: 14, color: C.fgMuted, textAlign: 'center' }}>{error}</Text>
         <Pressable
           onPress={() => fetchData(false)}
@@ -392,7 +409,7 @@ export default function TickerScreen() {
                   {data.day_change_pct != null && (
                     <Text style={{
                       fontSize: 13, fontWeight: '600',
-                      color: data.day_change_pct >= 0 ? '#22c55e' : '#ef4444',
+                      color: data.day_change_pct >= 0 ? C.green : C.red,
                     }}>
                       {data.day_change_pct >= 0 ? '+' : ''}{data.day_change_pct.toFixed(2)}%
                     </Text>
@@ -463,7 +480,7 @@ export default function TickerScreen() {
             <StatCell label="Price Target" value={`$${data.price_target.toFixed(2)}`} icon={Target} color={C.brand} />
           )}
           {data.stop_loss && (
-            <StatCell label="Stop Loss" value={`$${data.stop_loss.toFixed(2)}`} icon={Shield} color="#ef4444" />
+            <StatCell label="Stop Loss" value={`$${data.stop_loss.toFixed(2)}`} icon={Shield} color={C.red} />
           )}
         </View>
         <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
@@ -473,7 +490,7 @@ export default function TickerScreen() {
           <StatCell
             label="Confidence" icon={Zap}
             value={`${Math.round(data.confidence * 100)}%`}
-            color={data.confidence >= 0.7 ? '#22c55e' : data.confidence >= 0.4 ? '#eab308' : '#ef4444'}
+            color={data.confidence >= 0.7 ? C.green : data.confidence >= 0.4 ? C.amber : C.red}
           />
         </View>
 
@@ -520,7 +537,7 @@ export default function TickerScreen() {
               {data.bull_case && (
                 <Collapsible title="Bull Case">
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                    <TrendingUp size={14} color="#22c55e" style={{ marginTop: 2 }} />
+                    <TrendingUp size={14} color={C.green} style={{ marginTop: 2 }} />
                     <Text style={{ fontSize: 13, color: C.fg, flex: 1, lineHeight: 19 }}>{data.bull_case}</Text>
                   </View>
                 </Collapsible>
@@ -528,7 +545,7 @@ export default function TickerScreen() {
               {data.bear_case && (
                 <Collapsible title="Bear Case">
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                    <TrendingDown size={14} color="#ef4444" style={{ marginTop: 2 }} />
+                    <TrendingDown size={14} color={C.red} style={{ marginTop: 2 }} />
                     <Text style={{ fontSize: 13, color: C.fg, flex: 1, lineHeight: 19 }}>{data.bear_case}</Text>
                   </View>
                 </Collapsible>
@@ -543,7 +560,7 @@ export default function TickerScreen() {
             <View style={{ gap: 12 }}>
               {data.entry_suggestion && (
                 <View>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#16a34a', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: C.green, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>
                     Entry
                   </Text>
                   <Text style={{ fontSize: 13, color: C.fg, lineHeight: 19 }}>{data.entry_suggestion}</Text>
@@ -551,7 +568,7 @@ export default function TickerScreen() {
               )}
               {data.exit_suggestion && (
                 <View>
-                  <Text style={{ fontSize: 10, fontWeight: '700', color: '#dc2626', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>
+                  <Text style={{ fontSize: 10, fontWeight: '700', color: C.red, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 }}>
                     Exit
                   </Text>
                   <Text style={{ fontSize: 13, color: C.fg, lineHeight: 19 }}>{data.exit_suggestion}</Text>
@@ -564,14 +581,14 @@ export default function TickerScreen() {
         {/* Catalysts */}
         {data.catalysts && data.catalysts.length > 0 && (
           <Section title="Catalysts">
-            <BulletList items={data.catalysts} color="#22c55e" />
+            <BulletList items={data.catalysts} color={C.green} />
           </Section>
         )}
 
         {/* Key risks */}
         {data.key_risks && data.key_risks.length > 0 && (
           <Section title="Key Risks">
-            <BulletList items={data.key_risks} color="#ef4444" />
+            <BulletList items={data.key_risks} color={C.red} />
           </Section>
         )}
 
@@ -615,8 +632,8 @@ export default function TickerScreen() {
               { label: 'ML Scoring Model', value: 'XGBoost — trained on signal history', status: 'planned' },
             ] as { label: string; value: string; status: 'live' | 'dev' | 'planned' }[]).map(({ label, value, status }) => {
               const badge = {
-                live: { bg: 'rgba(34,197,94,0.12)', fg: '#16a34a', text: 'Live' },
-                dev: { bg: 'rgba(245,158,11,0.12)', fg: '#d97706', text: 'Dev data' },
+                live: { bg: `${C.green}1f`, fg: C.green, text: 'Live' },
+                dev: { bg: `${C.amber}1f`, fg: C.amber, text: 'Dev data' },
                 planned: { bg: `${C.border}80`, fg: C.fgMuted, text: 'Soon' },
               }[status]
               return (
@@ -643,7 +660,7 @@ export default function TickerScreen() {
           }}>
             Scoring is a weighted composite of technical, fundamental, sentiment, macro, volatility, and alternative data. See docs/09-analysis-sources.md for full methodology.
           </Text>
-          <Text style={{ fontSize: 10, color: '#d97706', marginTop: 6, lineHeight: 14 }}>
+          <Text style={{ fontSize: 10, color: C.amber, marginTop: 6, lineHeight: 14 }}>
             Evaluation data. Rows marked Dev data come from yfinance, licensed for personal
             and development use only. Production requires a commercial data provider.
           </Text>

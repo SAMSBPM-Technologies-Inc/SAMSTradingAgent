@@ -4,8 +4,10 @@ import {
 } from 'react-native'
 import Slider from '@react-native-community/slider'
 import {
-  AlertTriangle, Bell, Bot, Check, ExternalLink, LogOut,
-  Pencil, User, Wifi, WifiOff, X, BookOpen,
+  AlertTriangle, BarChart2, Bell, Bot, Check, ExternalLink, LogOut,
+  Pencil, Target, User, Wifi, WifiOff, X, BookOpen,
+  Sun,
+  Moon,
 } from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
@@ -14,20 +16,21 @@ import type { AlertSettings, AutoTradeSettings, TradingMode } from '../../src/ty
 import { useAuth } from '../../src/lib/auth-context'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
+import { usePalette, type Palette } from '../../src/lib/palette'
+import { useTheme } from '../../src/lib/theme-context'
+import AppHeader from '../../src/components/AppHeader'
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-}
 
-const card = {
+const cardStyle = (C: Palette) => ({
   backgroundColor: C.surface, borderRadius: 12,
   borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 12,
-}
+})
 
 // ── Alert settings ────────────────────────────────────────────────────────────
 
 function AlertSettingsCard() {
+  const C = usePalette()
+  const card = cardStyle(C)
   const [settings, setSettings] = useState<AlertSettings>({
     slack_webhook_url: '', whatsapp_phone: '', whatsapp_apikey: '',
     notify_on_signal_flip: true, notify_on_high_conviction: true, daily_digest: false,
@@ -207,7 +210,7 @@ function AlertSettingsCard() {
         </Pressable>
       </View>
 
-      {error && <Text style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>{error}</Text>}
+      {error && <Text style={{ fontSize: 12, color: C.red, marginTop: 8 }}>{error}</Text>}
     </View>
   )
 }
@@ -243,6 +246,8 @@ const MODE_OPTIONS: { value: TradingMode; label: string; blurb: string }[] = [
 ]
 
 function AutoTradingCard() {
+  const C = usePalette()
+  const card = cardStyle(C)
   const [settings, setSettings] = useState<AutoTradeSettings>(DEFAULT_TRADE_SETTINGS)
   const [connected, setConnected] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -298,8 +303,8 @@ function AutoTradingCard() {
           </Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          {connected ? <Wifi size={12} color="#22c55e" /> : <WifiOff size={12} color={C.fgMuted} />}
-          <Text style={{ fontSize: 11, fontWeight: '600', color: connected ? '#22c55e' : C.fgMuted }}>
+          {connected ? <Wifi size={12} color={C.green} /> : <WifiOff size={12} color={C.fgMuted} />}
+          <Text style={{ fontSize: 11, fontWeight: '600', color: connected ? C.green : C.fgMuted }}>
             {connected ? 'IB Gateway connected' : 'IB Gateway offline'}
           </Text>
         </View>
@@ -308,10 +313,10 @@ function AutoTradingCard() {
       {/* Warning */}
       <View style={{
         flexDirection: 'row', alignItems: 'flex-start', gap: 8,
-        padding: 12, borderRadius: 10, backgroundColor: 'rgba(245,158,11,0.1)', marginBottom: 16,
+        padding: 12, borderRadius: 10, backgroundColor: `${C.amber}1a`, marginBottom: 16,
       }}>
-        <AlertTriangle size={13} color="#d97706" style={{ marginTop: 1 }} />
-        <Text style={{ fontSize: 11, color: '#d97706', flex: 1 }}>
+        <AlertTriangle size={13} color={C.amber} style={{ marginTop: 1 }} />
+        <Text style={{ fontSize: 11, color: C.amber, flex: 1 }}>
           <Text style={{ fontWeight: '700' }}>Paper trading mode by default.</Text>
           {' '}Auto trading places real orders in your IBKR account. Only US-listed stocks are supported.
         </Text>
@@ -348,7 +353,7 @@ function AutoTradingCard() {
                       flexDirection: 'row', alignItems: 'flex-start', gap: 10,
                       borderWidth: 1, borderRadius: 10, padding: 12,
                       borderColor: active ? C.brand : C.border,
-                      backgroundColor: active ? 'rgba(242,96,12,0.05)' : 'transparent',
+                      backgroundColor: active ? `${C.brand}0d` : 'transparent',
                     }}
                   >
                     <View style={{
@@ -435,7 +440,7 @@ function AutoTradingCard() {
               ))}
             </View>
             {!settings.paper_trading && (
-              <Text style={{ fontSize: 11, color: '#ef4444', marginTop: 6 }}>
+              <Text style={{ fontSize: 11, color: C.red, marginTop: 6 }}>
                 Live trading must also be enabled server-side (AUTO_TRADE_LIVE_ALLOWED=true).
               </Text>
             )}
@@ -550,7 +555,7 @@ function AutoTradingCard() {
                 {settings.allowed_tickers.map((t) => (
                   <View key={t} style={{
                     flexDirection: 'row', alignItems: 'center', gap: 4,
-                    backgroundColor: 'rgba(242,96,12,0.1)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20,
+                    backgroundColor: `${C.brand}1a`, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20,
                   }}>
                     <Text style={{ fontSize: 11, fontWeight: '700', color: C.brand }}>{t}</Text>
                     <Pressable
@@ -581,14 +586,17 @@ function AutoTradingCard() {
         </Text>
       </Pressable>
 
-      {error && <Text style={{ fontSize: 12, color: '#ef4444', marginTop: 8 }}>{error}</Text>}
+      {error && <Text style={{ fontSize: 12, color: C.red, marginTop: 8 }}>{error}</Text>}
     </View>
   )
 }
 
 // ── Profile Screen ────────────────────────────────────────────────────────────
 
-export default function ProfileScreen() {
+export default function SettingsScreen() {
+  const C = usePalette()
+  const card = cardStyle(C)
+  const { theme, toggleTheme } = useTheme()
   const { user, logout } = useAuth()
   const [isEditing, setIsEditing] = useState(false)
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
@@ -635,14 +643,15 @@ export default function ProfileScreen() {
         contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 20, paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
       >
-        <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg, marginBottom: 20 }}>Profile</Text>
+        <AppHeader />
+        <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg, marginBottom: 20 }}>Settings</Text>
 
         {/* Avatar + name card */}
         <View style={{ ...card, flexDirection: 'row', alignItems: 'flex-start', gap: 14 }}>
           <View style={{
             width: 56, height: 56, borderRadius: 16,
-            backgroundColor: 'rgba(242,96,12,0.12)',
-            borderWidth: 1, borderColor: 'rgba(242,96,12,0.2)',
+            backgroundColor: `${C.brand}1f`,
+            borderWidth: 1, borderColor: `${C.brand}33`,
             alignItems: 'center', justifyContent: 'center',
           }}>
             <User size={28} color={C.brand} />
@@ -696,8 +705,8 @@ export default function ProfileScreen() {
 
             <Text style={{ fontSize: 13, color: C.fgMuted, marginTop: 3 }}>{user?.email}</Text>
 
-            {saveError && <Text style={{ fontSize: 11, color: '#ef4444', marginTop: 6 }}>{saveError}</Text>}
-            {savedOk && <Text style={{ fontSize: 11, color: '#16a34a', marginTop: 6 }}>Name updated successfully.</Text>}
+            {saveError && <Text style={{ fontSize: 11, color: C.red, marginTop: 6 }}>{saveError}</Text>}
+            {savedOk && <Text style={{ fontSize: 11, color: C.green, marginTop: 6 }}>Name updated successfully.</Text>}
           </View>
         </View>
 
@@ -729,25 +738,95 @@ export default function ProfileScreen() {
           ))}
         </View>
 
-        {/* Trading guide link */}
-        <Pressable
-          onPress={() => router.push('/(app)/guide')}
-          style={({ pressed }) => ({
-            ...card,
-            flexDirection: 'row', alignItems: 'center', gap: 12,
-            opacity: pressed ? 0.7 : 1,
-          })}
-        >
-          <View style={{
-            width: 36, height: 36, borderRadius: 10,
-            backgroundColor: 'rgba(242,96,12,0.1)',
-            alignItems: 'center', justifyContent: 'center',
+        {/* ── Appearance ───────────────────────────────────────────────────
+            The theme switch lives here rather than in the header: it is set
+            once and then left alone, so it does not earn permanent space on
+            every screen. The choice is written to AsyncStorage, so it survives
+            closing the app and is not re-read from the system theme. */}
+        <View style={card}>
+          <Text style={{
+            fontSize: 11, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10,
           }}>
-            <BookOpen size={18} color={C.brand} />
+            Appearance
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {([
+              { mode: 'light' as const, label: 'Light', Icon: Sun },
+              { mode: 'dark' as const, label: 'Dark', Icon: Moon },
+            ]).map(({ mode, label, Icon }) => {
+              const active = theme === mode
+              return (
+                <Pressable
+                  key={mode}
+                  onPress={() => { if (!active) toggleTheme() }}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`${label} appearance`}
+                  style={{
+                    flex: 1, flexDirection: 'row', alignItems: 'center',
+                    justifyContent: 'center', gap: 7,
+                    paddingVertical: 11, borderRadius: 10, borderWidth: 1,
+                    borderColor: active ? C.brand : C.border,
+                    backgroundColor: active ? `${C.brand}1a` : C.surface,
+                  }}
+                >
+                  <Icon size={15} color={active ? C.brand : C.fgMuted} />
+                  <Text style={{
+                    fontSize: 13, fontWeight: '600',
+                    color: active ? C.brand : C.fgMuted,
+                  }}>
+                    {label}
+                  </Text>
+                </Pressable>
+              )
+            })}
           </View>
-          <Text style={{ fontSize: 14, fontWeight: '500', color: C.fg, flex: 1 }}>Trading Guide</Text>
-          <ExternalLink size={14} color={C.fgMuted} />
-        </Pressable>
+        </View>
+
+        {/* ── More screens ─────────────────────────────────────────────────
+            The 1.7 tab bar carries three destinations, matching the web app.
+            Performance moved off it, so this is now the only way to reach it —
+            which makes these rows load-bearing, not decoration. Calibration is
+            reached from Performance, as it was before. */}
+        <View style={card}>
+          <Text style={{
+            fontSize: 11, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4,
+          }}>
+            More
+          </Text>
+          {([
+            { icon: BarChart2, label: 'Performance', note: 'Signal accuracy and win rate', to: '/(app)/performance' },
+            { icon: Target, label: 'Calibration', note: 'Do the thresholds hold up?', to: '/(app)/calibration' },
+            { icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' },
+          ] as const).map(({ icon: Icon, label, note, to }) => (
+            <Pressable
+              key={label}
+              onPress={() => router.push(to)}
+              accessibilityRole="button"
+              accessibilityLabel={label}
+              style={({ pressed }) => ({
+                flexDirection: 'row', alignItems: 'center', gap: 12,
+                paddingVertical: 10, borderTopWidth: 1, borderTopColor: `${C.border}80`,
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <View style={{
+                width: 32, height: 32, borderRadius: 9,
+                backgroundColor: `${C.brand}1a`,
+                alignItems: 'center', justifyContent: 'center',
+              }}>
+                <Icon size={16} color={C.brand} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '500', color: C.fg }}>{label}</Text>
+                <Text style={{ fontSize: 11, color: C.fgMuted }}>{note}</Text>
+              </View>
+              <ExternalLink size={14} color={C.fgMuted} />
+            </Pressable>
+          ))}
+        </View>
 
         <AlertSettingsCard />
         <AutoTradingCard />
@@ -765,12 +844,12 @@ export default function ProfileScreen() {
             style={({ pressed }) => ({
               flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
               paddingVertical: 12, borderRadius: 10,
-              backgroundColor: pressed ? 'rgba(239,68,68,0.08)' : C.surface,
-              borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)',
+              backgroundColor: pressed ? `${C.red}14` : C.surface,
+              borderWidth: 1, borderColor: `${C.red}33`,
             })}
           >
-            <LogOut size={15} color="#ef4444" />
-            <Text style={{ color: '#ef4444', fontWeight: '600', fontSize: 14 }}>Sign Out</Text>
+            <LogOut size={15} color={C.red} />
+            <Text style={{ color: C.red, fontWeight: '600', fontSize: 14 }}>Sign Out</Text>
           </Pressable>
         </View>
         <Disclaimer />

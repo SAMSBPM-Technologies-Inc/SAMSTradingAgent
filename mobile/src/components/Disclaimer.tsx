@@ -1,5 +1,6 @@
 import React from 'react'
 import { Text, View } from 'react-native'
+import { usePalette } from '../lib/palette'
 
 /**
  * Regulatory notice, rendered at the foot of every screen.
@@ -7,18 +8,11 @@ import { Text, View } from 'react-native'
  * Mirrors the web `Layout`'s Disclaimer. Mobile previously carried no copy of
  * it on any screen — it existed only on the web Guide page and inside exported
  * PDFs, in an app that also routes live orders to a broker.
- *
- * Palette is hardcoded light to match the screens, which each declare their own
- * light-only `C` block. When those move onto the theme context, this should
- * follow in the same pass.
  */
-const C = {
-  fg: '#14110c',
-  fgMuted: '#83786a',
-  border: '#e7e2d8',
-}
 
 export default function Disclaimer() {
+  const C = usePalette()
+
   return (
     <View style={{
       marginTop: 32,

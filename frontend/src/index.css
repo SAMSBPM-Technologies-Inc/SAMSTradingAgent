@@ -16,6 +16,9 @@
   --color-fg-muted: #83786a;
   /* Hover wash for bordered/ghost controls. */
   --color-hover: #f1eee6;
+  /* One step above --color-surface. For things that float over the page —
+     toasts, menus, the phone bezel — where a border alone reads as flat. */
+  --color-elev: #f6f4ef;
 
   /* Verdict tints — card backgrounds behind BUY / HOLD / SELL. */
   --tint-buy: #eaf6ee;
@@ -36,6 +39,7 @@
   --color-fg: #f0ece4;
   --color-fg-muted: #9a8f82;
   --color-hover: #221d17;
+  --color-elev: #1a1610;
 
   --tint-buy: #10231a;
   --tint-sell: #2a1414;
@@ -81,6 +85,58 @@
 }
 
 @layer components {
+  /* ── Redesign primitives ────────────────────────────────────────────────
+     Three idioms repeat on every screen of the 1.7 design, so they are
+     declared once here rather than re-spelled inline. Each is purely
+     typographic — none of them carries a colour that isn't a token. */
+
+  /* The all-caps micro label above every section, column and stat. */
+  .label-micro {
+    font-family: 'Archivo', system-ui, sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-transform: uppercase;
+    letter-spacing: 0.11em;
+    color: var(--color-fg-muted);
+  }
+
+  /* Every price, quantity, score and P&L figure. Tabular figures are what
+     let a column of numbers line up on the decimal; proportional ones jitter
+     as the last digit changes, which on a 5-second refresh looks like the
+     row is twitching. */
+  .num {
+    font-family: 'Archivo', system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Small selectable pill — watchlist filters, chart timeframes, routing. */
+  .chip {
+    @apply inline-flex items-center justify-center border border-[var(--color-border)]
+           text-[var(--color-fg-muted)]
+           focus:outline-none focus:ring-1 focus:ring-[#f2600c]/50;
+    background: transparent;
+    border-radius: 6px;
+    height: 24px;
+    padding: 0 8px;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 150ms, color 150ms, border-color 150ms;
+  }
+
+  .chip:hover {
+    background: var(--color-hover);
+    color: var(--color-fg);
+  }
+
+  .chip[aria-pressed='true'],
+  .chip[data-active='true'] {
+    background: var(--color-hover);
+    border-color: #f2600c;
+    color: var(--color-fg);
+  }
+
   /* Card — flat, no shadow */
   .card {
     @apply bg-[var(--color-surface)] border border-[var(--color-border)] p-4;

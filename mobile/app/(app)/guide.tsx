@@ -3,18 +3,17 @@ import { View, Text, Pressable, ScrollView } from 'react-native'
 import { ChevronDown, ChevronUp } from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import Disclaimer from '../../src/components/Disclaimer'
+import { usePalette, type Palette } from '../../src/lib/palette'
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-}
 
-const card = {
+const cardStyle = (C: Palette) => ({
   backgroundColor: C.surface, borderRadius: 12,
   borderWidth: 1, borderColor: C.border, padding: 16, marginBottom: 12,
-}
+})
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   const [open, setOpen] = useState(true)
   return (
     <View style={{ marginBottom: 12 }}>
@@ -44,10 +43,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function P({ children }: { children: React.ReactNode }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return <Text style={{ fontSize: 13, color: C.fg, lineHeight: 20 }}>{children}</Text>
 }
 
 function Bullet({ children }: { children: React.ReactNode }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return (
     <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
       <View style={{ width: 5, height: 5, borderRadius: 3, backgroundColor: C.brand, marginTop: 7, flexShrink: 0 }} />
@@ -57,6 +60,8 @@ function Bullet({ children }: { children: React.ReactNode }) {
 }
 
 function Label({ children }: { children: React.ReactNode }) {
+  const C = usePalette()
+  const card = cardStyle(C)
   return (
     <Text style={{
       fontSize: 9, fontWeight: '700', color: C.fgMuted,
@@ -68,6 +73,8 @@ function Label({ children }: { children: React.ReactNode }) {
 }
 
 export default function GuideScreen() {
+  const C = usePalette()
+  const card = cardStyle(C)
   const [tab, setTab] = useState<'buyer' | 'seller' | 'ibgw'>('buyer')
 
   return (
@@ -189,9 +196,9 @@ export default function GuideScreen() {
           <>
             <View style={{
               padding: 12, borderRadius: 10, marginBottom: 16,
-              backgroundColor: 'rgba(245,158,11,0.1)', borderWidth: 1, borderColor: 'rgba(245,158,11,0.2)',
+              backgroundColor: `${C.amber}1a`, borderWidth: 1, borderColor: `${C.amber}33`,
             }}>
-              <Text style={{ fontSize: 12, color: '#d97706', lineHeight: 18 }}>
+              <Text style={{ fontSize: 12, color: C.amber, lineHeight: 18 }}>
                 IB Gateway must run on a machine that your backend server can reach over TCP. It cannot run on a mobile device.
               </Text>
             </View>
