@@ -1,11 +1,14 @@
 import React from 'react'
 import { Text } from 'react-native'
 import type { Conviction } from '../types'
+import { usePalette, type Palette } from '../lib/palette'
 
-const config: Record<Conviction, { label: string; color: string }> = {
-  HIGH:   { label: 'Strong signal', color: '#f2600c' },
-  MEDIUM: { label: 'Moderate',      color: '#83786a' },
-  LOW:    { label: 'Weak signal',   color: '#83786a' },
+function config(C: Palette): Record<Conviction, { label: string; color: string }> {
+  return {
+    HIGH:   { label: 'Strong signal', color: C.brand },
+    MEDIUM: { label: 'Moderate',      color: C.fgMuted },
+    LOW:    { label: 'Weak signal',   color: C.fgMuted },
+  }
 }
 
 interface Props {
@@ -14,7 +17,8 @@ interface Props {
 }
 
 export default function ConvictionBadge({ conviction, size = 'sm' }: Props) {
-  const { label, color } = config[conviction] ?? config.LOW
+  const cfg = config(usePalette())
+  const { label, color } = cfg[conviction] ?? cfg.LOW
   const fontSize = size === 'lg' ? 13 : 11
 
   return (

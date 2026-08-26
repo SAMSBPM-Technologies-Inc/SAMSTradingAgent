@@ -60,6 +60,20 @@ single feature.
 
 ### Added
 
+- **Mobile has a dark theme.** Every screen read from its own hardcoded
+  light-only `C` block, so a theme switch had nothing to act on. Colours now
+  come from one palette module mirroring the web `:root` / `.dark` tokens, and
+  the choice is a Light/Dark control in Settings. It persists across restarts
+  and the first frame waits for the stored value, so choosing dark no longer
+  means a white flash on every cold start.
+- **Mobile shows the logo and product name on every screen.** Past the login
+  page the app previously identified itself only by its tab bar. The mark is
+  the same rising-arrow geometry as the web `IconMark`, drawn in
+  `react-native-svg` from the same viewBox and stroke weights.
+- **Broker balances are on the mobile Trade screen.** Net liquidation sits in a
+  badge in the header, and available / in-trade / unrealised in a strip above
+  the watchlist — the figures web keeps in its account bar. Deciding whether to
+  buy no longer means leaving the screen that is asking you to.
 - Two alert toggles the settings type already carried but no screen exposed:
   **order submitted** and **fills and closes**.
 - The watchlist rail marks a **timing trigger with a round dot** and a **held
@@ -84,6 +98,23 @@ single feature.
   document; previously each fetched its own, so flipping to live in Settings
   left a header still reading PAPER and a ticket still willing to submit
   without confirmation.
+- **Every mobile row, button and pill built with a `Pressable` style function
+  was rendering unstyled.** `babel-preset-expo` was configured with
+  `jsxImportSource: 'nativewind'`, which routed all JSX through NativeWind's
+  runtime and dropped the function form of `style`. The watchlist collapsed
+  into a vertical stack with no padding, `HOLD`/`SELL` wrapped mid-word, and
+  the ticker screen's Refresh and Share buttons lost their borders. NativeWind
+  was reaching one component, which was itself imported nowhere; the transform
+  and that dead component are both gone. This predates the redesign — it was
+  live on `main` and had never been seen, because the mobile app had never been
+  run.
+- **The mobile watchlist's Signal column was too narrow for its own badges.**
+  42pt against a `SELL`/`HOLD` pill needing ~47pt, so both wrapped to two
+  lines. The header and the row now share one constant sized to the longest
+  badge, and an over-long symbol truncates instead of growing the row.
+- **The post-login redirect no longer typechecks against a route that does not
+  exist.** `router.replace('/(app)/')` — with the trailing slash — fell out of
+  expo-router's generated route union when the screens were renamed.
 - One jsx-a11y suppression removed — the Settings restructure made the label
   association real rather than promised in a comment. One suppression remains
   in the tree, with its reason written beside it.
@@ -117,11 +148,19 @@ single feature.
   local mock, which returns well-formed data for every endpoint. Empty
   watchlists, a disconnected broker, partially-scored tickers and analyst
   responses missing optional fields have been coded for but not observed.
-- **Mobile is an IA change, not a visual redesign, and it was not run at all.**
-  The three tabs and the Positions merge landed and typecheck clean, but no
-  phone screen in this release has been seen rendered. The screens also still
-  use their own hardcoded light-only `C` palette and their previous type scale,
-  so web and mobile now agree on structure but not on appearance.
+- **Mobile was run, but only in the simulator, only on iOS, and only against
+  the mock.** Trade, Positions and Settings were rendered on an iPhone 17 Pro
+  simulator in both themes and the screens above were seen working. No physical
+  device, no Android, and no pass over Performance, Calibration or the Guide,
+  which keep their 1.6 visual design inside a themed shell. Running it at all
+  is what surfaced the NativeWind defect above, which had been shipping
+  unnoticed — treat the untested surfaces accordingly.
+- **Mobile is an IA and palette change, not a full visual redesign.** The three
+  tabs, the Positions merge, the theme and the brand header landed, but the
+  screens keep their previous type scale and spacing, so web and mobile now
+  agree on structure and colour but not on typography.
+- **Mobile toasts stay dark in both themes.** They were already a dark overlay
+  and were left that way; against the dark surface they separate by tint alone.
 - **"Agent activity" on the Trade screen is derived from order records**, not a
   real event feed — there is no agent-log endpoint. It shows orders, so a guard
   that declined to act leaves no trace there.

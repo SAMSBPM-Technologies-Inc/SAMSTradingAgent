@@ -10,11 +10,8 @@ import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
+import { usePalette, type Palette } from '../../src/lib/palette'
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -29,9 +26,9 @@ function fmtReturn(val?: number | null): string {
   return val >= 0 ? `+${pct}%` : `${pct}%`
 }
 
-function returnColor(val?: number | null): string {
+function returnColor(C: Palette, val?: number | null): string {
   if (val == null) return C.fgMuted
-  return val >= 0 ? '#22c55e' : '#ef4444'
+  return val >= 0 ? C.green : C.red
 }
 
 function fmtScore(score?: number | null): string {
@@ -49,6 +46,7 @@ function fmtPrice(val?: number | null): string {
 function StatCard({ label, value, sub, valueColor }: {
   label: string; value: string; sub?: string; valueColor?: string
 }) {
+  const C = usePalette()
   return (
     <View style={{
       flex: 1, borderWidth: 1, borderColor: C.border, borderRadius: 10, padding: 14,
@@ -71,21 +69,22 @@ function StatCard({ label, value, sub, valueColor }: {
 
 // ── Signal accuracy card ──────────────────────────────────────────────────────
 
-const tintBg: Record<Signal, string> = {
-  BUY: '#eaf6ee', SELL: '#fbebeb', HOLD: '#fbf1e2',
-}
-const barColor: Record<Signal, string> = {
-  BUY: '#15803d', SELL: '#b91c1c', HOLD: '#b45309',
-}
+const tintBg = (C: Palette): Record<Signal, string> => ({
+  BUY: C.tintBuy, SELL: C.tintSell, HOLD: C.tintHold,
+})
+const barColor = (C: Palette): Record<Signal, string> => ({
+  BUY: C.green, SELL: C.red, HOLD: C.amber,
+})
 const SIGNAL_ORDER: Signal[] = ['BUY', 'HOLD', 'SELL']
 
 function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][number] }) {
+  const C = usePalette()
   const pending = row.settled === 0
   const winPct = row.win_rate != null ? row.win_rate * 100 : 0
   const signal = row.signal as Signal
 
   return (
-    <View style={{ backgroundColor: tintBg[signal], borderRadius: 10, padding: 16, gap: 10, flex: 1 }}>
+    <View style={{ backgroundColor: tintBg(C)[signal], borderRadius: 10, padding: 16, gap: 10, flex: 1 }}>
       <SignalBadge signal={signal} />
 
       {pending ? (
@@ -96,7 +95,7 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
           <View style={{ height: 4, borderRadius: 2, backgroundColor: `${C.border}80`, overflow: 'hidden' }}>
             <View style={{
               height: '100%', width: `${winPct}%`,
-              backgroundColor: barColor[signal], borderRadius: 2,
+              backgroundColor: barColor(C)[signal], borderRadius: 2,
             }} />
           </View>
         </>
@@ -104,7 +103,7 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
 
       <View>
         <Text style={{ fontSize: 11, color: C.fgMuted }}>{row.settled} of {row.total} settled</Text>
-        <Text style={{ fontSize: 12, fontWeight: '600', color: returnColor(row.avg_return_20d) }}>
+        <Text style={{ fontSize: 12, fontWeight: '600', color: returnColor(C, row.avg_return_20d) }}>
           Avg 20d: {fmtReturn(row.avg_return_20d)}
         </Text>
       </View>
@@ -115,6 +114,7 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
 // ── Signal history rows ───────────────────────────────────────────────────────
 
 function SignalHistoryRow({ rec }: { rec: SignalRecord }) {
+  const C = usePalette()
   return (
     <View style={{
       flexDirection: 'row', alignItems: 'center',
@@ -132,11 +132,11 @@ function SignalHistoryRow({ rec }: { rec: SignalRecord }) {
       <Text style={{ fontSize: 11, color: C.fgMuted, width: 30, textAlign: 'right' }}>
         {fmtScore(rec.score)}
       </Text>
-      <Text style={{ fontSize: 11, color: returnColor(rec.return_20d), flex: 1, textAlign: 'right' }}>
+      <Text style={{ fontSize: 11, color: returnColor(C, rec.return_20d), flex: 1, textAlign: 'right' }}>
         {rec.return_20d != null ? fmtReturn(rec.return_20d) : 'Pending'}
       </Text>
       <Text style={{ fontSize: 10, width: 48, textAlign: 'right',
-        color: rec.was_correct ? '#15803d' : rec.return_20d == null ? C.fgMuted : '#b91c1c',
+        color: rec.was_correct ? C.green : rec.return_20d == null ? C.fgMuted : C.red,
         fontWeight: rec.return_20d != null ? '600' : '400',
       }}>
         {rec.return_20d == null ? '—' : rec.was_correct ? '✓ Yes' : '✗ No'}
@@ -148,6 +148,7 @@ function SignalHistoryRow({ rec }: { rec: SignalRecord }) {
 // ── By-ticker table ───────────────────────────────────────────────────────────
 
 function ByTickerRow({ row }: { row: PerformanceResponse['by_ticker'][number] }) {
+  const C = usePalette()
   return (
     <View style={{
       flexDirection: 'row', alignItems: 'center',
@@ -159,12 +160,12 @@ function ByTickerRow({ row }: { row: PerformanceResponse['by_ticker'][number] })
       <Text style={{ fontSize: 11, color: C.fgMuted, width: 48, textAlign: 'right' }}>{row.settled}</Text>
       <Text style={{
         fontSize: 11, width: 56, textAlign: 'right',
-        color: row.win_rate != null && row.win_rate >= 0.5 ? '#22c55e' : C.fgMuted,
+        color: row.win_rate != null && row.win_rate >= 0.5 ? C.green : C.fgMuted,
         fontWeight: '600',
       }}>
         {fmtPct(row.win_rate)}
       </Text>
-      <Text style={{ fontSize: 11, width: 56, textAlign: 'right', color: returnColor(row.avg_return_20d), fontWeight: '600' }}>
+      <Text style={{ fontSize: 11, width: 56, textAlign: 'right', color: returnColor(C, row.avg_return_20d), fontWeight: '600' }}>
         {fmtReturn(row.avg_return_20d)}
       </Text>
     </View>
@@ -174,6 +175,7 @@ function ByTickerRow({ row }: { row: PerformanceResponse['by_ticker'][number] })
 // ── Performance Screen ────────────────────────────────────────────────────────
 
 export default function PerformanceScreen() {
+  const C = usePalette()
   const [data, setData] = useState<PerformanceResponse | null>(null)
   const [signalHistory, setSignalHistory] = useState<SignalRecord[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -245,16 +247,16 @@ export default function PerformanceScreen() {
           <View style={{
             flexDirection: 'row', alignItems: 'center', gap: 10,
             padding: 14, borderRadius: 10,
-            backgroundColor: 'rgba(239,68,68,0.08)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)',
+            backgroundColor: `${C.red}14`, borderWidth: 1, borderColor: `${C.red}33`,
           }}>
-            <AlertCircle size={16} color="#ef4444" />
-            <Text style={{ fontSize: 13, color: '#ef4444', flex: 1 }}>{error}</Text>
+            <AlertCircle size={16} color={C.red} />
+            <Text style={{ fontSize: 13, color: C.red, flex: 1 }}>{error}</Text>
           </View>
         ) : !data || data.total_signals === 0 ? (
           <View style={{ alignItems: 'center', paddingVertical: 48 }}>
             <View style={{
               width: 64, height: 64, borderRadius: 18,
-              backgroundColor: 'rgba(242,96,12,0.1)',
+              backgroundColor: `${C.brand}1a`,
               alignItems: 'center', justifyContent: 'center', marginBottom: 16,
             }}>
               <BarChart2 size={32} color={C.brand} />
@@ -277,11 +279,11 @@ export default function PerformanceScreen() {
               <StatCard
                 label="Win Rate" value={fmtPct(data.overall_win_rate)}
                 sub={isPending ? 'Pending settlement' : 'On settled signals'}
-                valueColor={data.overall_win_rate != null && data.overall_win_rate >= 0.5 ? '#22c55e' : C.fg}
+                valueColor={data.overall_win_rate != null && data.overall_win_rate >= 0.5 ? C.green : C.fg}
               />
               <StatCard
                 label="Avg 20d Return" value={fmtReturn(data.overall_avg_return_20d)}
-                sub="Per signal" valueColor={returnColor(data.overall_avg_return_20d)}
+                sub="Per signal" valueColor={returnColor(C, data.overall_avg_return_20d)}
               />
             </View>
 
@@ -289,11 +291,11 @@ export default function PerformanceScreen() {
               <View style={{
                 flexDirection: 'row', alignItems: 'flex-start', gap: 10,
                 padding: 12, borderRadius: 10,
-                backgroundColor: 'rgba(234,179,8,0.1)', borderWidth: 1, borderColor: 'rgba(234,179,8,0.2)',
+                backgroundColor: `${C.amber}1a`, borderWidth: 1, borderColor: `${C.amber}33`,
                 marginBottom: 24,
               }}>
-                <TrendingUp size={14} color="#ca8a04" style={{ marginTop: 1 }} />
-                <Text style={{ fontSize: 12, color: '#ca8a04', flex: 1 }}>
+                <TrendingUp size={14} color={C.amber} style={{ marginTop: 1 }} />
+                <Text style={{ fontSize: 12, color: C.amber, flex: 1 }}>
                   {data.total_signals} signal{data.total_signals !== 1 ? 's' : ''} tracking — win rate appears after 20 trading days.
                 </Text>
               </View>

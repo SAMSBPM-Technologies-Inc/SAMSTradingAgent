@@ -4,6 +4,7 @@ import { AlertTriangle, ShoppingCart, WifiOff, X } from 'lucide-react-native'
 import { tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
 import type { AnalyzeResponse, AutoTradeSettingsResponse } from '../types'
+import { usePalette } from '../lib/palette'
 
 /**
  * Buy ticket for the mobile ticker screen — the phone counterpart of the web
@@ -19,11 +20,6 @@ import type { AnalyzeResponse, AutoTradeSettingsResponse } from '../types'
  * first and size to what the broker actually holds — that is the Orders tab.
  */
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  red: '#b91c1c', green: '#15803d',
-}
 
 /** Mirrors trade_manager._volatility_size_factor so the preview matches the fill. */
 const SIZING_PIVOT_VOL = 0.35
@@ -45,6 +41,7 @@ function estimateQty(
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
 function Row({ label, value, tone }: { label: string; value: string; tone?: string }) {
+  const C = usePalette()
   return (
     <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 }}>
       <Text style={{ fontSize: 12, color: C.fgMuted }}>{label}</Text>
@@ -56,6 +53,7 @@ function Row({ label, value, tone }: { label: string; value: string; tone?: stri
 }
 
 export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
+  const C = usePalette()
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
   const [settings, setSettings] = useState<AutoTradeSettingsResponse | null>(null)
@@ -191,7 +189,7 @@ export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
           {/* Paper vs live is the single most important fact on this screen. */}
           <View style={{
             flexDirection: 'row', gap: 8, alignItems: 'flex-start',
-            backgroundColor: isLive ? 'rgba(185,28,28,0.10)' : `${C.border}80`,
+            backgroundColor: isLive ? `${C.red}1a` : `${C.border}80`,
             borderRadius: 8, padding: 10,
           }}>
             <AlertTriangle size={14} color={isLive ? C.red : C.fgMuted} style={{ marginTop: 1 }} />

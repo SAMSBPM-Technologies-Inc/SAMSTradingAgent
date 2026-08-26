@@ -7,6 +7,7 @@ import type {
   CalibrationBucket, CalibrationReport, ConfidenceBucket, ScoreBucket, ThresholdRow,
 } from '../../src/types'
 import Disclaimer from '../../src/components/Disclaimer'
+import { usePalette, type Palette } from '../../src/lib/palette'
 
 /**
  * Threshold calibration on the phone — the counterpart of the web
@@ -18,11 +19,6 @@ import Disclaimer from '../../src/components/Disclaimer'
  *   - It reports; it does not tune.
  */
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  red: '#b91c1c', green: '#15803d', amber: '#b45309',
-}
 
 function pct(v: number | null | undefined, digits = 0): string {
   return v == null ? '—' : `${(v * 100).toFixed(digits)}%`
@@ -34,7 +30,7 @@ function signedPct(v: number | null | undefined, digits = 2): string {
   return v >= 0 ? `+${s}%` : `${s}%`
 }
 
-function returnTone(v: number | null | undefined): string {
+function returnTone(C: Palette, v: number | null | undefined): string {
   if (v == null) return C.fgMuted
   return v >= 0 ? C.green : C.red
 }
@@ -44,6 +40,7 @@ function returnTone(v: number | null | undefined): string {
  * records is the most misleading thing this screen could render.
  */
 function Sample({ row }: { row: CalibrationBucket }) {
+  const C = usePalette()
   if (row.n === 0) {
     return <Text style={{ fontSize: 11, color: C.fgMuted }}>0</Text>
   }
@@ -58,7 +55,7 @@ function Sample({ row }: { row: CalibrationBucket }) {
       {!row.significant && (
         <View style={{
           paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3,
-          backgroundColor: 'rgba(180,83,9,0.12)',
+          backgroundColor: `${C.amber}1f`,
         }}>
           <Text style={{ fontSize: 8, fontWeight: '700', color: C.amber }}>THIN</Text>
         </View>
@@ -68,6 +65,7 @@ function Sample({ row }: { row: CalibrationBucket }) {
 }
 
 function Header({ cols }: { cols: string[] }) {
+  const C = usePalette()
   return (
     <View style={{
       flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8,
@@ -90,6 +88,7 @@ function Header({ cols }: { cols: string[] }) {
 }
 
 function Card({ children }: { children: React.ReactNode }) {
+  const C = usePalette()
   return (
     <View style={{
       backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
@@ -101,6 +100,7 @@ function Card({ children }: { children: React.ReactNode }) {
 }
 
 function Row({ cells, last }: { cells: React.ReactNode[]; last?: boolean }) {
+  const C = usePalette()
   return (
     <View style={{
       flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10,
@@ -123,6 +123,7 @@ function Block({ title, blurb, children }: {
   blurb: string
   children: React.ReactNode
 }) {
+  const C = usePalette()
   return (
     <View style={{ gap: 10, marginBottom: 28 }}>
       <View>
@@ -142,17 +143,18 @@ function Block({ title, blurb, children }: {
 }
 
 function Verdict({ report }: { report: CalibrationReport }) {
+  const C = usePalette()
   const ranks = report.score_ranks_outcomes
   const cfg = ranks === true
     ? {
-        Icon: CheckCircle2, tone: C.green, bg: 'rgba(21,128,61,0.10)',
+        Icon: CheckCircle2, tone: C.green, bg: `${C.green}1a`,
         title: 'The score ranks outcomes.',
         body: `Average return rises across the ${report.usable_buckets} bands with enough `
             + 'settled records to say. The composite is separating winners from losers.',
       }
     : ranks === false
       ? {
-          Icon: XCircle, tone: C.red, bg: 'rgba(185,28,28,0.10)',
+          Icon: XCircle, tone: C.red, bg: `${C.red}1a`,
           title: 'The score does not rank outcomes.',
           body: 'No threshold is the right threshold on a flat curve — the answer is to '
               + 'fix the score, not to move the line.',
@@ -182,6 +184,7 @@ function Verdict({ report }: { report: CalibrationReport }) {
 function Stat({ label, value, tone, sub }: {
   label: string; value: string; tone?: string; sub: string
 }) {
+  const C = usePalette()
   return (
     <View style={{
       flex: 1, minWidth: '46%', backgroundColor: C.surface, borderRadius: 12,
@@ -205,6 +208,7 @@ function Stat({ label, value, tone, sub }: {
 }
 
 export default function CalibrationScreen() {
+  const C = usePalette()
   const [report, setReport] = useState<CalibrationReport | null>(null)
   const [riskGate, setRiskGate] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -235,7 +239,7 @@ export default function CalibrationScreen() {
     <Text style={{ fontSize: 12, color: C.fgMuted, fontVariant: ['tabular-nums'] }}>{v}</Text>
   )
   const ret = (v: number | null | undefined) => (
-    <Text style={{ fontSize: 12, color: returnTone(v), fontVariant: ['tabular-nums'] }}>
+    <Text style={{ fontSize: 12, color: returnTone(C, v), fontVariant: ['tabular-nums'] }}>
       {signedPct(v)}
     </Text>
   )
@@ -261,7 +265,7 @@ export default function CalibrationScreen() {
         {error && (
           <View style={{
             flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 16,
-            backgroundColor: 'rgba(185,28,28,0.10)', borderRadius: 10, padding: 12,
+            backgroundColor: `${C.red}1a`, borderRadius: 10, padding: 12,
           }}>
             <AlertCircle size={16} color={C.red} />
             <Text style={{ flex: 1, fontSize: 13, color: C.red }}>{error}</Text>
@@ -296,7 +300,7 @@ export default function CalibrationScreen() {
               <Stat
                 label="Base avg 20d"
                 value={signedPct(report.base_rate.avg_return)}
-                tone={returnTone(report.base_rate.avg_return)}
+                tone={returnTone(C, report.base_rate.avg_return)}
                 sub="the bar to beat"
               />
               <Stat

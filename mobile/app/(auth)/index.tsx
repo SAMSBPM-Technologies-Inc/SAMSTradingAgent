@@ -15,6 +15,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { authApi } from '../../src/lib/api'
 import { useAuth } from '../../src/lib/auth-context'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
+import { usePalette } from '../../src/lib/palette'
+import LogoLockup from '../../src/components/LogoLockup'
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -28,12 +30,14 @@ type LoginFormData = z.infer<typeof loginSchema>
 // ── Field components ──────────────────────────────────────────────────────────
 
 function FieldLabel({ label }: { label: string }) {
-  return <Text style={{ fontSize: 13, fontWeight: '500', color: '#14110c', marginBottom: 6 }}>{label}</Text>
+  const C = usePalette()
+  return <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg, marginBottom: 6 }}>{label}</Text>
 }
 
 function FieldError({ message }: { message?: string }) {
+  const C = usePalette()
   if (!message) return null
-  return <Text style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>{message}</Text>
+  return <Text style={{ fontSize: 11, color: C.red, marginTop: 4 }}>{message}</Text>
 }
 
 function PasswordField({
@@ -49,6 +53,7 @@ function PasswordField({
   placeholder?: string
   error?: string
 }) {
+  const C = usePalette()
   const [show, setShow] = useState(false)
   return (
     <View style={{ marginBottom: 4 }}>
@@ -63,21 +68,21 @@ function PasswordField({
               style={{
                 flex: 1,
                 borderWidth: 1,
-                borderColor: '#e7e2d8',
+                borderColor: C.border,
                 borderRadius: 10,
                 paddingHorizontal: 14,
                 paddingVertical: 12,
                 paddingRight: 44,
                 fontSize: 14,
-                color: '#14110c',
-                backgroundColor: '#ffffff',
+                color: C.fg,
+                backgroundColor: C.surface,
               }}
               secureTextEntry={!show}
               onChangeText={onChange}
               onBlur={onBlur}
               value={value}
               placeholder={placeholder}
-              placeholderTextColor="#83786a"
+              placeholderTextColor={C.fgMuted}
               autoCapitalize="none"
             />
           )}
@@ -88,8 +93,8 @@ function PasswordField({
           hitSlop={8}
         >
           {show
-            ? <EyeOff size={16} color="#83786a" />
-            : <Eye size={16} color="#83786a" />}
+            ? <EyeOff size={16} color={C.fgMuted} />
+            : <Eye size={16} color={C.fgMuted} />}
         </Pressable>
       </View>
       <FieldError message={error} />
@@ -100,6 +105,7 @@ function PasswordField({
 // ── Login Form ────────────────────────────────────────────────────────────────
 
 function LoginForm({ onSuccess }: { onSuccess: () => void }) {
+  const C = usePalette()
   const { login } = useAuth()
   const [serverError, setServerError] = useState<string | null>(null)
 
@@ -128,15 +134,15 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
           render={({ field: { onChange, onBlur, value } }) => (
             <TextInput
               style={{
-                borderWidth: 1, borderColor: '#e7e2d8', borderRadius: 10,
+                borderWidth: 1, borderColor: C.border, borderRadius: 10,
                 paddingHorizontal: 14, paddingVertical: 12, fontSize: 14,
-                color: '#14110c', backgroundColor: '#ffffff',
+                color: C.fg, backgroundColor: C.surface,
               }}
               onChangeText={onChange}
               onBlur={onBlur}
               value={value}
               placeholder="you@example.com"
-              placeholderTextColor="#83786a"
+              placeholderTextColor={C.fgMuted}
               keyboardType="email-address"
               autoCapitalize="none"
               autoComplete="email"
@@ -157,9 +163,9 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
       {serverError && (
         <View style={{
           paddingHorizontal: 14, paddingVertical: 12, borderRadius: 10,
-          backgroundColor: 'rgba(239,68,68,0.1)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)',
+          backgroundColor: `${C.red}1a`, borderWidth: 1, borderColor: `${C.red}33`,
         }}>
-          <Text style={{ color: '#ef4444', fontSize: 13 }}>{serverError}</Text>
+          <Text style={{ color: C.red, fontSize: 13 }}>{serverError}</Text>
         </View>
       )}
 
@@ -167,7 +173,7 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
         onPress={handleSubmit(onSubmit)}
         disabled={isSubmitting}
         style={{
-          backgroundColor: '#f2600c',
+          backgroundColor: C.brand,
           borderRadius: 10, paddingVertical: 16,
           flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
         }}
@@ -184,10 +190,11 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
 // ── Auth Screen ───────────────────────────────────────────────────────────────
 
 export default function AuthScreen() {
-  const onSuccess = () => router.replace('/(app)/')
+  const C = usePalette()
+  const onSuccess = () => router.replace('/(app)')
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#f5f2ed' }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 80 }}
@@ -196,33 +203,24 @@ export default function AuthScreen() {
         bounces={true}
       >
         {/* Brand header */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 32 }}>
-          <View style={{
-            width: 36, height: 36, borderRadius: 9,
-            backgroundColor: '#f2600c',
-            alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>S</Text>
-          </View>
-          <Text style={{ color: '#f2600c', fontWeight: '700', fontSize: 17, letterSpacing: -0.3 }}>
-            SAMSBPM
-          </Text>
+        <View style={{ marginBottom: 32 }}>
+          <LogoLockup size={36} />
         </View>
 
         {/* Heading */}
         <View style={{ marginBottom: 24 }}>
-          <Text style={{ fontSize: 28, fontWeight: '300', color: '#14110c', marginBottom: 4 }}>
+          <Text style={{ fontSize: 28, fontWeight: '300', color: C.fg, marginBottom: 4 }}>
             Welcome back
           </Text>
-          <Text style={{ fontSize: 14, color: '#83786a' }}>
+          <Text style={{ fontSize: 14, color: C.fgMuted }}>
             Sign in to your trading dashboard
           </Text>
         </View>
 
         {/* Card */}
         <View style={{
-          backgroundColor: '#ffffff', borderRadius: 16,
-          borderWidth: 1, borderColor: '#e7e2d8',
+          backgroundColor: C.surface, borderRadius: 16,
+          borderWidth: 1, borderColor: C.border,
           padding: 20,
           shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
           shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,

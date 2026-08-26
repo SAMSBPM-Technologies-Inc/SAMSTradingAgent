@@ -1,12 +1,20 @@
 import React from 'react'
 import { View, Text } from 'react-native'
 import type { Signal } from '../types'
+import { usePalette, type Palette } from '../lib/palette'
 
-const config: Record<Signal | 'PENDING', { bg: string; text: string; label: string }> = {
-  BUY:  { bg: '#eaf6ee', text: '#15803d', label: 'BUY' },
-  SELL: { bg: '#fbebeb', text: '#b91c1c', label: 'SELL' },
-  HOLD: { bg: '#fbf1e2', text: '#b45309', label: 'HOLD' },
-  PENDING: { bg: '#ece8e0', text: '#83786a', label: '—' },
+/**
+ * Tint and accent per verdict, taken from the palette so the badge follows the
+ * theme. The pairs match the web `--tint-*` / `--accent-*` tokens: tint behind,
+ * accent on top, both flipping together so contrast survives either ground.
+ */
+function config(C: Palette): Record<Signal | 'PENDING', { bg: string; text: string; label: string }> {
+  return {
+    BUY:  { bg: C.tintBuy,  text: C.green,   label: 'BUY' },
+    SELL: { bg: C.tintSell, text: C.red,     label: 'SELL' },
+    HOLD: { bg: C.tintHold, text: C.amber,   label: 'HOLD' },
+    PENDING: { bg: C.hover, text: C.fgMuted, label: '—' },
+  }
 }
 
 interface Props {
@@ -16,7 +24,9 @@ interface Props {
 }
 
 export default function SignalBadge({ signal, size = 'sm' }: Props) {
-  const { bg, text, label } = config[signal] ?? config.HOLD
+  const C = usePalette()
+  const cfg = config(C)
+  const { bg, text, label } = cfg[signal] ?? cfg.HOLD
   const fontSize = size === 'lg' ? 13 : 11
   const px = size === 'lg' ? 10 : 8
   const py = size === 'lg' ? 4 : 2

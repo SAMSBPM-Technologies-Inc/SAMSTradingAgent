@@ -2,6 +2,7 @@ import React from 'react'
 import { Text, View } from 'react-native'
 import { Check, Info, ShieldAlert, X } from 'lucide-react-native'
 import type { RiskAssessment, ScoreBreakdown, Signal, SignalGate } from '../types'
+import { usePalette, type Palette } from '../lib/palette'
 
 /**
  * Score attribution and the risk gate — the phone counterparts of the web
@@ -11,20 +12,15 @@ import type { RiskAssessment, ScoreBreakdown, Signal, SignalGate } from '../type
  * where did this score come from, and why is (or isn't) this a BUY.
  */
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  red: '#b91c1c', green: '#15803d', amber: '#b45309',
-}
 
 function pct(v: number): string {
   return `${Math.round(v * 100)}`
 }
 
 /** Sub-score colouring matches the gauge: green good, red weak. */
-function scoreTone(score: number): string {
+function scoreTone(C: Palette, score: number): string {
   if (score >= 0.7) return C.green
-  if (score >= 0.4) return '#f97316'
+  if (score >= 0.4) return C.amber
   return C.red
 }
 
@@ -33,6 +29,7 @@ function Bar({ fraction, color, height = 6 }: {
   color: string
   height?: number
 }) {
+  const C = usePalette()
   return (
     <View style={{
       height, borderRadius: height / 2, backgroundColor: C.border, overflow: 'hidden',
@@ -50,6 +47,7 @@ function Bar({ fraction, color, height = 6 }: {
 // ── Factor breakdown ──────────────────────────────────────────────────────────
 
 export function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdown }) {
+  const C = usePalette()
   // The ML path did not compute this score from these weights, so a weighted
   // decomposition beside it would be a fabrication.
   if (!breakdown.attributable) {
@@ -105,7 +103,7 @@ export function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdown }) {
               {/* How the factor rated. */}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <View style={{ flex: 1 }}>
-                  <Bar fraction={f.score} color={scoreTone(f.score)} />
+                  <Bar fraction={f.score} color={scoreTone(C, f.score)} />
                 </View>
                 <Text style={{
                   fontSize: 9, color: C.fgMuted, width: 22, textAlign: 'right',
@@ -180,15 +178,16 @@ export function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdown }) {
 
 // ── Risk and gate ─────────────────────────────────────────────────────────────
 
-const LEVEL_TONE: Record<RiskAssessment['risk_level'], string> = {
+const levelTone = (C: Palette): Record<RiskAssessment['risk_level'], string> => ({
   LOW: C.green, MEDIUM: C.amber, HIGH: C.red,
-}
+})
 
 function GateRow({ label, passed, detail }: {
   label: string
   passed: boolean
   detail: string
 }) {
+  const C = usePalette()
   return (
     <View style={{ flexDirection: 'row', gap: 8, alignItems: 'flex-start' }}>
       {passed
@@ -208,7 +207,8 @@ export function RiskPanel({ risk, gate, signal, score }: {
   signal: Signal
   score: number
 }) {
-  const tone = LEVEL_TONE[risk.risk_level] ?? C.amber
+  const C = usePalette()
+  const tone = levelTone(C)[risk.risk_level] ?? C.amber
 
   return (
     <View style={{ gap: 14 }}>
@@ -276,7 +276,7 @@ export function RiskPanel({ risk, gate, signal, score }: {
           {gate.score_passes_buy && !gate.risk_passes_buy && signal !== 'BUY' && (
             <View style={{
               flexDirection: 'row', gap: 8, alignItems: 'flex-start',
-              backgroundColor: 'rgba(180,83,9,0.10)', borderRadius: 8, padding: 10, marginTop: 2,
+              backgroundColor: `${C.amber}1a`, borderRadius: 8, padding: 10, marginTop: 2,
             }}>
               <ShieldAlert size={14} color={C.amber} style={{ marginTop: 1 }} />
               <Text style={{ flex: 1, fontSize: 11, color: C.amber, lineHeight: 16 }}>

@@ -1,15 +1,7 @@
 import React from 'react'
 import { Tabs } from 'expo-router'
 import { Briefcase, LineChart, Settings as SettingsIcon } from 'lucide-react-native'
-import { useTheme } from '../../src/lib/theme-context'
-
-const BRAND = '#f2600c'
-
-/** Mirrors the web tokens in frontend/src/index.css — keep the two in step. */
-const PALETTE = {
-  light: { muted: '#83786a', surface: '#f5f2ed', border: '#e7e2d8' },
-  dark:  { muted: '#9a8f82', surface: '#141109', border: '#2a2420' },
-} as const
+import { usePalette } from '../../src/lib/palette'
 
 /**
  * Three destinations, matching the web app's 1.7 information architecture:
@@ -21,18 +13,18 @@ const PALETTE = {
  * path Guide and Calibration already used before this change.
  */
 export default function AppLayout() {
-  const { theme } = useTheme()
-  const c = PALETTE[theme]
+  const C = usePalette()
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: BRAND,
-        tabBarInactiveTintColor: c.muted,
+        tabBarActiveTintColor: C.brand,
+        tabBarInactiveTintColor: C.fgMuted,
+        sceneStyle: { backgroundColor: C.bg },
         tabBarStyle: {
-          backgroundColor: c.surface,
-          borderTopColor: c.border,
+          backgroundColor: C.surface,
+          borderTopColor: C.border,
           borderTopWidth: 1,
           height: 60,
           paddingBottom: 8,

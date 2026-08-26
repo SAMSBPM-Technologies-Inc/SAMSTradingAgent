@@ -15,6 +15,11 @@ const THEME_KEY = 'sams_theme'
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const systemScheme = useColorScheme()
   const [theme, setTheme] = useState<Theme>(systemScheme ?? 'light')
+  // The stored choice arrives a tick after first paint. Rendering in the
+  // meantime shows the system theme and then snaps to the saved one — a white
+  // flash on every cold start for anyone who chose dark. Hold the first frame
+  // instead; the read is a single AsyncStorage hit.
+  const [hydrated, setHydrated] = useState(false)
 
   useEffect(() => {
     AsyncStorage.getItem(THEME_KEY)
@@ -25,6 +30,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         }
       })
       .catch(() => {})
+      // Never leave the app blank because storage failed.
+      .finally(() => setHydrated(true))
   }, [])
 
   const toggleTheme = () => {
@@ -38,7 +45,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      {children}
+      {hydrated ? children : null}
     </ThemeContext.Provider>
   )
 }

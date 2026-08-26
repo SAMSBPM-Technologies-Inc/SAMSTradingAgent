@@ -12,6 +12,8 @@ import { SOURCE_LABEL, tradeSource } from '../../src/lib/trade-source'
 import type { Holding, Proposal, TradeRecord } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import Disclaimer from '../../src/components/Disclaimer'
+import { usePalette, type Palette } from '../../src/lib/palette'
+import AppHeader from '../../src/components/AppHeader'
 
 /**
  * Positions — holdings, the proposal queue, and every order ever sent.
@@ -27,11 +29,6 @@ import Disclaimer from '../../src/components/Disclaimer'
  * a button reads as broken.
  */
 
-const C = {
-  bg: '#f5f2ed', surface: '#ffffff', fg: '#14110c',
-  fgMuted: '#83786a', border: '#e7e2d8', brand: '#f2600c',
-  red: '#b91c1c', green: '#15803d', amber: '#b45309',
-}
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
@@ -41,6 +38,7 @@ function money(v: number | null | undefined): string {
 
 /** Broker-statement convention: gains green, losses red in parentheses. */
 function Pnl({ value }: { value: number | null | undefined }) {
+  const C = usePalette()
   if (value == null) return <Text style={{ color: C.fgMuted, fontSize: 12 }}>—</Text>
   const loss = value < -0.005
   const gain = value > 0.005
@@ -54,18 +52,22 @@ function Pnl({ value }: { value: number | null | undefined }) {
   )
 }
 
-const STATUS_TONE: Record<string, { bg: string; fg: string }> = {
-  FILLED: { bg: 'rgba(21,128,61,0.12)', fg: C.green },
-  PENDING: { bg: 'rgba(180,83,9,0.12)', fg: C.amber },
-  PARTIAL: { bg: 'rgba(180,83,9,0.12)', fg: C.amber },
-  PROPOSED: { bg: 'rgba(242,96,12,0.12)', fg: C.brand },
-  REJECTED: { bg: 'rgba(185,28,28,0.12)', fg: C.red },
-  UNRECONCILED: { bg: 'rgba(185,28,28,0.12)', fg: C.red },
+/** Tint is the accent at low alpha, so the pair flips with the theme together. */
+function statusTone(C: Palette): Record<string, { bg: string; fg: string }> {
+  return {
+    FILLED: { bg: `${C.green}20`, fg: C.green },
+    PENDING: { bg: `${C.amber}20`, fg: C.amber },
+    PARTIAL: { bg: `${C.amber}20`, fg: C.amber },
+    PROPOSED: { bg: `${C.brand}20`, fg: C.brand },
+    REJECTED: { bg: `${C.red}20`, fg: C.red },
+    UNRECONCILED: { bg: `${C.red}20`, fg: C.red },
+  }
 }
-const STATUS_DEFAULT = { bg: `${C.border}90`, fg: C.fgMuted }
+const statusDefault = (C: Palette) => ({ bg: `${C.border}90`, fg: C.fgMuted })
 
 function StatusPill({ status }: { status: string }) {
-  const tone = STATUS_TONE[status] ?? STATUS_DEFAULT
+  const C = usePalette()
+  const tone = statusTone(C)[status] ?? statusDefault(C)
   return (
     <View style={{
       paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
@@ -82,6 +84,7 @@ function sourceLabel(signalType?: string | null): string {
 }
 
 function SectionTitle({ children, note }: { children: string; note?: string }) {
+  const C = usePalette()
   return (
     <View style={{ marginBottom: 10 }}>
       <Text style={{
@@ -105,6 +108,7 @@ function ProposalCard({ proposal, onResolved }: {
   proposal: Proposal
   onResolved: () => void
 }) {
+  const C = usePalette()
   const { toast } = useToast()
   const [busy, setBusy] = useState<'approve' | 'decline' | null>(null)
   // A live-money proposal must not be approvable in one tap. The order ticket
@@ -259,6 +263,7 @@ function ProposalCard({ proposal, onResolved }: {
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function PositionsScreen() {
+  const C = usePalette()
   const { toast, toastWithUndo } = useToast()
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [positions, setPositions] = useState<TradeRecord[]>([])
@@ -327,6 +332,7 @@ export default function PositionsScreen() {
           />
         }
       >
+        <AppHeader />
         <Text style={{ fontSize: 24, fontWeight: '300', color: C.fg }}>Positions</Text>
         <Text style={{ fontSize: 13, color: C.fgMuted, marginTop: 2, marginBottom: 20 }}>
           What is held, what is waiting on you, and everything ever sent.
@@ -335,7 +341,7 @@ export default function PositionsScreen() {
         {error && (
           <View style={{
             flexDirection: 'row', gap: 10, alignItems: 'center', marginBottom: 16,
-            backgroundColor: 'rgba(185,28,28,0.10)', borderRadius: 10, padding: 12,
+            backgroundColor: `${C.red}1a`, borderRadius: 10, padding: 12,
           }}>
             <AlertCircle size={16} color={C.red} />
             <Text style={{ flex: 1, fontSize: 13, color: C.red }}>{error}</Text>
