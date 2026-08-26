@@ -3,8 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from './lib/theme-context'
 import { AuthProvider, useAuth } from './lib/auth-context'
 import AuthPage from './pages/AuthPage'
-import DashboardPage from './pages/DashboardPage'
-import TickerPage from './pages/TickerPage'
+import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
 import ProfilePage from './pages/ProfilePage'
 import GuidePage from './pages/GuidePage'
@@ -38,11 +37,14 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/auth" element={<AuthPage />} />
+      {/* Trade answers "what should I do about this name, and why". `/` shows
+          the first watched ticker; `/ticker/:symbol` deep-links to any name,
+          watched or not. Both render the same screen. */}
       <Route
         path="/"
         element={
           <ProtectedRoute>
-            <DashboardPage />
+            <TradePage />
           </ProtectedRoute>
         }
       />
@@ -73,7 +75,7 @@ function AppRoutes() {
         path="/ticker/:symbol"
         element={
           <ProtectedRoute>
-            <TickerPage />
+            <TradePage />
           </ProtectedRoute>
         }
       />

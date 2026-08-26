@@ -5,6 +5,7 @@ import {
   CrosshairMode,
   HistogramSeries,
   LineSeries,
+  LineStyle,
   createChart,
   type IChartApi,
   type UTCTimestamp,
@@ -28,11 +29,14 @@ import LoadingSpinner from './LoadingSpinner'
  */
 
 const RANGES = [
+  { label: '1M', days: 30 },
   { label: '3M', days: 90 },
   { label: '6M', days: 180 },
   { label: '1Y', days: 365 },
   { label: '2Y', days: 730 },
 ] as const
+
+const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
 /** lightweight-charts wants epoch seconds; the API sends YYYY-MM-DD. */
 function toTime(date: string): UTCTimestamp {
@@ -51,7 +55,18 @@ function palette(theme: 'light' | 'dark') {
       }
 }
 
-export default function PriceChart({ ticker }: { ticker: string }) {
+export default function PriceChart({
+  ticker,
+  stopLoss,
+  priceTarget,
+  height = 320,
+}: {
+  ticker: string
+  /** Drawn as a dashed guide. The price scale is left alone — see below. */
+  stopLoss?: number | null
+  priceTarget?: number | null
+  height?: number
+}) {
   const { theme } = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<IChartApi | null>(null)
@@ -99,7 +114,7 @@ export default function PriceChart({ ticker }: { ticker: string }) {
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: c.grid },
       timeScale: { borderColor: c.grid, timeVisible: false },
-      height: 320,
+      height,
       autoSize: true,
     })
     chartRef.current = chart
@@ -141,66 +156,98 @@ export default function PriceChart({ ticker }: { ticker: string }) {
       scaleMargins: { top: 0.82, bottom: 0 },
     })
 
+    // Stop and target as dashed guides on the candle series.
+    //
+    // These are price *lines*, not data points, which matters: a stop far below
+    // the visible range would rescale the whole chart if it were plotted as a
+    // series, flattening the price action into a band at the top. A price line
+    // is clamped to the pane and leaves the scale alone.
+    if (stopLoss != null && stopLoss > 0) {
+      candles.createPriceLine({
+        price: stopLoss,
+        color: c.down,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: 'stop',
+      })
+    }
+    if (priceTarget != null && priceTarget > 0) {
+      candles.createPriceLine({
+        price: priceTarget,
+        color: c.up,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: 'target',
+      })
+    }
+
     chart.timeScale().fitContent()
 
     return () => {
       chart.remove()
       chartRef.current = null
     }
-  }, [data, theme])
+  }, [data, theme, height, stopLoss, priceTarget])
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3 text-[0.65rem] text-[var(--color-fg-muted)]">
-          <span className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 rounded-full bg-brand-500" /> SMA 20
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-3 h-0.5 rounded-full bg-[var(--color-fg-muted)]" /> SMA 50
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1" role="group" aria-label="Chart range">
+    <div className="flex flex-col gap-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1.5" role="group" aria-label="Chart range">
           {RANGES.map((r) => (
             <button
               key={r.label}
               onClick={() => setDays(r.days)}
               aria-pressed={days === r.days}
-              className={`px-2 py-0.5 rounded-md text-[0.7rem] font-medium transition-colors ${
-                days === r.days
-                  ? 'bg-brand-500 text-white'
-                  : 'text-[var(--color-fg-muted)] hover:text-[var(--color-fg)] hover:bg-[var(--color-border)]/50'
-              }`}
+              className="chip num"
             >
               {r.label}
             </button>
           ))}
         </div>
+
+        <div className="ml-auto flex flex-wrap items-center gap-3 text-[10.5px] text-[var(--color-fg-muted)]">
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-0.5 w-3 rounded-full bg-brand-500" /> SMA 20
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span aria-hidden="true" className="h-0.5 w-3 rounded-full bg-[var(--color-fg-muted)]" /> SMA 50
+          </span>
+          {stopLoss != null && stopLoss > 0 && (
+            <span className="text-[var(--accent-sell)]">- - stop {usd.format(stopLoss)}</span>
+          )}
+          {priceTarget != null && priceTarget > 0 && (
+            <span className="text-[var(--accent-buy)]">- - target {usd.format(priceTarget)}</span>
+          )}
+        </div>
       </div>
 
-      <div className="relative min-h-[320px]">
+      <div className="relative" style={{ minHeight: height }}>
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center z-10
-                          bg-[var(--color-surface)]/70">
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--color-surface)]/70">
             <LoadingSpinner size="md" />
           </div>
         )}
 
         {error ? (
-          <div className="flex flex-col items-center justify-center gap-2 h-[320px]
-                          text-center text-[var(--color-fg-muted)]">
-            <AlertCircle className="w-6 h-6" />
-            <p className="text-xs max-w-xs">{error}</p>
+          <div
+            className="flex flex-col items-center justify-center gap-2 text-center text-[var(--color-fg-muted)]"
+            style={{ height }}
+          >
+            <AlertCircle className="h-6 w-6" aria-hidden="true" />
+            <p className="max-w-xs text-xs">{error}</p>
           </div>
         ) : !loading && (!data || data.bars.length === 0) ? (
-          <div className="flex flex-col items-center justify-center gap-2 h-[320px]
-                          text-center text-[var(--color-fg-muted)]">
-            <LineChart className="w-6 h-6" />
+          <div
+            className="flex flex-col items-center justify-center gap-2 text-center text-[var(--color-fg-muted)]"
+            style={{ height }}
+          >
+            <LineChart className="h-6 w-6" aria-hidden="true" />
             <p className="text-xs">No price history yet.</p>
           </div>
         ) : (
-          <div ref={containerRef} className="w-full h-[320px]" />
+          <div ref={containerRef} className="w-full" style={{ height }} />
         )}
       </div>
     </div>
