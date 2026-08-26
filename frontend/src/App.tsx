@@ -5,7 +5,7 @@ import { AuthProvider, useAuth } from './lib/auth-context'
 import AuthPage from './pages/AuthPage'
 import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
-import ProfilePage from './pages/ProfilePage'
+import SettingsPage from './pages/SettingsPage'
 import GuidePage from './pages/GuidePage'
 import PositionsPage from './pages/PositionsPage'
 import SearchPage from './pages/SearchPage'
@@ -99,7 +99,7 @@ function AppRoutes() {
         path="/settings"
         element={
           <ProtectedRoute>
-            <ProfilePage />
+            <SettingsPage />
           </ProtectedRoute>
         }
       />
