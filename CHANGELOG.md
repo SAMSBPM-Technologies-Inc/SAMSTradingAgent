@@ -107,16 +107,21 @@ single feature.
 
 ### Known gaps
 
-- **The redesign has not been looked at.** `tsc -b`, `vite build` and
-  `lint:a11y` are clean and the mobile typecheck gained no new errors, but no
-  screen in this release has been seen rendered — Chrome's site permissions
-  blocked `localhost` and no headless browser was available in the environment.
-  Layout, spacing and dark-mode contrast are unverified. Treat the first manual
-  pass as part of shipping this, not as a formality.
-- **Mobile is an IA change, not a visual redesign.** The three tabs and the
-  Positions merge landed; the phone screens still use their own hardcoded
-  light-only `C` palette and their previous type scale. Web and mobile now
-  agree on structure but not on appearance.
+- **The web screens were reviewed by eye against a mock API and looked right;
+  nothing more systematic than that was done.** No responsive sweep across
+  breakpoints, no browser other than Chrome, and there are still no automated
+  UI tests in this project — `tsc -b`, `vite build` and `lint:a11y` are the
+  whole safety net, and none of them can see a layout. A regression here would
+  reach production unnoticed.
+- **The redesign has not been run against the real backend.** The review used a
+  local mock, which returns well-formed data for every endpoint. Empty
+  watchlists, a disconnected broker, partially-scored tickers and analyst
+  responses missing optional fields have been coded for but not observed.
+- **Mobile is an IA change, not a visual redesign, and it was not run at all.**
+  The three tabs and the Positions merge landed and typecheck clean, but no
+  phone screen in this release has been seen rendered. The screens also still
+  use their own hardcoded light-only `C` palette and their previous type scale,
+  so web and mobile now agree on structure but not on appearance.
 - **"Agent activity" on the Trade screen is derived from order records**, not a
   real event feed — there is no agent-log endpoint. It shows orders, so a guard
   that declined to act leaves no trace there.
