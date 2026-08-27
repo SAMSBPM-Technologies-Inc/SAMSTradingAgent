@@ -380,7 +380,9 @@ def _compose(ticker: str, ledger: Ledger, scores: list[dim.Dimension],
     """
     valid = ledger.ids()
     scored = _apply_business_quality(scores, results.get("fundamentals"))
-    report = _filter_report(synthesis, valid) if synthesis else None
+    report, citation_audit = (
+        _filter_report(synthesis, valid) if synthesis else (None, None)
+    )
 
     conviction = None
     if report:
@@ -397,6 +399,13 @@ def _compose(ticker: str, ledger: Ledger, scores: list[dim.Dimension],
         "report": report,
         "conviction": conviction,
         "derived_conviction": (synthesis or {}).get("_derived_conviction"),
+        #: What the citation filter actually did to this report — a count of
+        #: dropped items per field, and any id the model cited that the ledger
+        #: never issued. None when there was no synthesis to filter. This is
+        #: the only way to verify the enforcement mechanism did something on a
+        #: given dossier, rather than trusting that clean-looking prose means
+        #: nothing was caught.
+        "citation_audit": citation_audit,
         "dimensions": [s.to_dict() for s in scored],
         "evidence": ledger.to_list(),
         "evidence_count": len(ledger),
@@ -453,15 +462,25 @@ def _apply_business_quality(scores: list[dim.Dimension],
     return scores
 
 
-def _filter_report(synthesis: dict, valid: set[str]) -> dict:
+def _filter_report(synthesis: dict, valid: set[str]) -> tuple[dict, dict]:
     """
-    Strip everything the ledger cannot support.
+    Strip everything the ledger cannot support, and say what was stripped.
 
     Prose fields lose their uncited sentences; list fields lose their uncited
     items whole, because half a risk is not a smaller risk but a different one.
     `conclusion` and `conviction_rationale` are deliberately exempt: they are
     summaries of cited material rather than new claims, and requiring a
     citation in a closing sentence produces citation noise rather than rigour.
+
+    Returns `(report, audit)` rather than folding the audit into the report
+    dict. It used to be folded in, under `_`-prefixed keys — which meant the
+    one piece of evidence that the citation mechanism actually did anything on
+    a given dossier was computed, logged, and then discarded on the way out:
+    `ResearchReport` has no `_dropped_uncited` field, so Pydantic silently
+    dropped it at the API boundary. Nothing short of reading the log line or
+    the raw Mongo document could tell whether a report full of citations had
+    been checked at all. `audit` is returned separately so the caller can
+    store and expose it as a first-class field instead.
     """
     prose = ("thesis", "bull_case", "bear_case", "what_the_market_is_missing")
     lists = ("key_catalysts", "key_risks", "risks_addressed",
@@ -496,9 +515,8 @@ def _filter_report(synthesis: dict, valid: set[str]) -> dict:
     if dropped or invented:
         logger.warning("research_uncited_claims_dropped",
                        dropped=dropped, invented=sorted(invented))
-    report["_dropped_uncited"] = dropped
-    report["_invented_citations"] = sorted(invented)
-    return report
+    audit = {"dropped": dropped, "invented": sorted(invented)}
+    return report, audit
 
 
 def _bounded_conviction(value: Any, anchor: Optional[float]) -> Optional[float]:

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.config import get_settings
 from app.db import COLL_FUNDAMENTALS_CACHE, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
-from app.models.stock import ResearchDossier
+from app.models.stock import CitationAudit, ResearchDossier
 from app.services.research.dossier import build_dossier, latest_dossier
 from app.utils.logger import get_logger
 
@@ -132,4 +132,7 @@ def _to_model(doc: dict) -> ResearchDossier:
         agents_failed=doc.get("agents_failed") or [],
         agents_skipped=doc.get("agents_skipped") or [],
         synthesis_error=doc.get("synthesis_error"),
+        citation_audit=(
+            CitationAudit(**doc["citation_audit"]) if doc.get("citation_audit") else None
+        ),
     )

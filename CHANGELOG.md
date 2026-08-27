@@ -14,6 +14,27 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.8.2] — 2026-08-27
+
+Closes a gap found while reviewing the first real production dossier: the
+citation filter was computing proof of its own enforcement — a count of every
+uncited claim it dropped, a list of every fabricated id it caught — and then
+throwing that proof away. It lived inside `report` under `_dropped_uncited`
+and `_invented_citations`, keys `ResearchReport` has no field for, so Pydantic
+silently stripped them at the API boundary. Nothing short of a log line or the
+raw Mongo document could tell whether a clean-looking report had actually been
+checked, or the check had simply found nothing to catch on this run.
+
+`citation_audit` is now a first-class field on the dossier — present whenever
+a report was produced, `None` only when there was none to filter — carrying
+`dropped` (a per-field count) and `invented` (the fabricated ids themselves).
+`report` no longer carries any underscore-prefixed keys.
+
+Data-contract change only: no UI renders this yet, and none of the enforcement
+behaviour changed — every uncited or fabricated claim was already being
+removed before this release. This just makes that removal visible instead of
+asserted. 314 tests, up from 309.
+
 ## [1.8.1] — 2026-08-27
 
 Fixes a bug that made every deep-research dossier fail in production on the

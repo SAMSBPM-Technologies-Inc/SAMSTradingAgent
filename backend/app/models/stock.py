@@ -258,6 +258,35 @@ class ResearchReport(BaseModel):
     conviction_rationale: Optional[str] = None
 
 
+class CitationAudit(BaseModel):
+    """
+    What the citation filter actually did to a report.
+
+    Every prose and list field in a synthesised report is checked against the
+    evidence ledger before storage: an uncited claim is dropped, and a citation
+    to an id the ledger never issued is dropped and recorded. This is the proof
+    that happened, not just a claim that it did — without it, a client has no
+    way to tell "nothing was caught" from "the check never ran and I can't see
+    the difference".
+    """
+
+    #: Per-field count of items removed for citing nothing. A prose field that
+    #: lost its only sentence counts as 1; a list field counts however many
+    #: items were dropped whole.
+    dropped: dict[str, int] = {}
+    #: Citation ids the model referenced that do not exist in the evidence
+    #: ledger. A non-empty list here is the case worth treating with the most
+    #: suspicion: a fabricated id looks exactly like a real one to a reader
+    #: skimming the prose, which is why it is stripped rather than merely
+    #: flagged — but the same reason makes it worth surfacing here too.
+    invented: list[str] = []
+
+    @property
+    def clean(self) -> bool:
+        """Whether the filter found nothing to remove."""
+        return not self.dropped and not self.invented
+
+
 class ResearchDossier(BaseModel):
     """
     A deep-research dossier. Separate from the 5-minute signal on purpose.
@@ -295,6 +324,13 @@ class ResearchDossier(BaseModel):
     #: broke", the same way `agents_skipped` distinguishes a skip from a
     #: failure for the specialists.
     synthesis_error: Optional[str] = None
+    #: What the citation filter removed from `report`, or None when there was
+    #: no report to filter. Check `citation_audit.clean` before trusting a
+    #: report's prose at face value — a non-clean audit means the model wrote
+    #: at least one uncited or fabricated claim that this dossier no longer
+    #: contains, which is a fact worth knowing even though the removal already
+    #: happened.
+    citation_audit: Optional[CitationAudit] = None
 
 
 class SignalListResponse(BaseModel):
@@ -392,7 +428,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.8.1"
+    version: str = "1.8.2"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

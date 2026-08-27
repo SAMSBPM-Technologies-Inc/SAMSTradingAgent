@@ -212,6 +212,15 @@ export interface ResearchReport {
   conviction_rationale?: string | null
 }
 
+export interface CitationAudit {
+  /** Per-field count of items removed for citing nothing. */
+  dropped: Record<string, number>
+  /** Citation ids the model referenced that the evidence ledger never issued
+   *  — the case worth the most suspicion, since a fabricated id looks exactly
+   *  like a real one to a reader skimming the prose. */
+  invented: string[]
+}
+
 export interface ResearchDossier {
   ticker: string
   as_of: string
@@ -234,6 +243,11 @@ export interface ResearchDossier {
   /** Set only when `report` is null because the merge call itself failed,
    *  as opposed to there being nothing for it to merge. */
   synthesis_error?: string | null
+  /** What the citation filter removed from `report` — present and possibly
+   *  empty whenever a report was produced, absent when there was none to
+   *  filter. A non-clean audit means the model wrote at least one uncited or
+   *  fabricated claim that no longer appears in the report. */
+  citation_audit?: CitationAudit | null
 }
 
 export interface PerformanceResponse {
