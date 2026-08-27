@@ -39,6 +39,16 @@ api.interceptors.response.use(
 export const TOKEN_STORAGE_KEY = TOKEN_KEY
 
 // Typed API helpers
+
+/* The only endpoint the public landing page calls, and the only one on the
+   whole client that needs no token — the axios interceptor simply finds none
+   to attach. Kept separate from authApi so it is obvious that reaching it does
+   not imply a session. */
+export const contactApi = {
+  send: (body: { name: string; email: string; message: string; company?: string }) =>
+    api.post<{ sent: boolean }>('/contact', body),
+}
+
 export const authApi = {
   login: (email: string, password: string) =>
     api.post<{ access_token: string; token_type: string }>('/auth/login', {

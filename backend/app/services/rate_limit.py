@@ -1,6 +1,6 @@
 """
-Login Rate Limiting
-───────────────────
+Rate Limiting — login attempts and contact-form submissions
+────────────────────────────────────────────────────────────
 `/auth/login` had no limit of any kind: an attacker with a known email could
 guess passwords at whatever rate the network allowed. bcrypt makes each attempt
 slow, which helps and is not a substitute.
@@ -49,7 +49,25 @@ class LimitDecision:
 
 
 class _SlidingWindow:
-    def __init__(self) -> None:
+    """
+    A sliding window with a lockout.
+
+    The thresholds are per-instance rather than module constants because the
+    two things this file now protects want different numbers: password guessing
+    needs a window measured in minutes and a generous allowance for typos,
+    while a public contact form needs a small hourly allowance and no allowance
+    for bursts at all.
+    """
+
+    def __init__(
+        self,
+        max_hits: int = MAX_ATTEMPTS,
+        window_seconds: int = WINDOW_SECONDS,
+        lockout_seconds: int = LOCKOUT_SECONDS,
+    ) -> None:
+        self._max_hits = max_hits
+        self._window_seconds = window_seconds
+        self._lockout_seconds = lockout_seconds
         self._hits: dict[str, deque[float]] = defaultdict(deque)
         self._locked_until: dict[str, float] = {}
 
@@ -71,12 +89,12 @@ class _SlidingWindow:
         now = time.monotonic()
         hits = self._hits[key]
         hits.append(now)
-        cutoff = now - WINDOW_SECONDS
+        cutoff = now - self._window_seconds
         while hits and hits[0] < cutoff:
             hits.popleft()
 
-        if len(hits) >= MAX_ATTEMPTS:
-            self._locked_until[key] = now + LOCKOUT_SECONDS
+        if len(hits) >= self._max_hits:
+            self._locked_until[key] = now + self._lockout_seconds
             hits.clear()
 
     def clear(self, key: str) -> None:
@@ -92,7 +110,7 @@ class _SlidingWindow:
         opportunistically rather than on a timer.
         """
         now = time.monotonic()
-        cutoff = now - WINDOW_SECONDS
+        cutoff = now - self._window_seconds
         for key in [k for k, v in self._hits.items() if not v or v[-1] < cutoff]:
             if key not in self._locked_until:
                 self._hits.pop(key, None)
@@ -139,7 +157,45 @@ def record_login_success(email: str, client_ip: str) -> None:
     _by_email.clear(email.lower())
 
 
+# ── Contact form ──────────────────────────────────────────────────────────────
+#
+# `/contact` is unauthenticated and causes an outbound email, which makes it the
+# one endpoint on this API that a stranger can use to generate cost and noise.
+# Unlike login, *every* submission counts — there is no such thing as a
+# successful attempt that should not be charged for.
+#
+# Three an hour is set for a human with a follow-up question and a correction,
+# and is deliberately far below anything worth automating.
+
+#: Submissions allowed per address per window.
+CONTACT_MAX_SUBMISSIONS = 3
+CONTACT_WINDOW_SECONDS = 3600
+CONTACT_LOCKOUT_SECONDS = 3600
+
+_by_contact = _SlidingWindow(
+    max_hits=CONTACT_MAX_SUBMISSIONS,
+    window_seconds=CONTACT_WINDOW_SECONDS,
+    lockout_seconds=CONTACT_LOCKOUT_SECONDS,
+)
+
+
+def check_contact_allowed(client_ip: str) -> LimitDecision:
+    """Whether this contact submission may proceed. Does not record anything."""
+    _by_contact.prune()
+    return _by_contact.check(client_ip)
+
+
+def record_contact_submission(client_ip: str) -> None:
+    """Count a submission. Called on every accepted message, not only failures."""
+    _by_contact.record_failure(client_ip)
+
+
 def reset_for_tests() -> None:
     """Drop all state. Test seam only."""
-    _by_email.__init__()   # type: ignore[misc]
-    _by_client.__init__()  # type: ignore[misc]
+    _by_email.__init__()    # type: ignore[misc]
+    _by_client.__init__()   # type: ignore[misc]
+    _by_contact.__init__(   # type: ignore[misc]
+        max_hits=CONTACT_MAX_SUBMISSIONS,
+        window_seconds=CONTACT_WINDOW_SECONDS,
+        lockout_seconds=CONTACT_LOCKOUT_SECONDS,
+    )

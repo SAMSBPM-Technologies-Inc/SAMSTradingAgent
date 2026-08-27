@@ -30,6 +30,20 @@
   --accent-buy: #15803d;
   --accent-sell: #b91c1c;
   --accent-hold: #b45309;
+
+  /* Landing page only (see pages/HomePage.tsx).
+     `--home-rule` is a hairline lighter than --color-border: the landing page
+     is built from rules rather than boxes, and at that density the app's
+     border weight reads as a table. The band tokens invert a section against
+     the page, and both are declared per-theme rather than inverting
+     --color-fg, because a cream block is a deliberate accent in light mode and
+     a flashbang in dark. */
+  --home-rule: rgba(20, 17, 12, 0.09);
+  --home-wash: rgba(242, 96, 12, 0.07);
+  --home-band: #14110c;
+  --home-band-fg: #f7f4ee;
+  --home-band-muted: rgba(247, 244, 238, 0.6);
+  --home-band-rule: rgba(247, 244, 238, 0.16);
 }
 
 .dark {
@@ -48,6 +62,13 @@
   --accent-buy: #4ade80;
   --accent-sell: #f87171;
   --accent-hold: #fbbf24;
+
+  --home-rule: rgba(240, 236, 228, 0.11);
+  --home-wash: rgba(242, 96, 12, 0.1);
+  --home-band: #1a1610;
+  --home-band-fg: #f0ece4;
+  --home-band-muted: rgba(240, 236, 228, 0.58);
+  --home-band-rule: rgba(240, 236, 228, 0.13);
 }
 
 @layer base {
@@ -276,4 +297,102 @@
 
 .scrollbar-none::-webkit-scrollbar {
   display: none;                  /* Chrome, Safari */
+}
+
+/* ── Landing page ─────────────────────────────────────────────────────────
+   The public page is set like a document, not assembled like a template:
+   structure comes from a column grid and hairlines, and the only decoration
+   is one warm wash behind the hero. There is no blur, no mesh gradient and no
+   icon-in-a-rounded-square, because those read as a stock layout rather than
+   as this product.
+
+   Scoped to `.home-scroll` so none of it reaches the app shell. */
+
+/* Anchor navigation. Applied via :has so the app keeps instant scrolling —
+   smooth scroll on a dense table screen makes keyboard paging feel laggy. */
+html:has(.home-scroll) {
+  scroll-behavior: smooth;
+}
+
+.home-scroll [id] {
+  scroll-margin-top: 4.5rem;
+}
+
+/* A single warm wash, top-left, behind the hero only. Static: a drifting
+   gradient is the thing that makes a page look generated. */
+.home-wash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(52% 58% at 12% 0%, var(--home-wash), transparent 68%);
+}
+
+/* The column rules that make the editorial grid visible. Drawn as a repeating
+   background rather than as elements, so they cost nothing and cannot be
+   tabbed to. Hidden below lg, where the layout is a single column and the
+   rules would mark nothing. */
+@media (min-width: 1024px) {
+  .home-columns::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    /* Behind the content. An absolutely positioned pseudo-element otherwise
+       paints over its static in-flow siblings, and the rules were crossing the
+       face of the readout panel. */
+    z-index: 0;
+    background-image: repeating-linear-gradient(
+      to right,
+      var(--home-rule) 0 1px,
+      transparent 1px calc(100% / 6)
+    );
+    mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 72%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18%, #000 72%, transparent);
+  }
+}
+
+/* Hairline used everywhere the page separates two things. */
+.home-hr {
+  border-color: var(--home-rule);
+}
+
+/* The inverted band behind the Discipline section. */
+.home-band {
+  background: var(--home-band);
+  color: var(--home-band-fg);
+}
+
+/* Entrance, hero only. Nothing below the fold animates in — a page where
+   every section fades on scroll is a page that fights the reader. */
+.home-rise {
+  animation: home-rise 640ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
+}
+
+@keyframes home-rise {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Factor bars in the hero readout fill once, on load. */
+.home-bar {
+  transform-origin: left center;
+  animation: home-bar 900ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
+}
+
+@keyframes home-bar {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+/* Decoration is never load-bearing: with motion off every element is already
+   in its final state. */
+@media (prefers-reduced-motion: reduce) {
+  html:has(.home-scroll) {
+    scroll-behavior: auto;
+  }
+
+  .home-rise,
+  .home-bar {
+    animation: none;
+  }
 }

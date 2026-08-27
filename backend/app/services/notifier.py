@@ -284,7 +284,7 @@ def _mask_phone(phone: str) -> str:
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 
-def _send_email_blocking(to: str, subject: str, text: str, html: str) -> None:
+def _send_email_blocking(to: str, subject: str, text: str, html: str, reply_to: str | None = None) -> None:
     """
     Synchronous SMTP send. Runs in a worker thread — smtplib blocks, and this is
     called from async request/pipeline paths where blocking the loop would stall
@@ -300,6 +300,12 @@ def _send_email_blocking(to: str, subject: str, text: str, html: str) -> None:
     msg["Subject"] = subject
     msg["From"] = s.email_from
     msg["To"] = to
+    if reply_to:
+        # CR/LF stripped before it reaches a header. Pydantic already rejects
+        # an address containing them, but this function must not depend on its
+        # only caller having validated for it — header injection is exactly the
+        # bug that survives a refactor.
+        msg["Reply-To"] = reply_to.replace("\r", "").replace("\n", "").strip()
     msg.set_content(text)
     msg.add_alternative(html, subtype="html")
 
@@ -315,7 +321,7 @@ def _send_email_blocking(to: str, subject: str, text: str, html: str) -> None:
             srv.send_message(msg)
 
 
-async def _send_email(to: str, subject: str, text: str, html: str) -> str | None:
+async def _send_email(to: str, subject: str, text: str, html: str, reply_to: str | None = None) -> str | None:
     """
     Send an email. Never raises — a mail outage must not stop trading.
 
@@ -334,7 +340,7 @@ async def _send_email(to: str, subject: str, text: str, html: str) -> str | None
     if not to:
         return "no recipient address"
     try:
-        await asyncio.to_thread(_send_email_blocking, to, subject, text, html)
+        await asyncio.to_thread(_send_email_blocking, to, subject, text, html, reply_to)
         logger.info("email_sent", to=to, subject=subject)
         return None
     except Exception as exc:
@@ -690,3 +696,43 @@ async def send_test_email(to: str) -> str | None:
   </p>
 </div>"""
     return await _send_email(to, subject, text, html)
+
+
+# ── Contact form ──────────────────────────────────────────────────────────────
+
+async def send_contact_message(name: str, email: str, message: str) -> str | None:
+    """
+    Deliver a landing-page contact submission to `CONTACT_EMAIL`.
+
+    Returns None on success or a short reason on failure — the route surfaces
+    it, because a visitor who fills in a form and is told "sent" when nothing
+    was sent has been lied to, and unlike a trade alert there is no second
+    channel that might still carry the message.
+
+    Everything here is attacker-controlled text. It is escaped for the HTML
+    part, and the sender's address goes in Reply-To rather than From so the
+    message still originates from an address the SMTP provider authenticates.
+    """
+    import html as html_mod
+
+    from app.config import get_settings
+
+    to = get_settings().contact_email
+    # Subject lines are headers; a newline in one splits the message.
+    safe_name = name.replace("\r", " ").replace("\n", " ").strip()
+
+    subject = f"[STA] Contact from {safe_name}"
+    text = (
+        f"Name:    {safe_name}\n"
+        f"Email:   {email}\n"
+        f"\n"
+        f"{message}\n"
+    )
+    body_html = html_mod.escape(message).replace("\n", "<br>")
+    html_body = (
+        f"<p><strong>Name:</strong> {html_mod.escape(safe_name)}<br>"
+        f"<strong>Email:</strong> {html_mod.escape(email)}</p>"
+        f"<hr><p>{body_html}</p>"
+    )
+
+    return await _send_email(to, subject, text, html_body, reply_to=email)

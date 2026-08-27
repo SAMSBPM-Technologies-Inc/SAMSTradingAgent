@@ -188,6 +188,15 @@ class Settings(BaseSettings):
     smtp_from: str = Field(default="", description="From address; defaults to smtp_username")
     smtp_use_tls: bool = Field(default=True, description="STARTTLS on 587; ignored when port is 465")
 
+    # Where the public contact form delivers. Separate from smtp_from: mail is
+    # *sent* by the app's own mailbox and *addressed* here, so the reply-to on
+    # a visitor's message is the visitor, and the From stays an address the
+    # SMTP provider will actually authenticate.
+    contact_email: str = Field(
+        default="contact@samsbpm.com",
+        description="Recipient for landing-page contact submissions",
+    )
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
