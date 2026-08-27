@@ -409,7 +409,7 @@ def test_an_invented_citation_is_dropped_and_recorded(wired):
     dossier = _run(FakeClient(responses))
 
     assert dossier["report"]["bear_case"] is None
-    assert "F999" in dossier["report"]["_invented_citations"]
+    assert "F999" in dossier["citation_audit"]["invented"]
 
 
 def test_uncited_list_items_are_dropped_whole(wired):
@@ -421,7 +421,73 @@ def test_uncited_list_items_are_dropped_whole(wired):
     dossier = _run(FakeClient(responses))
 
     assert dossier["report"]["key_risks"] == ["Multiple compression [V1]"]
-    assert dossier["report"]["_dropped_uncited"]["key_risks"] == 1
+    assert dossier["citation_audit"]["dropped"]["key_risks"] == 1
+
+
+# ── citation_audit exposure ────────────────────────────────────────────────────
+# The audit used to live inside `report` under `_`-prefixed keys, which meant
+# it was computed, logged, and then silently dropped at the API boundary —
+# ResearchReport has no such field, so Pydantic discarded it on the way out.
+# Nothing short of reading the log line or the raw Mongo document could tell
+# whether a clean-looking report had actually been checked. It is now returned
+# separately by `_filter_report` and stored as its own top-level field.
+
+
+def test_a_clean_report_has_an_empty_but_present_audit(wired):
+    """
+    Present, not absent — the absence of findings must be distinguishable from
+    the field never having been computed at all.
+    """
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    dossier = _run(FakeClient(responses))
+
+    assert dossier["citation_audit"] is not None
+    assert dossier["citation_audit"]["dropped"] == {}
+    assert dossier["citation_audit"]["invented"] == []
+
+
+def test_report_itself_carries_no_underscore_keys(wired):
+    """The audit must not leak back into the narrative object it was split from."""
+    responses = _specialist_payloads() | {
+        "synthesiser": _synthesis(bear_case="Debt is unsustainable [F999].")
+    }
+    dossier = _run(FakeClient(responses))
+
+    assert not any(k.startswith("_") for k in dossier["report"])
+
+
+def test_citation_audit_is_none_when_there_is_no_report(wired):
+    """Nothing to audit when nothing was synthesised — not an empty audit."""
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    dossier = _run(FakeClient(responses,
+                              fail={"fundamentals", "technical", "news", "risk"}))
+
+    assert dossier["report"] is None
+    assert dossier["citation_audit"] is None
+
+
+def test_citation_audit_reaches_the_api_model(wired):
+    from app.routes.research import _to_model
+
+    responses = _specialist_payloads() | {
+        "synthesiser": _synthesis(bear_case="Debt is unsustainable [F999].",
+                                  key_risks=["Real risk [V1]", "Vague worry"])
+    }
+    dossier = _run(FakeClient(responses))
+    payload = _to_model(dossier).model_dump()
+
+    assert payload["citation_audit"]["invented"] == ["F999"]
+    # bear_case is dropped too: its only sentence cited nothing but the
+    # fabricated id, so nothing survives the filter for that field either.
+    assert payload["citation_audit"]["dropped"] == {"bear_case": 1, "key_risks": 1}
+
+
+def test_citation_audit_clean_property_via_the_model(wired):
+    from app.models.stock import CitationAudit
+
+    assert CitationAudit(dropped={}, invented=[]).clean is True
+    assert CitationAudit(dropped={"key_risks": 1}, invented=[]).clean is False
+    assert CitationAudit(dropped={}, invented=["F999"]).clean is False
 
 
 def test_the_conclusion_is_exempt_from_citation(wired):

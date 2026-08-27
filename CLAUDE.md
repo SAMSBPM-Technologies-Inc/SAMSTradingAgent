@@ -194,6 +194,14 @@ npm run web
    "unknown" entry would get an id and an agent would cite it. This is the same
    instinct as `explain_score` refusing to decompose an XGBoost score.
 
+   **The removal is provable, not asserted.** `citation_audit` on
+   `ResearchDossier` carries what was actually dropped and what was fabricated
+   — present whenever a report exists, `None` only when there was none to
+   filter. It used to live inside `report` under `_`-prefixed keys that
+   `ResearchReport` had no field for, so Pydantic silently discarded it at the
+   API boundary; a clean-looking report and a checked-and-found-nothing report
+   were indistinguishable from outside a log line or the raw Mongo document.
+
    **The Risk agent runs in the fan-out and is not shown the bull case.** Given
    a thesis, a red team argues against *that thesis* and inherits its framing;
    the previous single analyst wrote both sides in one pass and produced a bear
