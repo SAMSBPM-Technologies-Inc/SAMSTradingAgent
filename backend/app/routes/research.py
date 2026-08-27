@@ -131,4 +131,5 @@ def _to_model(doc: dict) -> ResearchDossier:
         data_gaps=doc.get("data_gaps") or [],
         agents_failed=doc.get("agents_failed") or [],
         agents_skipped=doc.get("agents_skipped") or [],
+        synthesis_error=doc.get("synthesis_error"),
     )

@@ -231,6 +231,9 @@ export interface ResearchDossier {
   /** Agents never run because their evidence slice held no facts about the
    *  company. Not a failure — nothing broke, there was nothing to assess. */
   agents_skipped: string[]
+  /** Set only when `report` is null because the merge call itself failed,
+   *  as opposed to there being nothing for it to merge. */
+  synthesis_error?: string | null
 }
 
 export interface PerformanceResponse {

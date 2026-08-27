@@ -665,3 +665,52 @@ def test_a_ledger_of_only_declared_absences_builds_no_dossier(wired, monkeypatch
     client = FakeClient(_specialist_payloads() | {"synthesiser": _synthesis()})
     assert _run(client) is None
     assert client.started == []
+
+
+# ── Synthesiser failure is not a silent null ──────────────────────────────────
+# `report: null` on its own does not say whether there was nothing to
+# synthesise or whether the merge call itself broke — the real production run
+# hit exactly this (a schema 400 took out fundamentals, risk, AND the
+# synthesiser at once) and the API response gave no indication which had
+# happened, or that the synthesiser had failed at all.
+
+
+def test_a_synthesiser_failure_is_recorded_with_a_reason(wired):
+    """All four specialists succeed; only the merge call fails."""
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    client = FakeClient(responses, fail={"synthesiser"})
+    dossier = _run(client)
+
+    assert dossier["report"] is None
+    assert dossier["synthesis_error"] == "synthesiser exploded"
+    # The specialists themselves are unaffected — this is not a fan-out failure.
+    assert dossier["agents_failed"] == []
+    assert dossier["agents_skipped"] == []
+
+
+def test_no_usable_specialist_output_gives_a_specific_reason(wired):
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    dossier = _run(FakeClient(responses,
+                              fail={"fundamentals", "technical", "news", "risk"}))
+
+    assert dossier["report"] is None
+    assert dossier["synthesis_error"] == "no specialist agent produced usable output"
+
+
+def test_synthesis_error_is_absent_on_a_successful_report(wired):
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    dossier = _run(FakeClient(responses))
+
+    assert dossier["report"] is not None
+    assert dossier["synthesis_error"] is None
+
+
+def test_synthesis_error_reaches_the_api_model(wired):
+    from app.routes.research import _to_model
+
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    dossier = _run(FakeClient(responses, fail={"synthesiser"}))
+    payload = _to_model(dossier).model_dump()
+
+    assert payload["report"] is None
+    assert payload["synthesis_error"] == "synthesiser exploded"

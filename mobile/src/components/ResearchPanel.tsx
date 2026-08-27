@@ -160,8 +160,9 @@ function Body({ dossier, C }: { dossier: ResearchDossier; C: Palette }) {
 
       {!report && (
         <Callout C={C} tone={C.amber}>
-          The scored dimensions and evidence were computed, but no narrative was
-          produced — every agent call failed. The numbers still stand on their own.
+          {dossier.synthesis_error
+            ? `The scored dimensions and evidence were computed, but the merge step failed (${dossier.synthesis_error}). The numbers still stand on their own.`
+            : 'The scored dimensions and evidence were computed, but no specialist produced anything to merge. The numbers still stand on their own.'}
         </Callout>
       )}
 
