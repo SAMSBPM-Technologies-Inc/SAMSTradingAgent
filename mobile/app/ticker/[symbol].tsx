@@ -18,6 +18,7 @@ import ResearchPanel from '../../src/components/ResearchPanel'
 import OrderTicket from '../../src/components/OrderTicket'
 import PriceChart from '../../src/components/PriceChart'
 import { FactorBreakdown, RiskPanel } from '../../src/components/ScorePanels'
+import { useNow } from '../../src/lib/use-refresh'
 import { usePalette, type Palette } from '../../src/lib/palette'
 
 
@@ -333,6 +334,12 @@ export default function TickerScreen() {
   const [data, setData] = useState<AnalyzeResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+
+  // Ticks so the age below stays true while the screen sits in the background.
+  // The threshold is the server's own `_CACHE_TTL_MINUTES`: past it `/analyze`
+  // would rebuild rather than serve this, which makes it the point where what
+  // is on screen stops being what the engine would say.
+  const now = useNow()
   const [error, setError] = useState<string | null>(null)
 
   const fetchData = useCallback(async (force = false) => {
@@ -387,6 +394,10 @@ export default function TickerScreen() {
 
   if (!data) return null
 
+  /** Mirrors `_CACHE_TTL_MINUTES` in backend/app/routes/analysis.py. */
+  const generatedMs = Date.parse(data.generated_at)
+  const stale = Number.isFinite(generatedMs) && now - generatedMs > 30 * 60 * 1000
+
   const scorePct = Math.round(data.score * 100)
 
   return (
@@ -437,11 +448,25 @@ export default function TickerScreen() {
             flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
             marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.border,
           }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
               <Calendar size={12} color={C.fgMuted} />
               <Text style={{ fontSize: 10, color: C.fgMuted }}>
                 {new Date(data.generated_at).toLocaleString()}
               </Text>
+              {/* Past the server's own cache window this analysis is older than
+                  anything `/analyze` would still serve, so say so rather than
+                  let a quiet timestamp pass for current. Matters more on a
+                  phone than a browser: an app is resumed, not reloaded. */}
+              {stale && (
+                <View style={{
+                  flexDirection: 'row', alignItems: 'center', gap: 3,
+                  paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+                  backgroundColor: `${C.amber}20`,
+                }}>
+                  <AlertCircle size={10} color={C.amber} />
+                  <Text style={{ fontSize: 9, fontWeight: '700', color: C.amber }}>STALE</Text>
+                </View>
+              )}
             </View>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Pressable

@@ -28,6 +28,7 @@ import SignalBadge from '../../src/components/SignalBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
 import AccountStrip from '../../src/components/AccountStrip'
+import { useRefreshOnFocus } from '../../src/lib/use-refresh'
 import { usePalette } from '../../src/lib/palette'
 import AppHeader from '../../src/components/AppHeader'
 
@@ -562,7 +563,10 @@ export default function DashboardScreen() {
     }
   }, [])
 
-  useEffect(() => { fetchWatchlist() }, [fetchWatchlist])
+  // Prices, verdicts and setup triggers are rewritten by the pipeline every
+  // five minutes. This screen used to read them once on mount and never again,
+  // so an app resumed hours later showed the prices it was backgrounded with.
+  useRefreshOnFocus(fetchWatchlist)
 
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true)

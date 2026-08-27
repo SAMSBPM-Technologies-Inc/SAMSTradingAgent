@@ -14,6 +14,104 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.9.0] — 2026-08-27
+
+A UX review of the whole client, and the data bug it turned up.
+
+**Closed positions were disappearing from your record.** `execute_exit` stamps
+`closed_at` the moment it sends the sell; reconciliation's open-trade query
+requires `closed_at: None`, so every trade the agent sold on a SELL signal —
+and every position closed with the Close button — fell outside all of it and
+was never settled. They sat at `PENDING` with a P&L estimated from the limit
+price, invisible to `/performance/trades`, which counts `status == CLOSED`,
+while Order History showed a "pending" pill for a position sold days earlier.
+Realised P&L, win rate and fee totals were computed over whatever was left.
+Reconciliation now settles these against the fill log like any other closure.
+The position cap and the daily-loss kill switch were never affected — both key
+off `closed_at`, not status — so this was a reporting hole, not a risk one.
+
+**A closed trade now says why it closed.** `execute_exit` knew — a fallen
+score, an exit alert, your own Close button — and put it in a log line and a
+push notification, then discarded it. Reconciliation later stamped
+`bracket_or_manual` over everything it found flat, so a stop firing and the
+agent acting on its own signal were indistinguishable. The trade record now
+carries the reason and the trigger behind it, and both reach the UI: the agent
+activity feed reads *"AVGO sold 12 — −$1,234.00"* with *"Score fell below the
+sell threshold — scored 24/100 against the 30 that triggers a sell"* beneath
+it. The Performance page stopped inferring "stop hit" by comparing the exit
+price to the stop, which could contradict the recorded reason.
+
+**The Trade screen mounted itself twice.** Its two layout containers each
+rendered the full screen — 14 canvases for two charts, two live order tickets,
+duplicate fetches of the chart series and the account — with one copy hidden
+by CSS and still running its effects. One tree now, reordered by CSS: 7
+canvases, one ticket, 36% fewer DOM nodes, and `/trading/account` down from
+six requests per load to one now that all four callers share a copy.
+
+**Mobile.** On a phone every action used to sit below three and a half screens
+of reading — the order ticket 2898px down, the approvals queue 3255px, under a
+banner announcing it that was not a button. The order now runs verdict → ticket
+→ evidence, with the ticket on the first screen. The record tables were 46–52rem
+wide in a 356px column, hiding 52–57% of every row behind a scroller with no
+visible edge: the Close button, unrealised P&L, stop, target, net P&L and the
+exit reason were simply not reachable. Those are cards below `md` now, and the
+comparison tables on Calibration and Performance were made to fit rather than
+restructured, because reading one row against the next is their whole point.
+Nothing is hidden on any table at any width any more. Touch targets went from
+24–28px to 36–45px. Five of twelve watchlist tickers were truncating —
+`NVDA` rendered `N…` — because the signal badge won the space; none truncate now.
+
+**Freshness.** The watchlist and the approvals queue were fetched once on mount
+and never again, so a tab left open showed prices as old as the tab. They now
+refresh each minute, paused while the tab is hidden and caught up the moment it
+is revealed. `/analyze` is deliberately excluded — on a cache miss it runs the
+whole pipeline including a paid model call — so instead the analysis states its
+age and flags itself past the server's own 30-minute cache window.
+
+**Smaller things.** The order ticket no longer overwrites a quantity you typed
+while the account balance was still loading. The theme follows your OS instead
+of defaulting to light, until you pick one explicitly.
+
+**Mobile follows.** It had never refreshed anything — every screen fetched once
+on mount, and a phone app is resumed rather than reloaded, so the prices you
+came back to were the ones you left. Watchlist and Positions now refetch on
+screen focus, on return to the foreground, and each minute while both hold.
+Exit reasons render in order history, the ticker screen flags an analysis past
+the server's cache window, and the quantity field no longer refills itself when
+you clear it to retype.
+
+328 tests, up from 314.
+
+### Known gaps
+
+- Trades closed before this release keep `exit_reason: closed_reason_unrecorded`
+  — nothing recorded the cause at the time, and `bracket_or_manual` would be a
+  guess dressed as a fact. Ones that settle without a priceable fill lose their
+  estimated P&L rather than banking it: that estimate came from the limit we
+  asked for, and on a manual close that limit is the position's own average
+  cost, which would report a break-even trade every time.
+- The commission extraction behind the net figures is still unverified against
+  live IB data — see the 1.6.0 note. This release did not touch it.
+- Four sort controls in the watchlist header are 36px rather than 44px. A 44px
+  strip above a twelve-row list costs a row of real content, and sorting is a
+  secondary action; the rows themselves are a full 45px.
+- `PerformancePage` and `CalibrationPage` still use raw Tailwind palette
+  classes (`text-red-500`, `text-amber-600`) instead of the accent tokens.
+  They are legible in both themes, so this is consistency debt rather than the
+  dark-mode bug the token rule exists to prevent.
+- Mobile is synced on the parts that transfer — exit reasons, refresh on focus
+  and foreground, the staleness badge, and the order-ticket quantity fix — and
+  already followed the OS theme and shared its account fetch before this
+  release. The layout work does not transfer: it was a fix for two mounted
+  copies and for tables too wide for a phone, and the native client has
+  neither. Its touch targets were not audited; React Native's defaults are
+  generally adequate but that is an assumption, not a measurement.
+- Two pre-existing type errors in the mobile project — `app/(app)/guide.tsx`
+  passes `style` to a component that does not accept it, and `app/(auth)/index.tsx`
+  hits a react-hook-form generic variance issue. Neither is touched here and
+  neither blocks the bundle, but `tsc --noEmit` is not clean on mobile the way
+  it is on web.
+
 ## [1.8.2] — 2026-08-27
 
 Closes a gap found while reviewing the first real production dossier: the

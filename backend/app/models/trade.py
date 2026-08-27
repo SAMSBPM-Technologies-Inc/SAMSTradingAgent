@@ -127,7 +127,19 @@ class TradeRecord(BaseModel):
     # ── Written by reconciliation, not at submission time ──────────────────
     filled_qty: Optional[float] = None   # shares actually filled (may be < qty)
     filled_at: Optional[datetime] = None
-    exit_reason: Optional[str] = None    # how the position closed (e.g. "bracket_or_manual")
+    #: Why the position closed, in the words a person reads. Written by
+    #: `execute_exit` when the agent or the user did the selling; guessed by
+    #: reconciliation (`bracket_or_manual`) only when a position was found flat
+    #: with no submitted exit behind it, which genuinely is a stop, a target, or
+    #: a hand-placed order at the broker.
+    exit_reason: Optional[str] = None
+    #: The stable code behind `exit_reason` — SELL_SIGNAL / EXIT_ALERT /
+    #: MANUAL_CLOSE. Absent on exits nobody here submitted.
+    exit_trigger: Optional[str] = None
+    #: True while `exit_price` and `pnl` are the levels we asked for rather than
+    #: what filled. Settlement clears it; performance must not count a trade as
+    #: a realised result while it is set.
+    exit_price_estimated: Optional[bool] = None
 
 
 class TradeResponse(BaseModel):
@@ -154,6 +166,8 @@ class TradeResponse(BaseModel):
     filled_qty: Optional[float] = None
     filled_at: Optional[datetime] = None
     exit_reason: Optional[str] = None
+    exit_trigger: Optional[str] = None
+    exit_price_estimated: Optional[bool] = None
 
 
 class ManualOrderRequest(BaseModel):

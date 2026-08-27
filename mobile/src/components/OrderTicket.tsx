@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native'
 import { AlertTriangle, ShoppingCart, WifiOff, X } from 'lucide-react-native'
 import { tradingApi } from '../lib/api'
@@ -88,9 +88,22 @@ export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
     ? estimateQty(price, equity, settings.position_size_pct, null)
     : 0
 
+  // Fill in the suggestion once it can be computed, but never over a number the
+  // user typed. The `qty === ''` guard this replaces got the common case right
+  // and one case wrong: clearing the field to retype snapped the suggestion
+  // straight back in, so the first digit landed after it. `touched` separates
+  // "has not chosen yet" from "chose, and we are about to overrule them".
+  const touched = useRef(false)
+
   useEffect(() => {
-    if (suggested > 0 && qty === '') setQty(String(suggested))
-  }, [suggested, qty])
+    if (touched.current) return
+    if (suggested > 0) setQty(String(suggested))
+  }, [suggested])
+
+  // A new opening is a fresh decision — drop any quantity from the last one.
+  useEffect(() => {
+    if (!open) touched.current = false
+  }, [open])
 
   const parsedQty = Number(qty) || 0
   const notional = parsedQty * price
@@ -207,7 +220,7 @@ export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
             <Text style={{ fontSize: 12, color: C.fgMuted }}>Quantity</Text>
             <TextInput
               value={qty}
-              onChangeText={setQty}
+              onChangeText={(t) => { touched.current = true; setQty(t) }}
               keyboardType="number-pad"
               accessibilityLabel="Order quantity"
               style={{

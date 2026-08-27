@@ -15,6 +15,9 @@ import Layout from '../components/Layout'
 import SignalBadge from '../components/SignalBadge'
 import ConvictionBadge from '../components/ConvictionBadge'
 import LoadingSpinner from '../components/LoadingSpinner'
+import { CardList, RecordCard } from '../components/positions/RecordCard'
+import { exitReasonLabel } from '../lib/exit-reason'
+import { useIsCompact } from '../lib/use-media-query'
 import type { Conviction } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -209,7 +212,30 @@ function TradeStatsBlock({ title, note, stats }: {
   )
 }
 
+/**
+ * Why a position closed, preferring what was recorded over what can be guessed.
+ *
+ * This used to infer the reason by comparing the exit price to the stop and the
+ * target: at or below the stop meant "stop hit". That was the best available
+ * answer when nothing recorded the cause, but it is only a coincidence test —
+ * an exit the agent took on a fallen score prints below the stop often enough,
+ * and would be labelled "stop hit" against a record that says otherwise. The
+ * exit path now writes the reason it acted on, so that wins; the price
+ * comparison survives only for rows closed before it did.
+ */
+function closedReason(t: ClosedTrade): string {
+  const recorded = exitReasonLabel(t.exit_reason)
+  if (recorded && t.exit_reason !== 'bracket_or_manual') return recorded
+
+  if (t.status === 'UNRECONCILED') return 'no broker record'
+  if (t.stop_loss && t.exit_price && t.exit_price <= t.stop_loss) return 'stop hit'
+  if (t.take_profit && t.exit_price && t.exit_price >= t.take_profit) return 'target hit'
+  return recorded ?? 'closed'
+}
+
 function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
+  const compact = useIsCompact()
+
   if (trades.length === 0) {
     return (
       <div className="card p-8 text-center text-sm text-[var(--color-fg-muted)]">
@@ -217,6 +243,44 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
       </div>
     )
   }
+  if (compact) {
+    return (
+      <CardList>
+        {trades.map((t, i) => (
+          <RecordCard
+            key={`${t.ticker}-${t.closed_at ?? i}`}
+            title={t.ticker}
+            badges={
+              t.scale_ins > 0 ? (
+                <span className="text-[10px] text-[var(--color-fg-muted)]">
+                  +{t.scale_ins} add{t.scale_ins > 1 ? 's' : ''}
+                </span>
+              ) : null
+            }
+            fields={[
+              { label: 'Qty', value: t.qty?.toLocaleString() ?? '—' },
+              { label: '%', value: t.pnl_pct == null ? '—' : `${(t.pnl_pct * 100).toFixed(2)}%` },
+              { label: 'Entry', value: fmtPrice(t.entry_price) },
+              { label: 'Exit', value: fmtPrice(t.exit_price) },
+              { label: 'P&L', value: <Pnl value={t.pnl} /> },
+              {
+                label: 'Net',
+                value: t.pnl_net != null
+                  ? <Pnl value={t.pnl_net} />
+                  : <span className="text-[var(--color-fg-muted)]">—</span>,
+              },
+              {
+                label: 'Fees',
+                value: t.commission_paid == null ? '—' : usd.format(t.commission_paid),
+              },
+            ]}
+            note={closedReason(t)}
+          />
+        ))}
+      </CardList>
+    )
+  }
+
   return (
     <div className="card overflow-hidden p-0">
       <div className="overflow-x-auto">
@@ -294,15 +358,7 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
                   )}
                 </td>
                 <td className="px-4 py-2.5 text-[var(--color-fg-muted)] text-[13px]">
-                  {t.status === 'UNRECONCILED'
-                    ? 'no broker record'
-                    : t.exit_reason === 'closed_unpriced'
-                      ? 'closed, unpriced'
-                      : t.stop_loss && t.exit_price && t.exit_price <= t.stop_loss
-                        ? 'stop hit'
-                        : t.take_profit && t.exit_price && t.exit_price >= t.take_profit
-                          ? 'target hit'
-                          : 'closed'}
+                  {closedReason(t)}
                 </td>
               </tr>
             ))}
@@ -474,20 +530,20 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
     // Section label lives on the page's <h2>; a card heading here repeated it.
     <div className="card overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full text-[12px] sm:text-sm">
           <thead>
             <tr className="border-b border-[var(--color-border)]">
-              <th scope="col" className="px-4 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Ticker</th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Signals</th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Settled</th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Win Rate</th>
-              <th scope="col" className="px-4 py-2.5 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Avg 20d</th>
+              <th scope="col" className="px-2 py-2.5 sm:px-4 text-left text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Ticker</th>
+              <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Signals</th>
+              <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Settled</th>
+              <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Win Rate</th>
+              <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Avg 20d</th>
             </tr>
           </thead>
           <tbody>
             {sorted.map((row) => (
               <tr key={row.ticker} className="border-b border-[var(--color-border)]/50 last:border-0">
-                <td className="px-4 py-3">
+                <td className="px-2 py-3 sm:px-4">
                   <span
                     className="font-semibold text-[var(--color-fg)]"
                     style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
@@ -495,9 +551,9 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
                     {row.ticker}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-right text-[var(--color-fg)] tabular-nums">{row.total}</td>
-                <td className="px-4 py-3 text-right text-[var(--color-fg)] tabular-nums">{row.settled}</td>
-                <td className="px-4 py-3 text-right tabular-nums">
+                <td className="px-2 py-3 sm:px-4 text-right text-[var(--color-fg)] tabular-nums">{row.total}</td>
+                <td className="px-2 py-3 sm:px-4 text-right text-[var(--color-fg)] tabular-nums">{row.settled}</td>
+                <td className="px-2 py-3 sm:px-4 text-right tabular-nums">
                   <span
                     className={
                       row.win_rate != null && row.win_rate >= 0.5
@@ -508,7 +564,7 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
                     {fmtPct(row.win_rate)}
                   </span>
                 </td>
-                <td className={`px-4 py-3 text-right tabular-nums ${returnColor(row.avg_return_20d)}`}>
+                <td className={`px-2 py-3 sm:px-4 text-right tabular-nums ${returnColor(row.avg_return_20d)}`}>
                   {fmtReturn(row.avg_return_20d)}
                 </td>
               </tr>

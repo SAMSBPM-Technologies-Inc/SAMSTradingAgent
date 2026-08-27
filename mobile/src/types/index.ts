@@ -392,7 +392,13 @@ export interface TradeRecord {
   /** Written by reconciliation — may be less than qty on a partial fill. */
   filled_qty?: number | null
   filled_at?: string | null
+  /** Why the position closed, in the words a person reads. */
   exit_reason?: string | null
+  /** The stable code behind it: SELL_SIGNAL / EXIT_ALERT / MANUAL_CLOSE.
+   *  Absent on an exit nobody here submitted — a stop or target firing. */
+  exit_trigger?: string | null
+  /** True while exit_price and pnl are the levels we asked for, not a fill. */
+  exit_price_estimated?: boolean | null
 }
 
 export interface AuthResponse {

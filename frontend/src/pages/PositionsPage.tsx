@@ -5,8 +5,8 @@ import { performanceApi, tradingApi } from '../lib/api'
 import { formatDate } from '../lib/format'
 import { useToast } from '../lib/toast-context'
 import { SOURCE_LABEL, tradeSource } from '../lib/trade-source'
+import { exitReasonLabel } from '../lib/exit-reason'
 import type {
-  AccountSummaryResponse,
   ClosedTrade,
   Holding,
   TradePerformanceResponse,
@@ -16,6 +16,9 @@ import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
 import BrokerPanel from '../components/BrokerPanel'
 import OrderHistory, { StatusPill } from '../components/positions/OrderHistory'
+import { CardList, RecordCard } from '../components/positions/RecordCard'
+import { useIsCompact } from '../lib/use-media-query'
+import { useTradingSettings } from '../lib/trading-context'
 
 /**
  * Positions — what is held, what is working, and what the closed trades did.
@@ -65,7 +68,12 @@ function Tile({ label, value, note, color }: {
   return (
     <div className="bg-[var(--color-surface)] px-3 py-2.5">
       <div className="text-[10px] uppercase tracking-[0.1em] text-[var(--color-fg-muted)]">{label}</div>
-      <div className="num mt-0.5 text-[21px] font-semibold" style={{ color: color ?? 'var(--color-fg)' }}>
+      {/* Steps down two-up on a phone so a six-figure net liquidation still
+          fits its half-width column instead of wrapping mid-number. */}
+      <div
+        className="num mt-0.5 text-[17px] font-semibold sm:text-[21px]"
+        style={{ color: color ?? 'var(--color-fg)' }}
+      >
         {value}
       </div>
       <div className="mt-px text-[10.5px] leading-snug text-[var(--color-fg-muted)]">{note}</div>
@@ -113,7 +121,6 @@ export default function PositionsPage() {
   const navigate = useNavigate()
   const { toast, toastWithUndo } = useToast()
 
-  const [account, setAccount] = useState<AccountSummaryResponse | null>(null)
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [positions, setPositions] = useState<TradeRecord[]>([])
   const [orders, setOrders] = useState<TradeRecord[]>([])
@@ -122,19 +129,26 @@ export default function PositionsPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [closing, setClosing] = useState<string | null>(null)
+  // Below md the record tables are 46-52rem wide in a 356px column, hiding
+  // more than half of every row behind an invisible scroller. Cards instead —
+  // and rendered *instead of*, not alongside, so no wide table exists there.
+  const compact = useIsCompact()
+  // One copy of the balances, shared with the account strip above.
+  const { account, refreshAccount } = useTradingSettings()
 
   const load = useCallback(async (spinner = false) => {
     if (spinner) setRefreshing(true)
     setError(null)
     try {
-      const [acc, hold, pos, ord, tp] = await Promise.all([
-        tradingApi.getAccount().catch(() => null),
+      const [hold, pos, ord, tp] = await Promise.all([
         tradingApi.getHoldings().catch(() => null),
         tradingApi.getPositions().catch(() => null),
         tradingApi.getOrders().catch(() => null),
         performanceApi.trades().catch(() => null),
+        // Balances live in the shared context; this only asks it to re-read so
+        // Refresh updates the tiles and the account strip together.
+        refreshAccount().catch(() => null),
       ])
-      setAccount(acc?.data ?? null)
       setHoldings(hold?.data.connected ? hold.data.holdings : [])
       setPositions(pos?.data ?? [])
       setOrders(ord?.data ?? [])
@@ -144,7 +158,7 @@ export default function PositionsPage() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [refreshAccount])
 
   useEffect(() => { load() }, [load])
 
@@ -240,8 +254,13 @@ export default function PositionsPage() {
               screen reads carries no day-open figure, and a "day" number
               derived from something else would be a different quantity wearing
               the same label. */}
-          <div className="mt-4 grid gap-px overflow-hidden rounded-lg border border-[var(--color-border)]
-                          bg-[var(--color-border)] sm:grid-cols-2 lg:grid-cols-5">
+          {/* Two-up on a phone rather than one. Stacked singly these five tiles
+              were 850px of chrome before the first holding, putting "what do I
+              actually own" a screen and a half below the fold on the screen
+              that exists to answer it. */}
+          <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg
+                          border border-[var(--color-border)] bg-[var(--color-border)]
+                          lg:grid-cols-5">
             <Tile
               label="Net liquidation"
               value={money(account?.net_liquidation)}
@@ -304,6 +323,45 @@ export default function PositionsPage() {
                               p-8 text-center text-sm text-[var(--color-fg-muted)]">
                 {account?.connected ? 'No open positions.' : 'Broker disconnected — positions unavailable.'}
               </div>
+            ) : compact ? (
+              <CardList>
+                {openRows.map(({ holding: h, trade: t }) => (
+                  <RecordCard
+                    key={h.ticker}
+                    title={h.ticker}
+                    onTitleClick={() => navigate(`/ticker/${h.ticker}`)}
+                    badges={
+                      <span className="rounded bg-[var(--color-hover)] px-1.5 py-0.5 text-[10px]
+                                       text-[var(--color-fg-muted)]">
+                        {t ? SOURCE_LABEL[tradeSource(t.signal_type)] : 'No record'}
+                      </span>
+                    }
+                    fields={[
+                      { label: 'Qty', value: h.qty.toLocaleString() },
+                      { label: 'Avg cost', value: money(h.avg_cost) },
+                      { label: 'Value', value: money(h.market_value) },
+                      { label: 'Unrealised', value: <Pnl value={h.unrealized_pnl} /> },
+                      {
+                        label: 'Stop',
+                        value: <span style={{ color: 'var(--accent-sell)' }}>{money(t?.stop_loss)}</span>,
+                      },
+                      {
+                        label: 'Target',
+                        value: <span style={{ color: 'var(--accent-buy)' }}>{money(t?.take_profit)}</span>,
+                      },
+                    ]}
+                    action={
+                      <button
+                        onClick={() => closePosition(h.ticker)}
+                        disabled={closing === h.ticker}
+                        className="btn-secondary w-full"
+                      >
+                        {closing === h.ticker ? <LoadingSpinner size="sm" /> : `Close ${h.ticker}`}
+                      </button>
+                    }
+                  />
+                ))}
+              </CardList>
             ) : (
               <TableShell>
                 <table className="w-full min-w-[46rem] text-sm">
@@ -375,6 +433,49 @@ export default function PositionsPage() {
                               p-8 text-center text-sm text-[var(--color-fg-muted)]">
                 No closed trades yet.
               </div>
+            ) : compact ? (
+              <CardList>
+                {closed.map((c, i) => (
+                  <RecordCard
+                    key={`${c.ticker}-${c.closed_at}-${i}`}
+                    title={c.ticker}
+                    onTitleClick={() => navigate(`/ticker/${c.ticker}`)}
+                    badges={
+                      <>
+                        <StatusPill status={c.status} />
+                        <span className="rounded bg-[var(--color-hover)] px-1.5 py-0.5 text-[10px]
+                                         text-[var(--color-fg-muted)]">
+                          {SOURCE_LABEL[tradeSource(c.signal_type)]}
+                        </span>
+                        {c.scale_ins > 0 && (
+                          <span className="text-[10px] text-[var(--color-fg-muted)]">
+                            +{c.scale_ins} {c.scale_ins === 1 ? 'add' : 'adds'}
+                          </span>
+                        )}
+                      </>
+                    }
+                    fields={[
+                      { label: 'Closed', value: formatDate(c.closed_at) },
+                      { label: 'Qty', value: c.qty ?? '—' },
+                      { label: 'Entry', value: money(c.entry_price) },
+                      { label: 'Exit', value: money(c.exit_price) },
+                      { label: 'Gross', value: <Pnl value={c.pnl} /> },
+                      {
+                        label: 'Fees',
+                        // An incomplete total is a floor, not a figure.
+                        value: c.commission_complete ? money(c.commission_paid) : '—',
+                      },
+                      {
+                        label: 'Net',
+                        value: c.commission_complete
+                          ? <Pnl value={c.pnl_net} className="font-semibold" />
+                          : <span className="text-[var(--color-fg-muted)]">—</span>,
+                      },
+                    ]}
+                    note={exitReasonLabel(c.exit_reason)}
+                  />
+                ))}
+              </CardList>
             ) : (
               <TableShell>
                 <table className="w-full min-w-[52rem] text-sm">
@@ -437,7 +538,11 @@ export default function PositionsPage() {
                         <td className="px-3 py-2.5 text-[11px] text-[var(--color-fg-muted)]">
                           <div className="flex flex-col gap-0.5">
                             <StatusPill status={c.status} />
-                            {c.exit_reason && <span className="max-w-[14rem]">{c.exit_reason}</span>}
+                            {/* Machine codes are translated; a sentence the
+                                exit path recorded passes through as written. */}
+                            {exitReasonLabel(c.exit_reason) && (
+                              <span className="max-w-[16rem]">{exitReasonLabel(c.exit_reason)}</span>
+                            )}
                           </div>
                         </td>
                       </tr>

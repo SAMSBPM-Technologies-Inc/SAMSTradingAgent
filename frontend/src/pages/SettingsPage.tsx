@@ -7,7 +7,7 @@ import {
   Pencil,
   X,
 } from 'lucide-react'
-import { alertsApi, authApi, tradingApi, watchlistApi } from '../lib/api'
+import { alertsApi, authApi, watchlistApi } from '../lib/api'
 import { useAuth } from '../lib/auth-context'
 import { useToast } from '../lib/toast-context'
 import { useTradingSettings } from '../lib/trading-context'
@@ -883,16 +883,16 @@ function AccountCard() {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
-  const { settings } = useTradingSettings()
-  const [equity, setEquity] = useState<number | null>(null)
+  // Equity comes from the shared account copy — the same one the strip and the
+  // order ticket read, so the dollar figures under these sliders describe the
+  // account the rest of the app is showing.
+  const { settings, account } = useTradingSettings()
+  const equity = account?.connected ? account.net_liquidation : null
   const [scores, setScores] = useState<number[]>([])
 
-  // Both feed the live notes under the risk sliders. A cap expressed only as a
+  // Feeds the live notes under the risk sliders. A cap expressed only as a
   // percentage is hard to argue with; the same cap in dollars is not.
   useEffect(() => {
-    tradingApi.getAccount()
-      .then(({ data }) => setEquity(data.connected ? data.net_liquidation : null))
-      .catch(() => setEquity(null))
     watchlistApi.get()
       .then(({ data }) => setScores((data.items ?? []).map((i) => i.score)))
       .catch(() => setScores([]))

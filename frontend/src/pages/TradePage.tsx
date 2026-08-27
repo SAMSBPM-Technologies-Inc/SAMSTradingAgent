@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { AlertCircle, PanelLeft, X } from 'lucide-react'
 import { analyzeApi, tradingApi, watchlistApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
+import { usePoll } from '../lib/use-poll'
 import type {
   AnalyzeResponse,
   Holding,
@@ -14,8 +15,8 @@ import type {
 import Layout from '../components/Layout'
 import LoadingSpinner from '../components/LoadingSpinner'
 import WatchlistRail from '../components/trade/WatchlistRail'
-import TickerDetail from '../components/trade/TickerDetail'
-import TradeSidebar from '../components/trade/TradeSidebar'
+import { TickerAnalysis, TickerHeader } from '../components/trade/TickerDetail'
+import { ActivityPanel, ApprovalsPanel, OrderPanel } from '../components/trade/TradeSidebar'
 
 /**
  * Trade — the screen the 1.7 redesign is built around.
@@ -80,8 +81,10 @@ export default function TradePage() {
   const { holdings, positions, reloadHeld } = useHeld()
 
   // ── Watchlist ─────────────────────────────────────────────────────────────
-  const loadWatchlist = useCallback(async () => {
-    setListLoading(true)
+  const loadWatchlist = useCallback(async (background = false) => {
+    // A background refresh must not raise the loading flag: the rail would
+    // flash its skeleton over rows already on screen, once a minute, forever.
+    if (!background) setListLoading(true)
     try {
       const { data: res } = await watchlistApi.get()
       setItems(res.items ?? [])
@@ -96,6 +99,12 @@ export default function TradePage() {
 
   useEffect(() => { loadWatchlist() }, [loadWatchlist])
 
+  // Prices, verdicts and setup triggers go stale the moment they land — the
+  // pipeline rewrites them every five minutes. Reading the watchlist is a
+  // Mongo lookup per ticker, cheap enough to repeat; `/analyze` is not, and is
+  // deliberately excluded (see usePoll).
+  usePoll(() => loadWatchlist(true), 60_000)
+
   // ── Proposals + order history ─────────────────────────────────────────────
   const loadAgent = useCallback(async () => {
     const [p, o] = await Promise.all([
@@ -107,6 +116,10 @@ export default function TradePage() {
   }, [])
 
   useEffect(() => { loadAgent() }, [loadAgent])
+
+  // A proposal that appears while the tab is open should not need a reload to
+  // be seen — it is the one thing on this screen that is waiting on the user.
+  usePoll(loadAgent, 60_000)
 
   // ── Selection ─────────────────────────────────────────────────────────────
   //
@@ -215,10 +228,11 @@ export default function TradePage() {
       .catch(() => toast(`Could not add ${selected} to your watchlist.`, 'error'))
   }
 
-  const detail = data && (
-    <TickerDetail
+  // The verdict and the evidence behind it are separate slots so the layout can
+  // put the order ticket between them on mobile. Neither is rendered twice.
+  const header = data && (
+    <TickerHeader
       data={data}
-      item={selectedItem}
       holding={selectedHolding}
       position={selectedPosition}
       watched={watched}
@@ -229,23 +243,13 @@ export default function TradePage() {
     />
   )
 
-  const sidebar = (
-    <TradeSidebar
-      data={data}
-      proposals={proposals}
-      orders={orders}
-      onOrderPlaced={() => { loadAgent(); reloadHeld() }}
-      onProposalsChanged={() => { loadAgent(); reloadHeld() }}
-    />
-  )
-
-  const body = analysisLoading ? (
+  const pending = analysisLoading ? (
     <div className="flex items-center justify-center py-24">
       <LoadingSpinner size="lg" />
     </div>
   ) : error ? (
     <ErrorState message={error} onRetry={() => selected && loadAnalysis(selected, false)} />
-  ) : detail ? detail : <EmptyState />
+  ) : !data ? <EmptyState /> : null
 
   const rail = (
     <WatchlistRail
@@ -261,67 +265,128 @@ export default function TradePage() {
     />
   )
 
+  const onAgentChanged = () => { loadAgent(); reloadHeld() }
+
+  /**
+   * One tree, two layouts.
+   *
+   * This used to be two sibling containers — `hidden lg:grid` and `lg:hidden` —
+   * each rendering `body` and `sidebar`. React mounts both: every component on
+   * this screen existed twice, and the invisible copy still ran its effects.
+   * Measured on desktop that meant 14 canvases (two full charts), two live
+   * OrderTickets each fetching `/trading/account`, and a duplicate fetch of the
+   * chart series — for a copy nobody could see.
+   *
+   * Now each child is mounted exactly once and CSS decides where it goes: a
+   * flex column below lg, a three-column grid at lg. The rail is a drawer below
+   * lg by being `fixed` (out of flow) and a grid column at lg by being static.
+   */
   return (
     <Layout variant="app">
-      <>
-        {/* ── lg and up: the three columns, each scrolling independently ──── */}
+      <div
+        // 268px, not 246: at the old width the symbol column could not hold a
+        // five-letter ticker beside its signal badge, so GOOGL rendered "GO…".
+        // 22px of rail buys back the one field in the row that identifies it.
+        className="flex flex-col lg:grid lg:h-[calc(100dvh-82px)]
+                   lg:grid-cols-[268px_minmax(0,1fr)_296px]"
+      >
+        {/* ── Mobile control bar ─────────────────────────────────────────── */}
         <div
-          className="hidden h-[calc(100dvh-82px)] lg:grid"
-          style={{ gridTemplateColumns: '246px minmax(0,1fr) 296px' }}
+          className="sticky top-[82px] z-10 flex items-center gap-2 border-b
+                     border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 lg:hidden"
         >
-          {rail}
-          <div className="min-h-0 overflow-y-auto">{body}</div>
-          {sidebar}
-        </div>
+          <button onClick={() => setRailOpen(true)} className="chip touch-target">
+            <PanelLeft className="h-3.5 w-3.5" aria-hidden="true" />
+            Watchlist
+            <span className="num ml-1 opacity-60">{items.length}</span>
+          </button>
 
-        {/* ── Below lg: one column, rail in a drawer, sidebar stacked under ── */}
-        <div className="flex flex-col lg:hidden">
-          <div className="sticky top-[82px] z-10 flex items-center gap-2 border-b
-                          border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2">
-            <button onClick={() => setRailOpen(true)} className="chip">
-              <PanelLeft className="h-3 w-3" aria-hidden="true" />
-              Watchlist
-              <span className="num ml-1 opacity-60">{items.length}</span>
-            </button>
-            {proposals.length > 0 && (
-              <span
-                className="num rounded px-1.5 py-0.5 text-[10px] font-semibold"
-                style={{ background: 'var(--tint-hold)', color: 'var(--accent-hold)' }}
-              >
-                {proposals.length} waiting on you
-              </span>
-            )}
-          </div>
-
-          {body}
-
-          <div className="mb-bottom-bar">{sidebar}</div>
-        </div>
-
-        {railOpen && (
-          <div className="fixed inset-0 z-40 flex lg:hidden">
+          {/* Was a <span>: it announced work waiting and offered no way to
+              reach it, on the one layout where the queue is furthest away. */}
+          {proposals.length > 0 && (
             <button
-              type="button"
-              aria-label="Close watchlist"
-              className="absolute inset-0 cursor-default bg-black/50"
+              onClick={() => {
+                document.getElementById('approvals')
+                  ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }}
+              className="chip touch-target border-[var(--accent-hold)]"
+              style={{ background: 'var(--tint-hold)', color: 'var(--accent-hold)' }}
+            >
+              {proposals.length} waiting on you
+            </button>
+          )}
+        </div>
+
+        {/* ── Watchlist: drawer below lg, first column at lg ──────────────── */}
+        <aside
+          id="watchlist-rail"
+          aria-label="Watchlist"
+          aria-hidden={railOpen ? undefined : true}
+          className={`fixed inset-y-0 left-0 z-40 flex w-[280px] max-w-[85vw] flex-col
+                      bg-[var(--color-surface)] transition-transform duration-200
+                      ${railOpen ? 'translate-x-0' : '-translate-x-full'}
+                      lg:static lg:z-auto lg:w-auto lg:max-w-none lg:translate-x-0
+                      lg:transition-none`}
+        >
+          <div className="flex items-center justify-between border-b border-[var(--color-border)]
+                          px-3 py-2 lg:hidden">
+            <span className="label-micro">Watchlist</span>
+            <button
               onClick={() => setRailOpen(false)}
-            />
-            <div className="relative flex w-[280px] max-w-[85vw] flex-col bg-[var(--color-surface)]">
-              <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2">
-                <span className="label-micro">Watchlist</span>
-                <button
-                  onClick={() => setRailOpen(false)}
-                  aria-label="Close watchlist"
-                  className="text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-                >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-              <div className="flex min-h-0 flex-1 flex-col">{rail}</div>
-            </div>
+              aria-label="Close watchlist"
+              className="grid h-11 w-11 place-items-center text-[var(--color-fg-muted)]
+                         hover:text-[var(--color-fg)]"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
           </div>
+          {rail}
+        </aside>
+
+        {/* Backdrop. Separate from the rail so the rail can stay in the grid. */}
+        {railOpen && (
+          <button
+            type="button"
+            aria-label="Close watchlist"
+            className="fixed inset-0 z-30 cursor-default bg-black/50 lg:hidden"
+            onClick={() => setRailOpen(false)}
+          />
         )}
-      </>
+
+        {/* ── Verdict, then evidence ───────────────────────────────────────
+            `contents` below lg dissolves this wrapper so the two halves become
+            flex items of the column and `order` can put the ticket between
+            them. At lg it is the centre grid column, scrolling as one. */}
+        <div className="contents lg:block lg:min-h-0 lg:overflow-y-auto">
+          <div className="order-2 lg:order-none">{pending ?? header}</div>
+          {data && (
+            <div className="order-4 lg:order-none">
+              <TickerAnalysis data={data} item={selectedItem} />
+            </div>
+          )}
+        </div>
+
+        {/* ── Ticket, approvals, activity ────────────────────────────────────
+            Same trick: dissolved below lg so the ticket and the approvals queue
+            land directly under the verdict (order-3) and the activity log falls
+            to the bottom (order-5), while at lg all three stack in the right
+            column. Every panel is mounted exactly once either way. */}
+        <div
+          className="contents lg:block lg:min-h-0 lg:overflow-y-auto lg:border-l
+                     lg:border-[var(--color-border)] lg:bg-[var(--color-surface)]"
+        >
+          <div className="order-3 border-b border-[var(--color-border)]
+                          bg-[var(--color-surface)] lg:order-none lg:border-b-0">
+            <OrderPanel data={data} onOrderPlaced={onAgentChanged} />
+            <ApprovalsPanel proposals={proposals} onProposalsChanged={onAgentChanged} />
+          </div>
+
+          <div className="mb-bottom-bar order-5 border-t border-[var(--color-border)]
+                          bg-[var(--color-surface)] lg:order-none lg:mb-0 lg:border-t-0">
+            <ActivityPanel orders={orders} />
+          </div>
+        </div>
+      </div>
     </Layout>
   )
 }
