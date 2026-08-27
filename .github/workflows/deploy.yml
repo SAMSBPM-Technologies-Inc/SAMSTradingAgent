@@ -247,6 +247,45 @@ jobs:
             set_if_missing_or_empty ENABLE_BACKTESTING             false
             set_if_missing_or_empty ENABLE_AI_ANALYST              true
 
+            # ── Deep research (agent orchestrator) ────────────────────────────
+            # Split deliberately between the two helpers, applying the lesson
+            # this file already records three times above:
+            #
+            #   set_if_missing_or_empty  seeds a value once and then never
+            #                            touches it again — right for a switch
+            #                            the operator owns on the box.
+            #   inject_secret            overwrites every deploy — right for
+            #                            anything that must stay changeable from
+            #                            here, which is how ANALYST_MODEL ended
+            #                            up frozen at claude-opus-4-6.
+            #
+            # The two enable flags are seeded false and then left alone, because
+            # the rollout plan is to turn them on by hand on the server, one at
+            # a time, while watching. A later deploy must not silently switch
+            # research back off after it has been enabled — nor switch it on.
+            set_if_missing_or_empty RESEARCH_AGENTS_ENABLED        false
+            set_if_missing_or_empty RESEARCH_VETO_ENABLED          false
+
+            # Everything below stays injected so it never freezes on whatever
+            # the first deploy happened to write. Model ids especially: these
+            # will outlive Opus 5, and a model change should not require SSH.
+            inject_secret           RESEARCH_ORCHESTRATOR_MODEL    claude-opus-5
+            inject_secret           RESEARCH_SPECIALIST_MODEL      claude-sonnet-5
+            inject_secret           RESEARCH_EFFORT                high
+            inject_secret           RESEARCH_DOSSIER_TTL_HOURS     24
+            inject_secret           RESEARCH_DAILY_REFRESH_HOUR    6
+            # Veto thresholds gate money, so they follow the ANALYST_GATE_*
+            # precedent and stay tunable from here rather than from the box.
+            inject_secret           RESEARCH_VETO_MIN_CONVICTION   35
+            inject_secret           RESEARCH_VETO_MAX_AGE_HOURS    48
+
+            # Earnings history moves quarterly, so it is cached for a week — the
+            # Alpha Vantage budget covers OVERVIEW and EARNINGS between them and
+            # cannot do both for every ticker daily. Operational rather than
+            # central, so seeded and then left to the box.
+            set_if_missing_or_empty ALPHAVANTAGE_EARNINGS_CACHE_DAYS 7
+            set_if_missing_or_empty ALPHAVANTAGE_EARNINGS_EAGER_DAYS 7
+
             # ── Third-party API keys ──────────────────────────────────────────
             # Guarded rather than injected straight through. inject_secret always
             # overwrites, so a missing secret — or one merely absent from the

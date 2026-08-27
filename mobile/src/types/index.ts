@@ -421,3 +421,74 @@ export interface DipBuyScanResponse {
   unanalyzed_tickers: string[]
   scanned: number
 }
+
+/**
+ * One attributable fact from the research ledger.
+ *
+ * The `id` is what the report's prose cites. Any claim in a dossier that did
+ * not reference one of these was removed server-side before storage, so
+ * anything rendered here is supportable by construction.
+ */
+export interface EvidenceItem {
+  id: string
+  claim: string
+  value: string
+  source: string
+  as_of?: string | null
+  url?: string | null
+}
+
+/**
+ * One of the six report dimensions, 0-100.
+ *
+ * Higher is better on all six — `risk` included, where higher means safer.
+ * `model_judged` marks the one score that is a model's judgement rather than
+ * arithmetic; `thin` marks a dimension built from too few inputs to lean on.
+ */
+export interface DimensionScore {
+  key: string
+  label: string
+  score?: number | null
+  coverage: number
+  thin: boolean
+  model_judged: boolean
+  components: { name: string; score: number; weight: number }[]
+  note?: string | null
+}
+
+export interface ResearchReport {
+  assessment?: 'BULLISH' | 'NEUTRAL' | 'BEARISH' | null
+  conviction?: number | null
+  thesis?: string | null
+  bull_case?: string | null
+  bear_case?: string | null
+  what_the_market_is_missing?: string | null
+  key_catalysts: string[]
+  key_risks: string[]
+  /** Risks the risk agent raised that the synthesiser answered rather than carried. */
+  risks_addressed: string[]
+  what_would_change_my_opinion: string[]
+  conclusion?: string | null
+  conviction_rationale?: string | null
+}
+
+export interface ResearchDossier {
+  ticker: string
+  as_of: string
+  stale: boolean
+  age_hours?: number | null
+  conviction?: number | null
+  /** The arithmetic anchor conviction was clamped to. A persistent gap between
+   *  this and `conviction` means the numbers and the model's read disagree. */
+  derived_conviction?: number | null
+  report?: ResearchReport | null
+  dimensions: DimensionScore[]
+  evidence: EvidenceItem[]
+  evidence_count: number
+  data_gaps: string[]
+  /** Agents whose call failed. A dossier missing a section is still served. */
+  agents_failed: string[]
+  /** Agents never run because their evidence slice held no facts about the
+   *  company. Not a failure — nothing broke, there was nothing to assess. */
+  agents_skipped: string[]
+}

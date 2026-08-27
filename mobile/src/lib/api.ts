@@ -82,6 +82,21 @@ export const analyzeApi = {
     api.get<{ symbol: string; name: string }[]>('/ticker/search', { params: { q } }),
 }
 
+export const researchApi = {
+  /** Reads the stored dossier. Free and fast; may be stale. */
+  get: (ticker: string) =>
+    api.get<import('../types').ResearchDossier>(`/research/${ticker}`),
+  /**
+   * Builds a new one — five model calls and tens of seconds, so this is never
+   * called implicitly. On mobile the long timeout matters more than on web:
+   * the default would abort a request that is still working fine.
+   */
+  build: (ticker: string) =>
+    api.post<import('../types').ResearchDossier>(`/research/${ticker}`, undefined, {
+      timeout: 300_000,
+    }),
+}
+
 export const performanceApi = {
   get: () => api.get('/performance'),
   signals: () => api.get<import('../types').SignalRecord[]>('/performance/signals'),

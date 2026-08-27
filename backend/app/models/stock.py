@@ -201,6 +201,96 @@ class AnalystReport(BaseModel):
     generated_at: datetime
 
 
+class EvidenceItem(BaseModel):
+    """
+    One attributable fact from the research ledger.
+
+    The `id` is what the report's prose cites. Any claim in a dossier that does
+    not reference one of these was removed before storage — see
+    `services/research/evidence.py`.
+    """
+
+    id: str
+    claim: str
+    value: str
+    source: str
+    as_of: Optional[str] = None
+    url: Optional[str] = None
+
+
+class DimensionScore(BaseModel):
+    """
+    One of the six 0-100 report dimensions.
+
+    `higher is better` on all six, risk included — there it means safer. Five
+    are computed in Python from the evidence; `model_judged` marks the one that
+    is not, so a reader can see which score is a different kind of claim.
+    `thin` marks a dimension built from too few inputs to be worth much, the
+    same warning the calibration page gives an under-sampled bucket.
+    """
+
+    key: str
+    label: str
+    score: Optional[float] = None
+    coverage: float = 0.0
+    thin: bool = False
+    model_judged: bool = False
+    components: list[dict] = []
+    note: Optional[str] = None
+
+
+class ResearchReport(BaseModel):
+    """The synthesised narrative. Every prose field has been citation-filtered."""
+
+    assessment: Optional[str] = None          # BULLISH | NEUTRAL | BEARISH
+    conviction: Optional[float] = None        # 0-100
+    thesis: Optional[str] = None
+    bull_case: Optional[str] = None
+    bear_case: Optional[str] = None
+    what_the_market_is_missing: Optional[str] = None
+    key_catalysts: list[str] = []
+    key_risks: list[str] = []
+    #: Risks the risk agent raised that the synthesiser answered rather than
+    #: carried. Surfaced so a dropped risk is visible as a decision, not a gap.
+    risks_addressed: list[str] = []
+    what_would_change_my_opinion: list[str] = []
+    conclusion: Optional[str] = None
+    conviction_rationale: Optional[str] = None
+
+
+class ResearchDossier(BaseModel):
+    """
+    A deep-research dossier. Separate from the 5-minute signal on purpose.
+
+    `stale` and `age_hours` are always present because a dossier is served past
+    its TTL rather than withheld — a day-old business assessment is still an
+    assessment — but the reader and the trade veto both need to know.
+    """
+
+    ticker: str
+    as_of: str
+    stale: bool = False
+    age_hours: Optional[float] = None
+    conviction: Optional[float] = None
+    #: The arithmetic anchor conviction was clamped to. Stored beside the final
+    #: value so the two can be compared: a persistent gap means the numbers and
+    #: the model's judgement disagree.
+    derived_conviction: Optional[float] = None
+    report: Optional[ResearchReport] = None
+    dimensions: list[DimensionScore] = []
+    evidence: list[EvidenceItem] = []
+    evidence_count: int = 0
+    data_gaps: list[str] = []
+    #: Agents whose call failed. A dossier missing a section is still served;
+    #: which section is missing changes how it should be read.
+    agents_failed: list[str] = []
+    #: Agents that were never run because their slice of the evidence held no
+    #: facts about the company. Distinct from a failure: nothing broke, there
+    #: was simply nothing to assess, and the reader should treat the questions
+    #: that agent would have answered as unanswered rather than as neutral.
+    agents_skipped: list[str] = []
+
+
 class SignalListResponse(BaseModel):
     count: int
     signals: list[AnalyzeResponse]
@@ -296,7 +386,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.7.0"
+    version: str = "1.8.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

@@ -156,6 +156,23 @@ async def run_analysis(ticker: str) -> Optional[dict]:
 
 # ── Context builder ────────────────────────────────────────────────────────────
 
+def _format_headline(article: dict) -> str:
+    """One headline line, carrying whatever provenance the article has."""
+    headline = (article.get("headline") or "").strip()
+    parts = []
+    source = (article.get("source") or "").strip()
+    if source:
+        parts.append(source)
+    published = (article.get("datetime") or "")[:10]
+    if published:
+        parts.append(published)
+    url = (article.get("url") or "").strip()
+    if url:
+        parts.append(url)
+    suffix = f"  [{' | '.join(parts)}]" if parts else ""
+    return f"- {headline}{suffix}"
+
+
 def _build_context(ticker: str, feat: dict, raw: dict, risk: dict) -> str:
     price   = feat.get("current_price", 0.0)
     chg     = raw.get("day_change_pct", 0.0)
@@ -217,9 +234,14 @@ def _build_context(ticker: str, feat: dict, raw: dict, risk: dict) -> str:
     spread_str = f"{spread:+.2f}% ({'normal' if spread and spread > 0 else 'INVERTED — recession signal'})" if spread is not None else "N/A"
     vix_str = f"{vix:.1f} ({'elevated fear' if vix and vix > 25 else 'calm' if vix and vix < 18 else 'moderate'})" if vix else "N/A"
 
-    # Headlines
+    # Headlines. Rendered with their source, date and URL — all three were
+    # already stored on every article and all three were dropped here, which is
+    # why the model could reference "recent news" but never attribute a claim to
+    # anything. A model asked for institutional-grade research over anonymous
+    # headline text has no way to cite, however it is prompted.
     headlines = raw.get("recent_headlines") or []
-    hl_str = "\n".join(f"- {h['headline']}" for h in headlines[:8]) if headlines else "No recent headlines available"
+    hl_str = "\n".join(_format_headline(h) for h in headlines[:8]) \
+        if headlines else "No recent headlines available"
 
     sent_raw = raw.get("sentiment_raw") or {}
 

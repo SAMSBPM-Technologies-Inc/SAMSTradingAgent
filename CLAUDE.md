@@ -182,6 +182,50 @@ npm run web
    stops a double-clicked Buy from buying twice. Live-money orders require
    `confirm_live`, which the UI sets only after the user types the ticker back.
 
+6. **Deep Research** (`services/research/`): a second, slower path — **on
+   demand and once a day, never on the 5-minute pipeline.** `dossier.py` builds
+   an evidence ledger, fans out four scoped agents with `asyncio.gather`, then
+   synthesises. Off unless `RESEARCH_AGENTS_ENABLED=true`.
+
+   **A claim without a citation is deleted, not flagged.** Every fact enters
+   `evidence.py` with an id, value, source and date; agents cite ids; anything
+   uncited is stripped before storage, and a *fabricated* id is stripped and
+   recorded. `Ledger.add` refuses a `None` value for the same reason — an
+   "unknown" entry would get an id and an agent would cite it. This is the same
+   instinct as `explain_score` refusing to decompose an XGBoost score.
+
+   **The Risk agent runs in the fan-out and is not shown the bull case.** Given
+   a thesis, a red team argues against *that thesis* and inherits its framing;
+   the previous single analyst wrote both sides in one pass and produced a bear
+   case shaped to fit its own bull case. The synthesiser must then **address or
+   carry every risk it raised** — never silently drop one.
+
+   **Five of the six dimension scores are Python, not model output.** Only
+   `business_quality` is model-judged, and it is flagged. A headline number
+   that cannot be reproduced or regression-tested is decoration. Higher is
+   better on all six, `risk` included, where it means safer. Conviction is
+   blended from those scores; the model may move it ±15 and must explain why.
+
+   **The client is injectable** (`build_dossier(..., client=)`) so the
+   orchestration is testable without the SDK — the analyst call this replaces
+   built its client inline and has no tests to this day.
+
+   **Research may veto a BUY. It may never create one, enlarge one, or reach an
+   exit.** `_research_veto` lives inside `_prepare_entry` with the other
+   guards; `execute_exit` does not run that chain. Every uncertain path —
+   missing dossier, stale, undated, database error — **allows the trade**. A
+   guard that halts buying when a cron job misfires is a worse failure than one
+   that occasionally lets a trade through.
+
+   **Earnings proximity is an additive catalyst bonus, not a fourth weighted
+   component.** As a component its absence would cost coverage, and coverage is
+   a penalty — so every ticker past the Alpha Vantage daily cap would score on
+   a narrower range than one inside it, for a reason unrelated to the company.
+
+   **`financial_statements` only ever gains rows.** `stocks_fundamentals` is
+   replaced wholesale on every refresh, which is why no trend could ever be
+   computed from it. Do not "simplify" the series back into the snapshot.
+
 ### MongoDB Collections
 
 | Collection | Purpose |
@@ -194,6 +238,9 @@ npm run web
 | `watchlists` | Per-user ticker lists |
 | `trades` | Auto-trading order records |
 | `performance_stats` | Signal accuracy, win rates per ticker |
+| `financial_statements` | Accumulated filings per (ticker, period, timeframe) — append-only, the basis for every trend |
+| `earnings_history` | Reported vs estimated EPS, surprise record, next report date |
+| `research_dossiers` | Deep-research output, retained as a series |
 
 ### Authentication
 
