@@ -9,6 +9,7 @@ usable RANGE and that each component actually contributes.
 Run with:  pytest backend/tests -q
 """
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.catalyst import compute_catalyst_score  # noqa: E402
 
 
-def score(volume=None, articles=None, target=None, price=None):
+def score(volume=None, articles=None, target=None, price=None, earnings_in_days=None):
+    fundamentals = {}
+    if target is not None:
+        fundamentals["analyst_target_price"] = target
+    if earnings_in_days is not None:
+        due = datetime.now(tz=timezone.utc) + timedelta(days=earnings_in_days)
+        fundamentals["next_earnings_date"] = due.date().isoformat()
     raw = {
         "sentiment_raw": {} if articles is None else {"article_count": articles},
-        "fundamentals": {} if target is None else {"analyst_target_price": target},
+        "fundamentals": fundamentals,
     }
     return compute_catalyst_score(raw, {"volume_anomaly": volume, "current_price": price})
 
@@ -122,3 +129,61 @@ def test_insider_and_options_are_not_double_counted_here():
     with_alt = compute_catalyst_score(raw, {"volume_anomaly": 1.0, "current_price": 100})
     without = score(volume=1.0, articles=3, target=108, price=100)
     assert with_alt == pytest.approx(without)
+
+
+# ── Earnings proximity ────────────────────────────────────────────────────────
+# Added as an additive bonus rather than a fourth weighted component. The tests
+# below pin the reason: a weighted component would have made an *unknown*
+# earnings date cost coverage, and coverage is a penalty — so every ticker past
+# the Alpha Vantage daily cap would score on a narrower range than one inside
+# it, for a reason that has nothing to do with the company.
+
+
+def test_unknown_earnings_date_changes_nothing():
+    """The uncovered half of the watchlist must not be penalised for our budget."""
+    baseline = score(volume=1.8, articles=6, target=110, price=100)
+    assert score(volume=1.8, articles=6, target=110, price=100,
+                 earnings_in_days=None) == baseline
+
+
+def test_a_distant_report_is_not_a_catalyst():
+    """Sixty days out is the same non-event as not knowing at all."""
+    baseline = score(volume=1.8, articles=6, target=110, price=100)
+    assert score(volume=1.8, articles=6, target=110, price=100,
+                 earnings_in_days=60) == baseline
+
+
+def test_an_imminent_report_lifts_the_score():
+    baseline = score(volume=1.2, articles=4, target=105, price=100)
+    imminent = score(volume=1.2, articles=4, target=105, price=100, earnings_in_days=3)
+    assert imminent > baseline
+    # Bounded: an earnings date is a reason to expect movement, not a reason to
+    # let one component carry the factor.
+    assert imminent - baseline <= 0.1 + 1e-9
+
+
+def test_proximity_is_monotone():
+    args = dict(volume=1.2, articles=4, target=105, price=100)
+    far = score(**args, earnings_in_days=40)
+    near = score(**args, earnings_in_days=14)
+    imminent = score(**args, earnings_in_days=2)
+    assert far <= near <= imminent
+
+
+def test_a_past_report_date_is_ignored():
+    """A stale date means our copy has not caught up, not that a catalyst exists."""
+    baseline = score(volume=1.8, articles=6, target=110, price=100)
+    assert score(volume=1.8, articles=6, target=110, price=100,
+                 earnings_in_days=-5) == baseline
+
+
+def test_malformed_earnings_date_is_ignored():
+    raw = {"sentiment_raw": {"article_count": 6},
+           "fundamentals": {"analyst_target_price": 110, "next_earnings_date": "soon"}}
+    got = compute_catalyst_score(raw, {"volume_anomaly": 1.8, "current_price": 100})
+    assert got == score(volume=1.8, articles=6, target=110, price=100)
+
+
+def test_bonus_cannot_push_past_one():
+    top = score(volume=5.0, articles=30, target=200, price=100, earnings_in_days=1)
+    assert top <= 1.0

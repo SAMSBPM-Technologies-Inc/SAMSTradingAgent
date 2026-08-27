@@ -14,6 +14,7 @@ import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
+import ResearchPanel from '../../src/components/ResearchPanel'
 import OrderTicket from '../../src/components/OrderTicket'
 import PriceChart from '../../src/components/PriceChart'
 import { FactorBreakdown, RiskPanel } from '../../src/components/ScorePanels'
@@ -595,6 +596,13 @@ export default function TickerScreen() {
         {/* Alternative data */}
         {data.alternative_data && <AlternativeDataSection data={data.alternative_data} />}
 
+        {/* Deep research — a slower, sourced second opinion. Everything in it
+            cites a dated fact; anything that did not was deleted server-side
+            before storage. */}
+        <Section title="Deep Research">
+          <ResearchPanel ticker={data.ticker} />
+        </Section>
+
         {/* Explanation */}
         {data.explanation && (
           <Section title="Explanation">
@@ -610,11 +618,14 @@ export default function TickerScreen() {
           <View style={{ gap: 10 }}>
             {([
               { label: 'Price & Market Data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', status: 'dev' },
-              { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines, VADER NLP', status: 'live' },
+              { label: 'Financial Statements', value: 'Massive (Polygon.io) — up to 12 annual and 12 quarterly filings, accumulated so margin trends and CAGRs are computable', status: 'live' },
+              { label: 'Company Profile & Ratios', value: 'Alpha Vantage OVERVIEW — business description, forward P/E, EV/EBITDA, margins, ROE/ROA, beta, analyst consensus', status: 'live' },
+              { label: 'Earnings Record', value: 'Alpha Vantage EARNINGS — reported vs estimated EPS, surprise history, next report date', status: 'live' },
+              { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines with publisher, date and link, scored with VADER. Headline text only', status: 'live' },
               { label: 'Macro Environment', value: 'FRED — Fed funds rate, Treasuries, CPI, unemployment, VIX', status: 'live' },
-              { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call ratio', status: 'dev' },
-              { label: 'Short Interest', value: 'Yahoo Finance — % of float shorted, days-to-cover', status: 'dev' },
-              { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days', status: 'dev' },
+              { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call volume ratio only', status: 'dev' },
+              { label: 'Short Interest', value: 'Yahoo Finance — % of float shorted. Usually unavailable from this host', status: 'dev' },
+              { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — counts over the most recent filed transactions, not a date-bounded window', status: 'dev' },
               // Model name comes from the response, not a literal — the old
               // hardcoded string had drifted from what the server calls.
               data.analyst_model
@@ -628,7 +639,11 @@ export default function TickerScreen() {
                     value: 'Disabled on this server — signals come from the rule-based path',
                     status: 'planned',
                   },
-              { label: 'SEC Filings', value: 'EDGAR — 10-K/10-Q filings', status: 'planned' },
+              { label: 'Deep Research Agents', value: 'Four scoped analysts over one sourced evidence ledger, merged by a fifth. Uncited claims are deleted before storage', status: 'live' },
+              { label: 'Institutional Ownership', value: '13F holdings — not carried by any configured provider', status: 'planned' },
+              { label: 'Earnings Transcripts', value: 'Guidance and call commentary — no provider supplies these, so earnings analysis stops at estimates vs actuals', status: 'planned' },
+              { label: 'SEC Filings', value: 'EDGAR — 10-K/10-Q risk factors, and document-level citations', status: 'planned' },
+              { label: 'Peer Screening', value: 'A real comparable universe. Research peers come from your watchlist plus a small static map', status: 'planned' },
               { label: 'ML Scoring Model', value: 'XGBoost — trained on signal history', status: 'planned' },
             ] as { label: string; value: string; status: 'live' | 'dev' | 'planned' }[]).map(({ label, value, status }) => {
               const badge = {

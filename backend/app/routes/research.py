@@ -1,0 +1,134 @@
+"""
+GET/POST /research/{ticker} — deep-research dossier (auth required)
+
+Two verbs, deliberately different in cost:
+
+    GET   reads the latest stored dossier. Free, always fast, may be stale.
+    POST  builds a new one. Five model calls, tens of seconds, rate limited.
+
+The split exists because this path is nothing like `/analyze`. That endpoint is
+backed by a 30-minute cache over a pipeline that runs anyway; this one spends
+real money per call, so a GET must never silently trigger a build. A client
+that wants fresh data has to say so.
+"""
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.config import get_settings
+from app.db import COLL_FUNDAMENTALS_CACHE, COLL_WATCHED, get_db
+from app.dependencies import get_current_user
+from app.models.stock import ResearchDossier
+from app.services.research.dossier import build_dossier, latest_dossier
+from app.utils.logger import get_logger
+
+router = APIRouter(tags=["research"])
+logger = get_logger(__name__)
+
+
+@router.get("/research/{ticker}", response_model=ResearchDossier,
+            summary="Latest research dossier for a ticker")
+async def get_research(ticker: str,
+                       current_user: dict = Depends(get_current_user)) -> ResearchDossier:
+    ticker = ticker.upper().strip()
+    doc = await latest_dossier(ticker)
+    if not doc:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No research dossier for {ticker}. "
+                f"POST /research/{ticker} to build one."
+            ),
+        )
+    return _to_model(doc)
+
+
+@router.post("/research/{ticker}", response_model=ResearchDossier,
+             summary="Build a new research dossier (slow, costs API calls)")
+async def create_research(ticker: str,
+                          current_user: dict = Depends(get_current_user)
+                          ) -> ResearchDossier:
+    settings = get_settings()
+    if not settings.research_agents_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Deep research is disabled. Set RESEARCH_AGENTS_ENABLED=true.",
+        )
+
+    ticker = ticker.upper().strip()
+    watchlist = await _watchlist_context(str(current_user.get("_id") or ""))
+
+    dossier = await build_dossier(ticker, user_id=str(current_user.get("_id") or ""),
+                                  watchlist=watchlist)
+    if not dossier:
+        # The common cause is a cold ticker, not a broken agent: the dossier is
+        # built entirely from cached provider data, and a symbol added minutes
+        # ago has none of it yet.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Not enough collected data to research {ticker} yet. "
+                "Add it to a watchlist and let the daily fundamentals job run, "
+                "then try again."
+            ),
+        )
+    dossier["age_hours"] = 0.0
+    dossier["stale"] = False
+    return _to_model(dossier)
+
+
+async def _watchlist_context(user_id: str) -> list[dict]:
+    """
+    The user's other watched tickers, with sector and industry.
+
+    Used only to assemble a peer set, and it is an honest convenience rather
+    than a screen — a real comparable universe is not something this system
+    has. The dossier labels it as such where it is shown.
+    """
+    if not user_id:
+        return []
+    try:
+        db = await get_db()
+        watched = await db[COLL_WATCHED].find(
+            {"user_id": user_id}, {"ticker": 1, "_id": 0}
+        ).to_list(length=500)
+        symbols = [row["ticker"] for row in watched if row.get("ticker")]
+        if not symbols:
+            return []
+        rows = await db[COLL_FUNDAMENTALS_CACHE].find(
+            {"ticker": {"$in": symbols}},
+            {"ticker": 1, "sector": 1, "industry": 1, "_id": 0},
+        ).to_list(length=500)
+        return rows
+    except Exception as exc:
+        logger.warning("research_watchlist_context_failed", error=str(exc))
+        return []
+
+
+def _to_model(doc: dict) -> ResearchDossier:
+    """
+    Shape the stored document for the client.
+
+    The per-agent raw output is deliberately not returned. It is kept in Mongo
+    so a bad reading can be traced to the agent that produced it, but it is
+    unfiltered — sending it would hand the UI a second, uncited copy of every
+    claim the citation filter just removed.
+    """
+    as_of = doc.get("as_of")
+    if isinstance(as_of, datetime):
+        as_of = as_of.isoformat()
+    return ResearchDossier(
+        ticker=doc.get("ticker", ""),
+        as_of=str(as_of or datetime.now(tz=timezone.utc).isoformat()),
+        stale=bool(doc.get("stale")),
+        age_hours=doc.get("age_hours"),
+        conviction=doc.get("conviction"),
+        derived_conviction=doc.get("derived_conviction"),
+        report=doc.get("report") or None,
+        dimensions=doc.get("dimensions") or [],
+        evidence=doc.get("evidence") or [],
+        evidence_count=doc.get("evidence_count") or 0,
+        data_gaps=doc.get("data_gaps") or [],
+        agents_failed=doc.get("agents_failed") or [],
+        agents_skipped=doc.get("agents_skipped") or [],
+    )

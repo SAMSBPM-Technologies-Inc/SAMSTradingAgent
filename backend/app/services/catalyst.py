@@ -12,12 +12,13 @@ It was volume anomaly and nothing else. On typical volume — 0.8× to 1.5× the
 between -0.003 and +0.019. It carried 0.15 of the weight and was, in practice,
 a constant. One thin input under a name promising much more.
 
-Three components now, chosen because each is genuinely forward-looking and none
-is already priced elsewhere in the model:
+Three weighted components, chosen because each is genuinely forward-looking and
+none is already priced elsewhere in the model, plus one additive modifier:
 
-    Volume anomaly     40 %   something is happening now
-    News flow          30 %   attention is arriving
-    Analyst upside     30 %   the street expects repricing
+    Volume anomaly     40 %      something is happening now
+    News flow          30 %      attention is arriving
+    Analyst upside     30 %      the street expects repricing
+    Earnings proximity +0.10 max a known repricing event, on a known date
 
 `buzz` and `analyst_target_price` were both already being fetched and stored,
 and neither was read by any scorer. Insider activity and options flow were
@@ -25,10 +26,20 @@ deliberately NOT included despite being available: `alternative_data_score`
 already prices both, and importing them here would recreate exactly the
 double-count that was just removed from volatility.
 
-Earnings proximity would be the strongest component of the three and is absent
-for a data reason, not an oversight — `next_earnings_date` is not supplied by
-either fundamentals provider (see the note atop fundamentals.py). Worth adding
-if a provider ever carries it.
+Earnings proximity was absent for a data reason, not an oversight, and that
+reason has now gone: `next_earnings_date` is supplied by the Alpha Vantage
+EARNINGS endpoint and folded into the fundamentals snapshot.
+
+It is an **additive bonus, not a fourth weighted component**, and the
+difference matters. As a weighted component its absence would cost coverage,
+and coverage is a penalty — so every ticker whose earnings date we do not have
+would be pulled toward neutral relative to one we do. Alpha Vantage's daily cap
+is smaller than the watchlist, so that is a permanent split in the universe:
+covered tickers would score on a wider range than uncovered ones for a reason
+that has nothing to do with either company. As a bonus, an unknown date and a
+report two months out both add nothing, which is exactly right — neither is a
+catalyst — and only genuine proximity moves the score. This mirrors how
+`scoring.py` treats alternative data, for the same reason.
 
 Coverage weighting follows `_fundamental_score`: a score built from one
 component is pulled toward neutral rather than trusted as if built from three.
@@ -41,6 +52,7 @@ That path does not run in production (the model file is gitignored and never
 reaches the box, and ENABLE_ML_MODEL defaults to false), but train_xgb.py must
 be updated to match and the model retrained before it is ever switched on.
 """
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.utils.helpers import clamp
@@ -53,6 +65,20 @@ logger = get_logger(__name__)
 _W_VOLUME  = 0.40
 _W_NEWS    = 0.30
 _W_UPSIDE  = 0.30
+
+#: Ceiling on the earnings-proximity bonus, added on top of the weighted score
+#: rather than mixed into it. Bounded deliberately: an imminent report is a
+#: reason to expect movement, not a reason to expect movement *upward*, and the
+#: catalyst factor feeds a directional composite.
+_W_EARNINGS_BONUS = 0.10
+
+#: Earnings-proximity curve, in calendar days to the next report. A report two
+#: months out is not a catalyst; one next week is the single most reliable
+#: volatility event a scheduled equity has. Past the report the score falls back
+#: to neutral rather than to zero — the aftermath is genuinely uncertain, not
+#: genuinely quiet.
+_EARNINGS_IMMINENT_DAYS = 7      # within a week → 1.0
+_EARNINGS_HORIZON_DAYS  = 45     # beyond this → no signal
 
 #: Analyst upside bounds. Asymmetric on purpose: a target below the current
 #: price is a stronger statement than the same distance above it, targets being
@@ -114,6 +140,40 @@ def _upside_component(target: Optional[float], price: Optional[float]) -> Option
     return clamp((upside - _UPSIDE_MIN) / (_UPSIDE_MAX - _UPSIDE_MIN))
 
 
+def _earnings_component(next_earnings_date: Optional[str]) -> Optional[float]:
+    """
+    Nearness of the next scheduled earnings report, as a 0–1 signal.
+
+    Returns None when no date is known. The caller treats that the same as a
+    distant report — no bonus — because neither is a catalyst, and unlike a
+    weighted component this cannot penalise a ticker for data we simply have
+    not fetched yet.
+
+    A date already in the past is also None. Alpha Vantage lists the next
+    report before it happens, so a stale past date means our copy has not
+    caught up — and scoring the catalyst off a report that already happened is
+    worse than scoring nothing.
+    """
+    if not next_earnings_date:
+        return None
+    try:
+        due = datetime.fromisoformat(str(next_earnings_date)[:10]).replace(
+            tzinfo=timezone.utc
+        )
+    except (TypeError, ValueError):
+        return None
+
+    days = (due - datetime.now(tz=timezone.utc)).total_seconds() / 86400.0
+    if days < 0:
+        return None
+    if days <= _EARNINGS_IMMINENT_DAYS:
+        return 1.0
+    if days >= _EARNINGS_HORIZON_DAYS:
+        return 0.0
+    span = _EARNINGS_HORIZON_DAYS - _EARNINGS_IMMINENT_DAYS
+    return clamp(1.0 - (days - _EARNINGS_IMMINENT_DAYS) / span)
+
+
 def compute_catalyst_score(raw_doc: dict, feat_doc: dict) -> float:
     """
     Derive a catalyst score in [0, 1] from volume, news flow and analyst upside.
@@ -150,10 +210,18 @@ def compute_catalyst_score(raw_doc: dict, feat_doc: dict) -> float:
     raw = sum(s * w for s, w in components) / coverage
     score = clamp(raw * coverage + 0.5 * (1.0 - coverage))
 
+    # Applied after coverage weighting, so a known report date lifts the score
+    # without an unknown one dragging it. `None` and "45 days out" both add
+    # zero here, which is the whole point — see the module docstring.
+    earnings = _earnings_component(fundamentals.get("next_earnings_date"))
+    if earnings:
+        score = clamp(score + _W_EARNINGS_BONUS * earnings)
+
     logger.debug(
         "catalyst_score_computed",
         ticker=raw_doc.get("ticker"),
         volume=None if volume is None else round(volume, 4),
+        earnings=None if earnings is None else round(earnings, 4),
         news=None if news is None else round(news, 4),
         upside=None if upside is None else round(upside, 4),
         coverage=round(coverage, 4),

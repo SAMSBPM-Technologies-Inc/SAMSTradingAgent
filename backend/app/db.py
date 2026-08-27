@@ -165,6 +165,31 @@ async def _ensure_indexes() -> None:
         partialFilterExpression={"idempotency_key": {"$type": "string"}},
         background=True,
     )
+    # financial_statements: one document per (ticker, period, timeframe).
+    # Unique so a re-fetch of an already-seen filing updates that period rather
+    # than accumulating a duplicate — the collection only ever gains rows, so
+    # without this a daily job would pile up a copy of the same decade a day.
+    #
+    # partialFilterExpression for the same reason it is on the trades index
+    # above: a compound unique index over documents missing one of the fields
+    # collides on the second such document and throws at startup. Every row we
+    # write has a string period_end; anything that does not is out of scope for
+    # the constraint rather than a reason to fail the whole index pass.
+    await db[COLL_STATEMENTS].create_index(
+        [("ticker", 1), ("timeframe", 1), ("period_end", -1)],
+        unique=True,
+        partialFilterExpression={"period_end": {"$type": "string"}},
+        background=True,
+    )
+    # earnings_history: one document per ticker, refreshed weekly.
+    await db[COLL_EARNINGS].create_index("ticker", unique=True, background=True)
+    # research_dossiers: newest-first lookup per ticker. Deliberately NOT
+    # unique — dossiers are a retained series and two runs on the same day are
+    # a thing that should be allowed to happen, not an error that takes the API
+    # down at startup.
+    await db[COLL_DOSSIERS].create_index(
+        [("ticker", 1), ("as_of", -1)], background=True
+    )
     logger.info("mongodb_indexes_ensured")
 
 
@@ -192,3 +217,7 @@ COLL_SIGNAL_HISTORY = "stocks_signal_history"   # append-only historical signals
 COLL_WATCHED        = "watched_tickers"          # per-user watched tickers
 COLL_USERS          = "users"                    # registered users
 COLL_TRADES         = "trades"                   # automated trade execution log
+COLL_FUNDAMENTALS_CACHE = "stocks_fundamentals"  # per-ticker provider snapshot
+COLL_STATEMENTS     = "financial_statements"     # accumulated statement history
+COLL_EARNINGS       = "earnings_history"         # estimate vs actual, per ticker
+COLL_DOSSIERS       = "research_dossiers"        # deep-research output per ticker

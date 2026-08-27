@@ -27,6 +27,7 @@ import Menu, { MenuItem } from '../Menu'
 import RiskPanel from '../RiskPanel'
 import SignalBadge from '../SignalBadge'
 import AltDataPanel from './AltDataPanel'
+import { ResearchPanel } from './ResearchPanel'
 
 // Split out: the charting library is ~200 kB and this is the only screen that
 // draws one. Bundled eagerly it loaded on screens that have no chart.
@@ -496,6 +497,18 @@ export default function TickerDetail({
         </div>
       )}
 
+      {/* ── Deep research ──────────────────────────────────────────────────
+          A second, slower opinion than the 5-minute signal above, and a
+          different kind of claim: everything in it is sourced to a dated fact
+          in the evidence ledger, because anything that was not got deleted
+          before it was stored. Collapsed by default — it is long, and it is
+          not what a reader glancing at the ticker came for. */}
+      <div className="border-b border-[var(--color-border)] px-[18px] py-3.5">
+        <Collapsible title="Deep research">
+          <ResearchPanel ticker={data.ticker} />
+        </Collapsible>
+      </div>
+
       {/* ── Everything the three-column layout has no room for ─────────────
           Collapsed rather than dropped. The redesign trims the default view;
           it does not remove analysis the engine paid to produce. */}
@@ -593,15 +606,20 @@ function analystSource(data: AnalyzeResponse): { label: string; value: string; s
 function SourcesPanel({ data }: { data: AnalyzeResponse }) {
   const sources: { label: string; value: string; status: SourceStatus }[] = [
     { label: 'Price & market data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', status: 'dev' },
-    { label: 'Fundamentals', value: 'Yahoo Finance — P/E, revenue growth, FCF, debt/equity, analyst consensus', status: 'dev' },
-    { label: 'News & sentiment', value: 'Finnhub — last 7 days of headlines, scored locally with VADER NLP', status: 'live' },
+    { label: 'Financial statements', value: 'Massive (Polygon.io) — up to 12 annual and 12 quarterly filings per ticker, accumulated over time so margin trends and CAGRs are computable', status: 'live' },
+    { label: 'Company profile & ratios', value: 'Alpha Vantage OVERVIEW — business description, sector, forward P/E, EV/EBITDA, margins, ROE/ROA, beta, 52-week range, analyst consensus', status: 'live' },
+    { label: 'Earnings record', value: 'Alpha Vantage EARNINGS — reported vs estimated EPS by quarter, surprise history, and the next scheduled report date', status: 'live' },
+    { label: 'News & sentiment', value: 'Finnhub — last 7 days of headlines with publisher, date and link, scored locally with VADER NLP. Headline text only; article bodies are not retrieved', status: 'live' },
     { label: 'Macro environment', value: 'FRED — Fed funds rate, 10Y/2Y Treasuries, CPI, unemployment, VIX', status: 'live' },
-    { label: 'Options flow', value: 'Yahoo Finance — nearest-expiry put/call ratio across the full chain', status: 'dev' },
-    { label: 'Short interest', value: 'Yahoo Finance — % of float shorted, days-to-cover, squeeze risk', status: 'dev' },
-    { label: 'Insider activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over 90 days', status: 'dev' },
+    { label: 'Options flow', value: 'Yahoo Finance — nearest-expiry put/call volume ratio only, not open interest', status: 'dev' },
+    { label: 'Short interest', value: 'Yahoo Finance — % of float shorted and days-to-cover. Usually unavailable from this host', status: 'dev' },
+    { label: 'Insider activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over the most recent filed transactions. Not a date-bounded window and not dollar-weighted', status: 'dev' },
     analystSource(data),
-    { label: 'Real-time news NLP', value: 'NewsAPI + Reddit sentiment — broader news search and retail sentiment', status: 'planned' },
-    { label: 'SEC filings', value: 'EDGAR — 10-K/10-Q filings and earnings call transcripts', status: 'planned' },
+    { label: 'Deep research agents', value: 'Four scoped analysts over one sourced evidence ledger, merged by a fifth. Every claim it makes cites a dated fact; uncited claims are deleted before storage', status: 'live' },
+    { label: 'Institutional ownership', value: '13F holdings and ownership changes — not carried by any configured provider', status: 'planned' },
+    { label: 'Earnings transcripts', value: 'Management guidance and earnings-call commentary — no configured provider supplies these, so the earnings analysis stops at estimates versus actuals', status: 'planned' },
+    { label: 'SEC filings', value: 'EDGAR — 10-K/10-Q risk factors and Form 4 detail, which would also make citations document-level rather than provider-level', status: 'planned' },
+    { label: 'Peer screening', value: 'A real comparable universe. Peers shown in research are drawn from your own watchlist plus a small static map — a convenience, not a screen', status: 'planned' },
     { label: 'Intraday & options', value: 'Polygon.io — intraday price data and live options flow', status: 'planned' },
     { label: 'ML scoring model', value: 'XGBoost — trained on signal history with real fundamental + sentiment features', status: 'planned' },
   ]

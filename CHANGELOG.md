@@ -14,6 +14,171 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.8.0] — 2026-08-27
+
+Research becomes a thing the system actually does, rather than a paragraph it
+writes. Four scoped analysts work a ticker in parallel over one sourced
+evidence ledger, a fifth merges them, and **every claim that survives cites a
+dated fact** — because anything that did not is deleted before the report is
+stored.
+
+### Added
+
+- **Deep research dossiers, on demand and once a day.** `POST /research/{ticker}`
+  builds one; `GET` reads the last one. It is a second, slower path that never
+  touches the 5-minute pipeline, and it is off until you set
+  `RESEARCH_AGENTS_ENABLED=true`.
+- **Four agents, run at once, one of them adversarial.** Fundamentals,
+  Technical and News each see only the evidence they are qualified to read. The
+  Risk agent sees everything **except the bull case**, and that omission is the
+  design: given a thesis, a critic argues against that thesis and inherits its
+  framing. The old single analyst wrote both sides in one pass from the same
+  inputs and produced a bear case shaped to fit its own bull case. The
+  synthesiser must now **address or carry every risk the risk agent raised** —
+  dismissed risks appear under *Risks raised and answered*, so dropping one is
+  visible as a decision rather than a silence.
+- **Six 0–100 dimension scores** — business quality, financial strength,
+  growth, valuation, technical, risk. Five are computed in Python, not asked of
+  a model, because a headline number that cannot be reproduced or regression
+  tested is decoration. Only business quality is model-judged, and it is
+  labelled *judged* in the UI. Higher is better on all six, risk included,
+  where it means safer.
+- **Conviction is 0–100 and anchored.** It was `HIGH|MEDIUM|LOW` mapped to a
+  hardcoded `{0.85, 0.55, 0.25}`. It is now blended from the scored dimensions,
+  and the model may move it 15 points either way — a departure it has to
+  explain. Both numbers are stored, so a persistent gap between the arithmetic
+  and the narrative is visible instead of hidden inside one score.
+- **An evidence ledger, and a per-claim source list.** Every fact enters with an
+  id, a value, a source and a date; the report cites ids; the UI shows the
+  ledger with links. **Uncited sentences are deleted, and a fabricated citation
+  is deleted and recorded** — an invented `[F99]` is more dangerous than no
+  citation, because it survives exactly the check a reader would make.
+- **The model now knows what the company does.** Alpha Vantage's business
+  description was arriving on the same call as the P/E and being discarded
+  during parsing on every refresh. Sector, industry, country, share count,
+  beta, book value, forward P/E, EV/EBITDA, EV/revenue, operating margin, gross
+  margin, ROA and dividend yield were in that same response and equally unused.
+  No new API call — the payload was always paid for.
+- **Ten years of financial statements, kept.** The old code fetched two annual
+  periods, used the second for a single revenue delta, and `replace_one`'d the
+  document on every refresh — so a decade of filings could pass through the
+  process and leave nothing behind. Filings now accumulate in
+  `financial_statements`, which makes revenue and EPS CAGRs, margin trends and
+  share-count dilution computable for the first time. Quarterly statements are
+  pulled too, so "latest results" is not a year-old annual.
+- **Estimate versus actual, and a real earnings calendar.** A new Alpha Vantage
+  `EARNINGS` call supplies reported EPS against consensus by quarter, a
+  beat-rate over the last eight settled quarters, and the next scheduled report
+  date. This is the only expectation in the system — everything else describes
+  what happened, never what was forecast.
+- **Earnings proximity finally feeds the catalyst score.** `next_earnings_date`
+  had been read by the analyst prompt and rendered as `N/A` on every run since
+  yfinance was dropped, because nothing wrote it. It is now an **additive bonus,
+  capped at +0.10, not a fourth weighted component** — as a component its
+  absence would cost coverage, and coverage is a penalty, so every ticker past
+  the Alpha Vantage daily cap would have scored on a narrower range than one
+  inside it for a reason unrelated to the company.
+- **An agent whose evidence holds no facts about the company is not called.**
+  Found by running a real AVGO dossier on a cold cache: with no fundamentals
+  provider key, the fundamentals agent was sent exactly two items — "no
+  historical range collected" and "no earnings history collected" — and paid
+  Opus rates for a paragraph restating them. Evidence is now marked as either a
+  fact about the company or a fact about *our data* (a declared absence, a
+  methodological caveat); an agent is skipped when its slice holds none of the
+  former. On that same AVGO ledger this drops the run from four calls to three.
+
+  A skip and a failure are reported separately, and read differently: a failure
+  means the call broke and the dossier is incomplete; a skip means there was
+  nothing to assess, so the questions that agent would have answered are open
+  rather than neutral. The synthesiser is told which it is, and the meta items
+  still reach every agent that does run — knowing the boundary of the evidence
+  is what stops one reasoning past it.
+
+- **A research veto on entries, off by default.** Research can block a BUY. It
+  can never create one, enlarge one, or reach an exit — the same asymmetry that
+  exempts SELL from every other delay here, because refusing to buy costs an
+  opportunity and refusing to sell costs money. A missing, stale, undated or
+  unreadable dossier **never vetoes**: a guard that halts all buying when a cron
+  job misfires is a worse failure than one that occasionally lets a trade
+  through unchecked.
+
+### Changed
+
+- **Headlines reach the model with their publisher, date and link.** All three
+  were already stored on every article and all three were stripped before the
+  prompt was built, so the analyst could reference "recent news" but was
+  structurally incapable of attributing a claim to anything.
+- **Free cash flow and debt/equity stop lying about their basis.** Where a
+  filing reports capital expenditure, free cash flow is now free cash flow;
+  where it does not, the operating-cash-flow proxy is labelled as such in the
+  evidence text rather than in a code comment nobody downstream can read. Same
+  for leverage: a filed long-term-debt line gives a true ratio, and the
+  halved-total-liabilities approximation is named where it is still used — the
+  two differ by roughly a factor of two, and the dimension scorer anchors them
+  differently so a company is not penalised for what its filing omitted.
+- **Return on invested capital exists.** The fundamental picture had return on
+  equity but nothing accounting for how much borrowed money produced the
+  return.
+- **"Where the inputs come from" is accurate again**, on web and mobile. It
+  claimed fundamentals came from Yahoo Finance months after that path was
+  removed, and described insider activity as a 90-day window when the code
+  applies no date filter at all. Rows that are genuinely unavailable —
+  institutional ownership, transcripts, a real peer screen — now say so.
+- The Alpha Vantage daily budget is spent by **counting calls rather than list
+  position**, now that a ticker can cost one call or two.
+
+### Known gaps
+
+- **No earnings-call transcripts and no management guidance.** No configured
+  provider carries them, so the earnings analysis stops at estimates versus
+  actuals. The spec this was built against asks for *what management expected*
+  and *what changed*; those two questions are not answered, and the earnings
+  evidence says so out loud rather than letting an agent fill the silence.
+- **No institutional ownership or 13F data.** Absent entirely, from every
+  provider configured here.
+- **Peers are not a screen.** They are other names on your own watchlist sharing
+  a sector or industry, plus a hand-written map of about six industries. Useful,
+  and labelled as a convenience wherever it is shown.
+- **Citations are provider-level, not document-level.** "Alpha Vantage OVERVIEW,
+  as of 2026-08-26", never a filing page. Adding SEC EDGAR — free, no key, ten
+  years of XBRL financials plus 10-K risk factors — would close most of this and
+  most of the two gaps above; it was deliberately out of scope for this round.
+- **Insider data is unchanged and still weak**: yfinance, the most recent ~20
+  filed transactions, no date window, no dollar weighting, no filer role. Short
+  interest is still usually unavailable from the production host. Both now carry
+  their caveats into the evidence so an agent cannot read absence as a signal,
+  but the underlying data is no better than it was.
+- **The historical valuation band is a weaker statement than it sounds.** Price
+  history is still capped at 90 days, so the range applies *today's* price to
+  each past year's EPS. It shows how the current price would have been valued
+  against past earnings, not what the multiple actually was at the time — and
+  the caveat is in the ledger beside the number.
+- **Parallel agents forfeit the cross-agent prompt cache.** A cache entry is
+  only readable once the first response has started, so four concurrent calls
+  all miss it; only the synthesiser gets the read. The wall-clock saving was
+  judged worth more. Expect `cache_read_input_tokens` to be zero on the four
+  specialists and non-zero on the fifth — that is correct, not a misplaced
+  breakpoint.
+- **None of this has been run against a live model or a real database.** The
+  orchestration is covered by 76 new tests against a fake client — fan-out
+  concurrency, per-agent failure, citation filtering, conviction clamping, the
+  veto's fail-open paths — but no dossier has been built with real API keys, and
+  the statement-accumulation path has not been exercised against a real MongoDB.
+  Prompt quality in particular is unmeasured: the agents are known to produce
+  the right *shape*, and nothing yet says whether they produce good analysis.
+- **The research UI was reviewed by eye and type-checked, not run.** `tsc -b`,
+  `vite build` and `lint:a11y` are clean, and none of them can see a layout. The
+  mobile panel has not been rendered on a simulator or a device.
+- **`tsc --noEmit` in `mobile/` reports two errors** — in `guide.tsx` and the
+  auth screen — and both predate this change. They are unrelated to research and
+  were not fixed here, but a clean mobile typecheck is not something this
+  release can claim.
+- **Cost has not been measured.** Five model calls per dossier against a
+  ~29-ticker watchlist is roughly 150 calls a day with the daily job on. Both
+  the job and the whole feature are off by default for that reason.
+
+---
+
 ## [1.7.0] — 2026-08-26
 
 A full UI redesign, from a Claude Design handoff. Ten routes become three

@@ -113,7 +113,23 @@ class Settings(BaseSettings):
     fundamentals_cache_hours: int = Field(default=24, description="Hours a cached fundamentals doc stays valid")
     # Alpha Vantage's free tier allows 25 calls/day. Held below that so an
     # ad-hoc refresh does not exhaust the budget the scheduled job needs.
+    #
+    # NOTE this budget now covers TWO call types — OVERVIEW and EARNINGS — and
+    # a ~29-ticker watchlist cannot have both every day. That is why earnings
+    # are cached for a week rather than a day: they change four times a year,
+    # so a seven-day-old surprise history is not meaningfully staler than a
+    # fresh one, and spacing the refreshes keeps both inside one budget. The
+    # exception is a ticker about to report, which is exactly when the figure
+    # stops being static — see `alphavantage_earnings_eager_days`.
     alphavantage_daily_budget: int = Field(default=22, description="Max Alpha Vantage calls per day")
+    alphavantage_earnings_cache_days: int = Field(
+        default=7,
+        description="Days a cached earnings history stays valid before refresh",
+    )
+    alphavantage_earnings_eager_days: int = Field(
+        default=7,
+        description="Refresh earnings regardless of cache age when a report is this close",
+    )
     # A newly watched ticker has no cached fundamentals until the daily job next
     # runs, so up to 24h of its scores carry a flat 0.5 for 0.15 of the
     # composite. ADBE was added on 21 Aug 2026 and scored with 0 of 5
@@ -374,6 +390,60 @@ class Settings(BaseSettings):
     technical_stance: str = Field(
         default="mean_reversion",
         description="How technical signals are read: mean_reversion | momentum | blended",
+    )
+
+    # ── Deep research (agent orchestrator) ────────────────────────────────────
+    # A second, slower analysis path, separate from the 5-minute pipeline. It
+    # fans out four scoped agents over one shared evidence ledger and then
+    # synthesises them, so a dossier costs five calls rather than one. That is
+    # affordable on demand and once a day; it is not affordable per cycle, and
+    # nothing in the fast path may come to depend on it.
+    research_agents_enabled: bool = Field(
+        default=False, description="Enable the deep-research agent orchestrator"
+    )
+    # Judgement-heavy roles — the adversarial risk pass and the synthesis — run
+    # on the stronger model. The three descriptive specialists do not need it,
+    # and running all five on the top model is most of the cost for little of
+    # the benefit.
+    research_orchestrator_model: str = Field(
+        default="claude-opus-5",
+        description="Model for the risk agent and the synthesiser",
+    )
+    research_specialist_model: str = Field(
+        default="claude-sonnet-5",
+        description="Model for the fundamentals, technical and news agents",
+    )
+    research_effort: str = Field(
+        default="high", description="Thinking/effort level for research agents"
+    )
+    research_extended_thinking: bool = Field(
+        default=True, description="Enable adaptive thinking for research agents"
+    )
+    # How long a dossier stays fresh before the UI marks it stale and the veto
+    # stops trusting it. A day, matching the scheduled refresh.
+    research_dossier_ttl_hours: int = Field(
+        default=24, description="Hours before a dossier is considered stale"
+    )
+    research_daily_refresh_hour: int = Field(
+        default=6, description="Local-time hour for the daily dossier refresh job"
+    )
+
+    # ── Research veto (entry guard) ───────────────────────────────────────────
+    # Research may block a BUY. It may never create one, enlarge one, or touch
+    # an exit — see `_prepare_entry`. Off by default: a guard that can stop
+    # trades has to be switched on deliberately, having been measured first.
+    research_veto_enabled: bool = Field(
+        default=False, description="Allow a research dossier to block a BUY"
+    )
+    research_veto_min_conviction: float = Field(
+        default=35.0,
+        description="Block a BUY when dossier conviction is below this (0-100)",
+    )
+    # A stale dossier never vetoes. Fail-open is the deliberate choice: the
+    # alternative is that a scheduler outage silently stops all trading, which
+    # is a worse failure than trading without the extra check.
+    research_veto_max_age_hours: int = Field(
+        default=48, description="Ignore dossiers older than this when vetoing"
     )
 
     # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────

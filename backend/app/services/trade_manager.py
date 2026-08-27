@@ -592,6 +592,79 @@ class EntryPlan:
         return self.qty + self.held_qty
 
 
+async def _research_veto(ticker: str) -> str | None:
+    """
+    Whether the latest research dossier blocks a BUY on *ticker*.
+
+    Returns a reason string to block, or None to allow.
+
+    **Every uncertain path allows the trade.** No dossier, a stale one, a
+    conviction that could not be derived, an unreadable database — all return
+    None. That is a deliberate choice, not laziness: the alternative is that a
+    scheduler outage or an empty collection silently halts all buying, and a
+    system that stops trading for a reason nobody can see is a worse failure
+    than one that trades without an extra opinion. The veto is an additional
+    check on top of the existing guard chain, never a dependency of it.
+
+    Two triggers, both explicit statements rather than absences: conviction
+    below the configured floor, and an assessment of BEARISH. A dossier that
+    merely failed to reach a view does not block anything.
+    """
+    env = get_settings()
+    if not env.research_veto_enabled:
+        return None
+
+    try:
+        from app.services.research.dossier import latest_dossier
+
+        dossier = await latest_dossier(ticker)
+    except Exception as exc:
+        logger.warning("research_veto_lookup_failed", ticker=ticker, error=str(exc))
+        return None
+
+    if not dossier:
+        return None
+
+    age_hours = dossier.get("age_hours")
+    if age_hours is None or age_hours > env.research_veto_max_age_hours:
+        logger.info("research_veto_skipped_stale", ticker=ticker, age_hours=age_hours)
+        return None
+
+    report = dossier.get("report") or {}
+    assessment = (report.get("assessment") or "").upper()
+    conviction = dossier.get("conviction")
+
+    if assessment == "BEARISH":
+        logger.info("research_veto_applied", ticker=ticker, reason="bearish",
+                    conviction=conviction)
+        return (
+            f"Research veto: the {_age_phrase(age_hours)} dossier for {ticker} "
+            f"reads BEARISH"
+        )
+
+    if conviction is not None and conviction < env.research_veto_min_conviction:
+        logger.info("research_veto_applied", ticker=ticker, reason="low_conviction",
+                    conviction=conviction)
+        return (
+            f"Research veto: conviction {conviction:.0f}/100 is below the "
+            f"{env.research_veto_min_conviction:.0f} floor "
+            f"({_age_phrase(age_hours)} dossier)"
+        )
+
+    return None
+
+
+def _age_phrase(age_hours: float | None) -> str:
+    """Human phrasing for dossier age, so a skip reason says how fresh it was."""
+    if age_hours is None:
+        return "undated"
+    if age_hours < 1:
+        return "current"
+    if age_hours < 24:
+        return f"{age_hours:.0f}h-old"
+    return f"{age_hours / 24:.0f}d-old"
+
+
 async def _prepare_entry(
     user_id: str,
     ticker: str,
@@ -626,6 +699,19 @@ async def _prepare_entry(
     if enforce_whitelist and settings.allowed_tickers:
         if ticker.upper() not in [t.upper() for t in settings.allowed_tickers]:
             return None, f"Ticker not in allowed list: {settings.allowed_tickers}"
+
+    # ── Guard: research veto ──────────────────────────────────────────────────
+    # Deep research may BLOCK an entry. It may never create one, enlarge one,
+    # or influence an exit — `execute_exit` does not run this chain, and that
+    # asymmetry is the same one that exempts SELL from every other delay in
+    # this system: refusing to buy costs an opportunity, refusing to sell costs
+    # money.
+    #
+    # Applied to adds as well as first entries, because an add increases
+    # exposure and blocking one does not force anything to be sold.
+    veto = await _research_veto(ticker)
+    if veto:
+        return None, veto
 
     # ── Existing position: add to it, or refuse ───────────────────────────────
     # Holding a stock is not a reason to refuse buying more of it. What the

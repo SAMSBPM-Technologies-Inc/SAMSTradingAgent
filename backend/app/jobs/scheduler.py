@@ -143,23 +143,93 @@ async def _fundamentals_refresh_job() -> None:
             return
 
         # Prioritise held names — those are the ones carrying money.
-        db = await get_db()
-        held = set()
-        try:
-            from app.models.trade import TradeStatus
-            async for t in db["trades"].find(
-                {"status": {"$in": list(TradeStatus.OPEN)}, "closed_at": None},
-                {"ticker": 1},
-            ):
-                held.add(str(t.get("ticker", "")).upper())
-        except Exception as exc:
-            logger.warning("fundamentals_priority_lookup_failed", error=str(exc))
-
-        ordered = [t for t in tickers if t in held] + [t for t in tickers if t not in held]
-        logger.info("fundamentals_refresh_start", tickers=len(ordered), prioritised=len(held))
+        ordered = await _held_first(tickers)
+        logger.info("fundamentals_refresh_start", tickers=len(ordered))
         await refresh_all_fundamentals(ordered)
     except Exception as exc:
         logger.error("fundamentals_refresh_job_failed", error=str(exc))
+
+
+async def _research_refresh_job() -> None:
+    """
+    Rebuild research dossiers for the watchlist, once a day.
+
+    Runs well after the fundamentals refresh, and that ordering is load-bearing
+    rather than tidy: a dossier is assembled entirely from cached provider data,
+    so building one before the cache is warm produces a report about yesterday.
+
+    Sequential on purpose. Each dossier is five model calls that are themselves
+    internally concurrent, and running several tickers at once would multiply
+    that into a burst against the API for no benefit — nothing is waiting on
+    this job. Held positions go first: if the run is cut short, the names
+    carrying money are the ones already done.
+
+    Every failure is swallowed per ticker. One symbol with no collected
+    statements must not stop the rest of the universe from being researched.
+    """
+    settings = get_settings()
+    if not settings.research_agents_enabled:
+        return
+
+    try:
+        from app.services.research.dossier import build_dossier
+
+        tickers = await _get_all_tickers()
+        if not tickers:
+            return
+
+        ordered = await _held_first(tickers)
+        watchlist = await _watchlist_sectors(ordered)
+
+        built = failed = 0
+        for ticker in ordered:
+            try:
+                dossier = await build_dossier(ticker, watchlist=watchlist)
+                if dossier:
+                    built += 1
+                else:
+                    failed += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning("research_refresh_ticker_failed",
+                               ticker=ticker, error=str(exc))
+
+        logger.info("research_refresh_done", built=built, skipped=failed,
+                    tickers=len(ordered))
+    except Exception as exc:
+        logger.error("research_refresh_job_failed", error=str(exc))
+
+
+async def _held_first(tickers: list[str]) -> list[str]:
+    """Order a ticker list so open positions come first."""
+    held: set[str] = set()
+    try:
+        db = await get_db()
+        from app.models.trade import TradeStatus
+
+        async for trade in db["trades"].find(
+            {"status": {"$in": list(TradeStatus.OPEN)}, "closed_at": None},
+            {"ticker": 1},
+        ):
+            held.add(str(trade.get("ticker", "")).upper())
+    except Exception as exc:
+        logger.warning("held_lookup_failed", error=str(exc))
+    return [t for t in tickers if t in held] + [t for t in tickers if t not in held]
+
+
+async def _watchlist_sectors(tickers: list[str]) -> list[dict]:
+    """Sector and industry per ticker, for the dossier's peer set."""
+    try:
+        from app.db import COLL_FUNDAMENTALS_CACHE
+
+        db = await get_db()
+        return await db[COLL_FUNDAMENTALS_CACHE].find(
+            {"ticker": {"$in": tickers}},
+            {"ticker": 1, "sector": 1, "industry": 1, "_id": 0},
+        ).to_list(length=500)
+    except Exception as exc:
+        logger.warning("watchlist_sector_lookup_failed", error=str(exc))
+        return []
 
 
 async def _premarket_sweep_job() -> None:
@@ -446,6 +516,23 @@ def start_scheduler() -> None:
         max_instances=1,
         misfire_grace_time=1800,
     )
+
+    # 1d. Research dossiers — daily, after the fundamentals cache is warm.
+    #     Ordering matters: a dossier is built from cached provider data, so
+    #     running it before the refresh produces a report about yesterday.
+    #     Gated off by default — five model calls per ticker is a real bill,
+    #     and nothing in the fast path depends on the output.
+    if settings.research_agents_enabled:
+        scheduler.add_job(
+            _research_refresh_job,
+            trigger=CronTrigger(hour=settings.research_daily_refresh_hour, minute=30,
+                                day_of_week="mon-fri", timezone=ET),
+            id="research_refresh",
+            name="Deep research dossier refresh",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
 
     # 2. Pre-market sweep — 08:00 ET Mon–Fri
     scheduler.add_job(
