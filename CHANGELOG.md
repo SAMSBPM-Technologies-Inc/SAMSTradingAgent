@@ -46,7 +46,11 @@ else an outage is logged and ignored so trading continues, but a visitor told
 **The logo is now drawn in one place.** `IconMark` and `LogoLockup` moved out
 of `Layout.tsx` into `components/Logo.tsx`. They were private to the app chrome
 while the chrome was the only consumer; the landing page was the second, and
-the first version of it drew its own mark that matched nothing shipped.
+the first version of it drew its own mark that matched nothing shipped. The
+sign-in page was a third, and had been drawing a gradient "S" over an orange
+wordmark since long before any of this — so the one screen every user passes
+through looked like a different product from the app behind it. All three now
+import the same lockup, and the mark on the sign-in page links home.
 
 **Two smaller fixes.** The auth provider began every page load in a loading
 state and only then checked whether a token existed, so a visitor who had never
