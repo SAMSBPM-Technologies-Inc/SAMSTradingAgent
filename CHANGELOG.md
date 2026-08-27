@@ -72,6 +72,14 @@ age and flags itself past the server's own 30-minute cache window.
 while the account balance was still loading. The theme follows your OS instead
 of defaulting to light, until you pick one explicitly.
 
+**Mobile follows.** It had never refreshed anything — every screen fetched once
+on mount, and a phone app is resumed rather than reloaded, so the prices you
+came back to were the ones you left. Watchlist and Positions now refetch on
+screen focus, on return to the foreground, and each minute while both hold.
+Exit reasons render in order history, the ticker screen flags an analysis past
+the server's cache window, and the quantity field no longer refills itself when
+you clear it to retype.
+
 328 tests, up from 314.
 
 ### Known gaps
@@ -91,9 +99,18 @@ of defaulting to light, until you pick one explicitly.
   classes (`text-red-500`, `text-amber-600`) instead of the accent tokens.
   They are legible in both themes, so this is consistency debt rather than the
   dark-mode bug the token rule exists to prevent.
-- The mobile app has none of this. Web and mobile are meant to stay in step,
-  and this release puts them out of step on layout, exit reasons and touch
-  sizing.
+- Mobile is synced on the parts that transfer — exit reasons, refresh on focus
+  and foreground, the staleness badge, and the order-ticket quantity fix — and
+  already followed the OS theme and shared its account fetch before this
+  release. The layout work does not transfer: it was a fix for two mounted
+  copies and for tables too wide for a phone, and the native client has
+  neither. Its touch targets were not audited; React Native's defaults are
+  generally adequate but that is an assumption, not a measurement.
+- Two pre-existing type errors in the mobile project — `app/(app)/guide.tsx`
+  passes `style` to a component that does not accept it, and `app/(auth)/index.tsx`
+  hits a react-hook-form generic variance issue. Neither is touched here and
+  neither blocks the bundle, but `tsc --noEmit` is not clean on mobile the way
+  it is on web.
 
 ## [1.8.2] — 2026-08-27
 

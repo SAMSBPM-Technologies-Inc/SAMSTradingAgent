@@ -9,6 +9,8 @@ import { tradingApi } from '../../src/lib/api'
 import { useToast } from '../../src/lib/toast-context'
 import { formatDate, formatTime } from '../../src/lib/format'
 import { SOURCE_LABEL, tradeSource } from '../../src/lib/trade-source'
+import { exitReasonLabel } from '../../src/lib/exit-reason'
+import { useRefreshOnFocus } from '../../src/lib/use-refresh'
 import type { Holding, Proposal, TradeRecord } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import Disclaimer from '../../src/components/Disclaimer'
@@ -298,7 +300,10 @@ export default function PositionsScreen() {
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  // Holdings, the proposal queue and order statuses all move without the phone
+  // being told. A proposal waiting on you is the one thing here that should
+  // never need a manual pull to appear.
+  useRefreshOnFocus(load)
 
   const closePosition = (ticker: string) => {
     // Closing sends a real order, so it gets an undo window rather than a
@@ -533,12 +538,23 @@ export default function PositionsScreen() {
                           {'  ·  '}
                           {formatDate(o.opened_at)} · {formatTime(o.opened_at)} ET
                         </Text>
-                        <Pnl value={o.pnl} />
+                        {/* An estimate from the limit we asked for is not a
+                            result. Until settlement replaces it with the real
+                            fill, say the sale is working rather than show a P&L
+                            that may not be what happened. */}
+                        {o.closed_at && o.exit_price_estimated ? (
+                          <Text style={{ fontSize: 11, color: C.fgMuted }}>sale working</Text>
+                        ) : (
+                          <Pnl value={o.pnl} />
+                        )}
                       </View>
 
-                      {o.reason && (
+                      {/* Why it closed, or why it was refused. `reason` carries
+                          a guard's refusal on an entry; `exit_reason` carries
+                          the cause of an exit. A row never has both. */}
+                      {(o.reason || exitReasonLabel(o.exit_reason)) && (
                         <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 14 }}>
-                          {o.reason}
+                          {o.reason ?? exitReasonLabel(o.exit_reason)}
                         </Text>
                       )}
                     </View>
