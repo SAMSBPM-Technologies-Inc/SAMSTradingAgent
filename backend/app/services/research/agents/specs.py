@@ -41,7 +41,19 @@ def _schema(properties: dict, required: list[str]) -> dict:
 
 _STRING = {"type": "string"}
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
-_SCORE = {"type": "integer", "minimum": 0, "maximum": 100}
+# Structured outputs (output_config.format.schema) do NOT support numerical
+# JSON Schema constraints — minimum/maximum on an integer is rejected outright
+# with a 400 ("properties maximum, minimum are not supported"), not silently
+# ignored. This shape 400'd every agent whose schema included it: fundamentals,
+# risk, and the synthesiser (all three declare a bounded score) failed
+# identically, while technical and news — neither has one — succeeded.
+#
+# The bound still has to hold, so it moves to Python: every consumer of a
+# _SCORE field clamps to [0, 100] and coerces non-numeric input rather than
+# trusting the model's arithmetic — see `_apply_business_quality` and
+# `_bounded_conviction` in dossier.py. The prompt still tells the model 0-100;
+# only the schema-level enforcement is gone.
+_SCORE = {"type": "integer"}
 
 
 # ── Fundamentals ──────────────────────────────────────────────────────────────

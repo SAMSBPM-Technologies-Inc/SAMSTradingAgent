@@ -116,9 +116,9 @@ async def build_dossier(ticker: str, user_id: Optional[str] = None,
 
         client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     results = await _fan_out(client, ledger, settings)
-    synthesis = await _synthesise(client, ledger, results, scores, settings)
+    synthesis, synthesis_error = await _synthesise(client, ledger, results, scores, settings)
 
-    dossier = _compose(ticker, ledger, scores, summary, results, synthesis)
+    dossier = _compose(ticker, ledger, scores, summary, results, synthesis, synthesis_error)
     await _persist(dossier)
     return dossier
 
@@ -262,12 +262,26 @@ def _evidence_block(ledger: Ledger, spec: AgentSpec) -> str:
 # ── Synthesis ─────────────────────────────────────────────────────────────────
 
 async def _synthesise(client: Any, ledger: Ledger, results: dict[str, AgentResult],
-                      scores: list[dim.Dimension], settings) -> Optional[dict]:
-    """Merge the specialists. Returns None when nothing usable came back."""
+                      scores: list[dim.Dimension],
+                      settings) -> tuple[Optional[dict], Optional[str]]:
+    """
+    Merge the specialists.
+
+    Returns `(output, error)` rather than collapsing every failure to a bare
+    `None` — that is exactly what let the real bug this module first shipped
+    with hide. All four specialists failing loudly (agents_failed) but the
+    synthesiser also failing and reporting nothing produced a dossier whose API
+    response had `report: null` and no field anywhere saying why. `error` is
+    always populated when `output` is None, so the caller — and the stored
+    document — can distinguish "nothing to synthesise" from "the call itself
+    broke", which is the same distinction `AgentResult.skipped` draws for the
+    specialists.
+    """
     usable = {name: r.output for name, r in results.items() if r.ok}
     if not usable:
+        reason = "no specialist agent produced usable output"
         logger.warning("research_no_agent_output")
-        return None
+        return None, reason
 
     anchor = dim.derived_conviction(scores)
     spec = AgentSpec(
@@ -284,7 +298,7 @@ async def _synthesise(client: Any, ledger: Ledger, results: dict[str, AgentResul
         settings.research_effort, settings.research_extended_thinking,
     )
     if not result.ok:
-        return None
+        return None, result.error or "synthesis call failed"
 
     output = dict(result.output or {})
     output["_usage"] = {
@@ -293,7 +307,7 @@ async def _synthesise(client: Any, ledger: Ledger, results: dict[str, AgentResul
         "cache_read_tokens": result.cache_read_tokens,
     }
     output["_derived_conviction"] = anchor
-    return output
+    return output, None
 
 
 def _synthesis_task(usable: dict[str, dict], results: dict[str, AgentResult],
@@ -355,7 +369,8 @@ def _synthesis_task(usable: dict[str, dict], results: dict[str, AgentResult],
 
 def _compose(ticker: str, ledger: Ledger, scores: list[dim.Dimension],
              summary: dict, results: dict[str, AgentResult],
-             synthesis: Optional[dict]) -> dict:
+             synthesis: Optional[dict],
+             synthesis_error: Optional[str] = None) -> dict:
     """
     Assemble the stored document, dropping every unsupported claim on the way.
 
@@ -401,6 +416,10 @@ def _compose(ticker: str, ledger: Ledger, scores: list[dim.Dimension],
         },
         "agents_failed": [name for name, r in results.items() if r.failed],
         "agents_skipped": [name for name, r in results.items() if r.skipped],
+        #: Populated whenever `report` is null so a reader — and the API
+        #: response — can tell "nothing to synthesise" from "the merge call
+        #: itself broke" instead of both reading as an unexplained gap.
+        "synthesis_error": synthesis_error if report is None else None,
         "data_gaps": _collect_gaps(results),
     }
 

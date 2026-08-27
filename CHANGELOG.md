@@ -14,6 +14,26 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.8.1] — 2026-08-27
+
+Fixes a bug that made every deep-research dossier fail in production on the
+first real run: `output_config.format.schema` rejects `minimum`/`maximum` on
+an integer field outright — a 400, not a silent no-op. Three of the five
+research agents (fundamentals, risk, the synthesiser) declared exactly that
+shape for their 0–100 score and failed identically the moment real API keys
+were in place; the other two, with no bounded-integer field, ran fine, which
+is what made the failure look selective rather than systemic. The bound now
+lives in Python — both consumers already clamped and coerced defensively — and
+26 new tests statically lint every agent schema against the documented
+unsupported-constructs list, so this class of bug fails in CI, not against a
+live call that costs money to find out.
+
+Also: a synthesiser failure no longer collapses into an unexplained `report:
+null`. It is recorded with the reason and reaches the API response as
+`synthesis_error`, distinguished from "no specialist produced anything to
+merge" — the same split `agents_skipped` already draws from a specialist
+failure. Both dossier panels render the distinction.
+
 ## [1.8.0] — 2026-08-27
 
 Research becomes a thing the system actually does, rather than a paragraph it

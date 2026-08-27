@@ -289,6 +289,12 @@ class ResearchDossier(BaseModel):
     #: was simply nothing to assess, and the reader should treat the questions
     #: that agent would have answered as unanswered rather than as neutral.
     agents_skipped: list[str] = []
+    #: Set only when `report` is null and the merge call itself failed — as
+    #: opposed to `report` being null because no specialist produced anything
+    #: to merge. Distinguishes "nothing to synthesise" from "the synthesiser
+    #: broke", the same way `agents_skipped` distinguishes a skip from a
+    #: failure for the specialists.
+    synthesis_error: Optional[str] = None
 
 
 class SignalListResponse(BaseModel):
@@ -386,7 +392,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.8.0"
+    version: str = "1.8.1"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.
