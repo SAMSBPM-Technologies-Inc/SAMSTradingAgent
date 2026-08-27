@@ -4,6 +4,21 @@ Production-ready MVP backend for AI-powered stock analysis, built by SAMSBPM Tec
 
 > **Attribution:** This project is a derivative of [TradingAgents](https://github.com/TauricResearch/TradingAgents) by TauricResearch, licensed under the [Apache License 2.0](LICENSE). Modifications include the FastAPI service layer, MongoDB integration, APScheduler pipeline, Docker deployment, and risk/signal engine extensions.
 
+## What it does
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/img/pipeline-dark.svg">
+  <img alt="How the agent works, in four stages: evidence, score, confirm, execute. Deep research runs alongside and may veto a buy but never creates one. Every outcome returns to the record as win rate, calibration and profit net of commission." src="frontend/public/img/pipeline-light.svg">
+</picture>
+
+One cycle, every five minutes, on every watched name. Each stage records what
+it did, so no step has to be taken on faith — the score arrives with its six
+factors decomposed, a changed verdict must hold before it is published, and no
+position opens without a stop and a target already on it.
+
+*Regenerate with `python3 scripts/render_pipeline_diagram.py` — the geometry is
+authored once there and both palettes derive from it.*
+
 ## Architecture
 
 ```
