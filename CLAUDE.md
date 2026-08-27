@@ -259,6 +259,8 @@ separation — every authenticated user gets every feature.
 ### Frontend Route Structure
 
 ```
+/              → HomePage when signed out, DashboardPage when signed in
+/home          → HomePage (always — the public landing page)
 /auth          → AuthPage (register/login)
 /              → DashboardPage (watchlist: signals + dip-buy setups in one table)
 /search        → SearchPage (ticker lookup — analyse without watching first)
@@ -271,6 +273,49 @@ separation — every authenticated user gets every feature.
 /guide         → GuidePage (IB Gateway setup)
 /radar         → redirects to / (see below)
 ```
+
+**The landing page is the only public screen, and it knows nothing about
+auth.** `sta.samsbpm.com` used to open on a password prompt, which tells a
+first-time visitor nothing. `/` now branches in `App.tsx`: signed out renders
+`HomePage`, signed in renders the dashboard unchanged. `HomePage` reads no
+context and makes no request on load — the plan is to move it to its own public
+host, so deleting that branch must be the whole of the migration. Its only call
+is the contact form, and only on submit. Its claims are all things the engine
+actually does; the sample readout is labelled a sample.
+
+**It is set as a document, not built from cards.** Structure comes from a
+numbered section grid and hairlines (`--home-rule`, one step lighter than
+`--color-border`); the Discipline band is the only filled block, because that
+section is the argument. There are no feature icons — an icon illustrating
+nothing is decoration standing where a fact should be — no blur, and one static
+warm wash behind the hero. Landing-only colours are `--home-*` tokens declared
+in both theme blocks; the band inverts through its own pair rather than
+swapping `--color-fg`, because a cream block is an accent in light mode and a
+flashbang in dark.
+
+**The identity lives in `components/Logo.tsx`.** `IconMark` and `LogoLockup`
+were local to `Layout.tsx` while the app chrome was the only consumer; the
+landing page was the second, and promptly drew its own gradient "S" that
+matched nothing. Import them.
+
+`AuthProvider` starts `isLoading` from whether a token is actually stored, not
+`true` — otherwise every anonymous visitor paints a spinner for a frame before
+the public page appears.
+
+**`POST /contact` is the only unauthenticated write on the API**, and the only
+endpoint a stranger can use to make the server send mail. Four things hold it:
+a per-address rate limit that counts *every* submission (not just failures, as
+login does — there is no submission that should not be charged for), a honeypot
+field that returns a normal success so a bot learns nothing, length caps in the
+schema, and the visitor's address in `Reply-To` rather than `From`, since
+forging a From the SMTP provider has not authenticated is how a sending domain
+dies. It is also the one mail path that **reports failure instead of swallowing
+it** — elsewhere a mail outage must not stop trading, but a person told "sent"
+when nothing was sent has been lied to and has no other route to anyone.
+Delivery address is `CONTACT_EMAIL`, which defaults in `config.py` and is
+deliberately not injected by the deploy workflow — `_set_key` writes `KEY=` for
+an unset variable, and an empty recipient would turn every submission into a
+502.
 
 **Alpha Radar is merged into the dashboard.** It was never a second set of
 tickers — both pages read the same `watchlists` collection, one joining

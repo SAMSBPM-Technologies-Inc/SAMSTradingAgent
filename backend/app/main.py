@@ -23,6 +23,7 @@ from app.routes import (
     analysis,
     auth,
     chart,
+    contact,
     health,
     performance,
     report,
@@ -145,7 +146,7 @@ def create_app() -> FastAPI:
             "Ingests market data, computes technical indicators, generates "
             "risk scores, and produces BUY/SELL/HOLD signals."
         ),
-        version="1.9.0",
+        version="1.10.0",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
@@ -187,6 +188,7 @@ def create_app() -> FastAPI:
     app.include_router(performance.router)
     app.include_router(alerts.router)
     app.include_router(trading.router)
+    app.include_router(contact.router)
 
     return app
 

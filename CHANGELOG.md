@@ -14,6 +14,79 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.10.0] — 2026-08-27
+
+The front door.
+
+**sta.samsbpm.com no longer opens on a password prompt.** Anyone arriving at
+the root now gets a public landing page: what the agent does, the loop it runs
+every five minutes, the six factors behind a score, and — the part worth
+reading — the four rules that decide when it will *not* place an order. Sign in
+sits top right; signing in lands you on the same dashboard as before, and a
+signed-in visit to `/` still goes straight there, so nothing changed for an
+existing user. The page is also served at `/home`.
+
+It is set as a document rather than assembled from cards: numbered sections on
+a column grid, hairline rules, one inverted band for the section that carries
+the argument, and no decorative icons. The sample readout on the hero shows the
+real shape of an engine response — score, six weighted factors, risk gate,
+confirmation count — and is labelled a sample. Every claim on the page is one
+the system actually makes elsewhere in this changelog.
+
+**A contact form, going to the team.** No self-serve signup exists, so the page
+asks for a message instead of pretending to offer an account. `POST /contact`
+is the only unauthenticated write on the API and the only way a stranger can
+make the server send mail, so it is rate limited per address counting *every*
+submission, carries a honeypot that returns a normal success, caps every field
+in the schema, and puts the sender in `Reply-To` rather than forging a `From`.
+It is also the one mail path that reports failure to the caller: everywhere
+else an outage is logged and ignored so trading continues, but a visitor told
+"sent" when nothing was sent has been lied to and has no other route to anyone.
+
+**The logo is now drawn in one place.** `IconMark` and `LogoLockup` moved out
+of `Layout.tsx` into `components/Logo.tsx`. They were private to the app chrome
+while the chrome was the only consumer; the landing page was the second, and
+the first version of it drew its own mark that matched nothing shipped.
+
+**Two smaller fixes.** The auth provider began every page load in a loading
+state and only then checked whether a token existed, so a visitor who had never
+signed in painted a spinner for a frame; it now starts from what is in storage.
+And `client_ip` — the Cloudflare-aware address lookup the login limiter
+depends on — moved to `app/utils/net.py` rather than being reimplemented for
+the second endpoint that needed it.
+
+### Known gaps
+
+- The landing page still ships inside the application bundle. An anonymous
+  visitor downloads the dashboard's JavaScript to read a marketing page — a
+  real cost that goes away when the page moves to its own host, and not worth
+  code-splitting the app to fix before then.
+- **The contact form has not been exercised over the wire.** It reuses the
+  same Zoho SMTP path that already delivers order-placed and order-filled
+  emails, so the mailer itself is known good in production — but no contact
+  message has actually been sent through it, and the tests run against a fake
+  sender. Worth one real submission after deploy.
+- **Locally the form always fails.** `SMTP_*` lives in GitHub secrets and vars,
+  not in `.env.example`, so a developer running the stack gets a 502 and the
+  form's error state on every submit. That is the honest behaviour — the
+  endpoint refuses to claim it sent something — but it is not a bug to chase.
+- `CONTACT_EMAIL` is deliberately **not** injected by the deploy workflow. Its
+  `_set_key` helper writes `KEY=` for an unset variable, which would override
+  the code default with an empty string and turn every submission into a 502.
+  The recipient lives in `config.py`; changing it is a code change.
+- The rate limiter is in-process, so its counters reset on restart and a second
+  API replica would keep its own. Same caveat the login limiter already
+  carries, now also load-bearing for spam.
+- The public page is web only. The mobile app opens on its login screen, which
+  is right for an installed app but means the two clients no longer show the
+  same first screen.
+- No pricing, docs, terms or privacy policy, and no analytics on the page — so
+  which sections work is currently unknown. Those belong to the separate public
+  host.
+- The copy has been reviewed by nobody but its author.
+
+---
+
 ## [1.9.0] — 2026-08-27
 
 A UX review of the whole client, and the data bug it turned up.

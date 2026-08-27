@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from './lib/theme-context'
 import { AuthProvider, useAuth } from './lib/auth-context'
 import AuthPage from './pages/AuthPage'
+import HomePage from './pages/HomePage'
 import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
 import SettingsPage from './pages/SettingsPage'
@@ -14,8 +15,8 @@ import { ToastProvider } from './lib/toast-context'
 import { TradingSettingsProvider } from './lib/trading-context'
 import LoadingSpinner from './components/LoadingSpinner'
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { token, isLoading } = useAuth()
+function AuthGate({ children }: { children: React.ReactNode }) {
+  const { isLoading } = useAuth()
 
   if (isLoading) {
     return (
@@ -25,28 +26,65 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     )
   }
 
+  return <>{children}</>
+}
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth()
+
   if (!token) {
     return <Navigate to="/auth" replace />
   }
 
-  return <>{children}</>
+  return <AuthGate>{children}</AuthGate>
+}
+
+/* `/` is the one route with two faces. A signed-out visitor gets the public
+   landing page — sta.samsbpm.com used to open on a password prompt, which
+   tells someone who has never seen the product nothing about it — and a
+   signed-in one goes straight to Trade, unchanged.
+ *
+ * The split is here rather than inside either page so that HomePage stays
+ * free of auth entirely: when the landing page moves to its own public host,
+ * this branch is what gets deleted, and nothing inside HomePage changes.
+ */
+function RootRoute() {
+  const { token } = useAuth()
+  return token ? <TradePage /> : <HomePage />
+}
+
+function AuthRoute() {
+  const { token } = useAuth()
+  return token ? <Navigate to="/" replace /> : <AuthPage />
 }
 
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/auth" element={<AuthPage />} />
+      {/* Signing in again when you already are lands on the dashboard rather
+          than a form that would immediately redirect. */}
+      <Route
+        path="/auth"
+        element={
+          <AuthGate>
+            <AuthRoute />
+          </AuthGate>
+        }
+      />
       {/* Trade answers "what should I do about this name, and why". `/` shows
           the first watched ticker; `/ticker/:symbol` deep-links to any name,
           watched or not. Both render the same screen. */}
       <Route
         path="/"
         element={
-          <ProtectedRoute>
-            <TradePage />
-          </ProtectedRoute>
+          <AuthGate>
+            <RootRoute />
+          </AuthGate>
         }
       />
+      {/* The landing page on its own path too, so it stays reachable while
+          signed in — and so the future public host has a URL to mirror. */}
+      <Route path="/home" element={<HomePage />} />
       {/* The three destinations of the 1.7 IA. `/holdings`, `/orders` and
           `/profile` still resolve — they redirect here, so bookmarks and the
           mobile app's older deep links keep working. */}

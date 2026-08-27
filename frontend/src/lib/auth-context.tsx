@@ -13,10 +13,22 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+// Read once, synchronously, so the first render already knows whether there is
+// a session to restore. This is what keeps the public landing page from
+// flashing a spinner at a visitor who has no token at all: with the old
+// unconditional `useState(true)`, every anonymous page load painted the
+// loading state for a frame before deciding there was nothing to load.
+function storedToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem(TOKEN_STORAGE_KEY)
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
-  const [token, setToken] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [token, setToken] = useState<string | null>(storedToken)
+  // Loading means "a stored session is being verified" — never true when there
+  // is nothing stored.
+  const [isLoading, setIsLoading] = useState(() => storedToken() !== null)
 
   const fetchUser = useCallback(async () => {
     try {
@@ -30,14 +42,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  // Hydrate from localStorage on mount
+  // Hydrate from localStorage on mount. The token is already in state by now;
+  // this verifies it and loads the user behind it.
   useEffect(() => {
-    const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY)
-    if (storedToken) {
-      setToken(storedToken)
-      fetchUser().finally(() => setIsLoading(false))
-    } else {
-      setIsLoading(false)
+    if (!storedToken()) return
+    let cancelled = false
+    fetchUser().finally(() => {
+      if (!cancelled) setIsLoading(false)
+    })
+    return () => {
+      cancelled = true
     }
   }, [fetchUser])
 

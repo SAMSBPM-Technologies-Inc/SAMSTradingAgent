@@ -14,6 +14,7 @@ from app.db import COLL_USERS, get_db
 from app.dependencies import get_current_user
 from app.services import rate_limit
 from app.services.auth import create_access_token, hash_password, verify_password
+from app.utils.net import client_ip as _client_ip
 from app.utils.logger import get_logger
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -90,25 +91,6 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
     rate_limit.record_login_success(body.email, client_ip)
     logger.info("user_login", email=body.email)
     return TokenResponse(access_token=create_access_token(str(user["_id"]), user["email"]))
-
-
-def _client_ip(request: Request) -> str:
-    """
-    Caller's address, honouring the proxy header.
-
-    Everything reaches this app through Cloudflare, so `request.client.host` is
-    always the tunnel and would collapse every user onto one bucket — the first
-    person to trip the limit would lock out everybody. `CF-Connecting-IP` is set
-    by Cloudflare and cannot be spoofed past it; the chain order for
-    X-Forwarded-For is left-most = original client.
-    """
-    cf_ip = request.headers.get("cf-connecting-ip")
-    if cf_ip:
-        return cf_ip.strip()
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
 
 
 @router.get("/me")
