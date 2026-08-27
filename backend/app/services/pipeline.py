@@ -490,7 +490,12 @@ async def _execute_trades(ticker: str, signal: dict) -> None:
         # only builds display cards — so the agent opened positions automatically
         # and never closed them. execute_exit no-ops when no position is open.
         for w in watchers:
-            await execute_exit(w["user_id"], ticker, current_price, trigger="SELL_SIGNAL")
+            await execute_exit(
+                w["user_id"], ticker, current_price, trigger="SELL_SIGNAL",
+                # Carried so the closed trade can say what it scored, not just
+                # that something sold it.
+                signal_score=score,
+            )
 
     except Exception as exc:
         logger.warning("execute_trades_failed", ticker=ticker, error=str(exc))

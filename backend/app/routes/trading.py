@@ -58,6 +58,14 @@ def _trade_to_response(doc: dict) -> TradeResponse:
         is_paper=doc.get("is_paper", True),
         opened_at=doc.get("opened_at", datetime.utcnow()),
         closed_at=doc.get("closed_at"),
+        # Declared on TradeResponse since it was written, but never populated
+        # here — so Order History could not show what filled or why a position
+        # closed even once the record carried it.
+        filled_qty=doc.get("filled_qty"),
+        filled_at=doc.get("filled_at"),
+        exit_reason=doc.get("exit_reason"),
+        exit_trigger=doc.get("exit_trigger"),
+        exit_price_estimated=doc.get("exit_price_estimated"),
     )
 
 

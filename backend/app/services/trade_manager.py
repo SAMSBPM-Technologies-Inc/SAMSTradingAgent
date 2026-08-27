@@ -18,6 +18,7 @@ from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_TRADES, COLL_USERS, get_db
 from app.models.trade import AutoTradeSettings, TradeRecord, TradeStatus
 from app.services import broker as ibkr
+from app.services.signal_generator import SELL_THRESHOLD
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -1381,12 +1382,39 @@ async def _last_known_price(ticker: str) -> float | None:
     return (doc or {}).get("current_price")
 
 
+#: Why a position was closed, in the words the record should carry.
+#:
+#: `execute_exit` has always known this and always threw it away: the trigger
+#: reached a log line and a push notification, and the trade document kept
+#: nothing. Reconciliation would later stamp `bracket_or_manual` on anything it
+#: found flat, so a stop firing and the agent acting on its own SELL signal
+#: were indistinguishable in the one place a reader actually looks. A closed
+#: trade has to be able to say what closed it.
+_EXIT_REASON: dict[str, str] = {
+    "SELL_SIGNAL": "Score fell below the sell threshold",
+    "EXIT_ALERT": "Exit alert — the setup scan flagged the position overbought",
+    "MANUAL_CLOSE": "Closed by you from the Positions screen",
+}
+
+
+def _exit_reason_text(trigger: str, signal_score: float | None) -> str:
+    """One sentence saying why this position is being sold."""
+    base = _EXIT_REASON.get(trigger, f"Closed on {trigger}")
+    if trigger == "SELL_SIGNAL" and signal_score is not None:
+        return (
+            f"{base} — scored {round(signal_score * 100)}/100 against the "
+            f"{round(SELL_THRESHOLD * 100)} that triggers a sell"
+        )
+    return base
+
+
 async def execute_exit(
     user_id: str,
     ticker: str,
     current_price: float | None,
     trigger: str = "EXIT_ALERT",
     *,
+    signal_score: float | None = None,
     require_enabled: bool = True,
 ) -> None:
     """
@@ -1510,18 +1538,32 @@ async def execute_exit(
         # carry a bracket of its own.
         order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)
 
-        from bson import ObjectId
         update: dict = {
             "closed_at": utcnow(),
             "exit_price": limit_price,
-            "status": TradeStatus.PENDING,  # will be settled by perf tracker
+            # Settled by `_settle_submitted_exits` on the next reconciliation
+            # pass, which replaces the estimates below with the real fill.
+            "status": TradeStatus.PENDING,
+            # The two halves of "why": a stable code to branch on, and the
+            # sentence a human reads. Written here because this is the only
+            # place that knows — reconciliation can see that a position went
+            # flat but never why, and used to guess.
+            "exit_trigger": trigger,
+            "exit_reason": _exit_reason_text(trigger, signal_score),
+            "exit_qty_submitted": qty,
         }
         if order_id:
             update["exit_order_id"] = order_id
 
         entry_price = open_trade.get("entry_price") or open_trade.get("limit_price", 0.0)
         if entry_price:
+            # An estimate from the price we are *asking* for, not from a fill.
+            # `exit_price_estimated` marks it as such so settlement knows it may
+            # overwrite it and performance knows not to count it meanwhile — a
+            # manual close passes avg cost as `current_price`, which makes this
+            # figure very nearly zero every time.
             update["pnl"] = round((price - entry_price) * qty, 2)
+            update["exit_price_estimated"] = True
 
         await db[COLL_TRADES].update_one(
             {"_id": open_trade["_id"]},
@@ -1783,12 +1825,16 @@ async def reconcile_trades() -> dict:
     Phase 2 — closures: a filled BUY with no remaining broker position means a
                         bracket leg fired (or someone closed it by hand); record
                         the exit and realised P&L.
+    Phase 3b — our own
+        exits:          a sell `execute_exit` submitted, settled against the
+                        fill log. These carry `closed_at` from submission time
+                        and so are invisible to every phase above.
 
     Returns a counts summary for logging. Never raises.
     """
     summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0,
                "unpriced": 0, "unreconciled": 0, "scaled": 0, "reprotected": 0,
-               "repriced": 0}
+               "repriced": 0, "settled": 0}
 
     if not ibkr.is_connected():
         logger.debug("reconcile_skipped_broker_disconnected")
@@ -2084,6 +2130,61 @@ async def reconcile_trades() -> dict:
             is_paper=not get_settings().is_live_trading,
         )
 
+    # ── Phase 3b: settle the exits we submitted ourselves ────────────────────
+    #
+    # `execute_exit` stamps `closed_at` the moment it sends the sell, which put
+    # those trades outside `open_trades` (it requires `closed_at: None`) and so
+    # outside every phase above. Nothing else ever looked at them: they sat at
+    # PENDING with an estimated P&L for good, invisible to `/performance/trades`
+    # — which counts `status == CLOSED` — while Order History showed a "pending"
+    # pill for a position sold days ago. Every agent SELL and every press of the
+    # Close button landed here.
+    #
+    # This is the same settlement Phase 3 performs, against the same fill log;
+    # the difference is that these trades already know *why* they closed, so
+    # `exit_reason` is preserved rather than guessed at.
+    try:
+        submitted = await db[COLL_TRADES].find({
+            "status": {"$in": list(TradeStatus.OPEN)},
+            "closed_at": {"$ne": None},
+            "action": "BUY",
+        }).to_list(length=1000)
+    except Exception as exc:
+        logger.warning("reconcile_submitted_exits_failed", error=str(exc))
+        submitted = []
+
+    for trade in submitted:
+        ticker = str(trade.get("ticker", "")).upper()
+        update = _settle_exit_update(trade, fills, statuses, held)
+        if update is None:
+            continue
+
+        entry_price = trade.get("entry_price") or trade.get("limit_price")
+        qty = float(trade.get("filled_qty") or trade.get("exit_qty_submitted")
+                    or trade.get("qty") or 0)
+
+        summary["settled"] += 1
+        summary["closed" if update.get("pnl") is not None else "unpriced"] += 1
+
+        await _update_trade(str(trade["_id"]), update)
+        logger.info(
+            "trade_exit_settled",
+            ticker=ticker, entry=entry_price, exit=update.get("exit_price"),
+            pnl=update.get("pnl"),
+            trigger=trade.get("exit_trigger"),
+            reason=trade.get("exit_reason") or update.get("exit_reason"),
+        )
+        await _notify_fill(
+            trade,
+            event_key="close",
+            kind="exit", action="SELL", ticker=ticker, qty=qty,
+            fill_price=update.get("exit_price"),
+            entry_price=float(entry_price) if entry_price else None,
+            pnl=update.get("pnl"),
+            exit_reason=trade.get("exit_reason") or "closed — exit price unavailable",
+            is_paper=not get_settings().is_live_trading,
+        )
+
     # ── Phase 4: pick up commissions that reported after the close ───────────
     # A trade leaves `open_trades` the moment it closes, so an execution whose
     # commission report had not yet arrived would never be attributed to it and
@@ -2132,6 +2233,75 @@ async def reconcile_trades() -> dict:
     if any(summary.values()):
         logger.info("reconcile_trades_done", **summary)
     return summary
+
+
+def _settle_exit_update(
+    trade: dict,
+    fills: list,
+    statuses: dict,
+    held: dict,
+) -> dict | None:
+    """
+    The `$set` that settles an exit `execute_exit` submitted, or None to wait.
+
+    Pure, so the decision can be tested without a database — the loop that calls
+    it only writes what comes back.
+
+    Waits, rather than settling, in the two cases where the trade is not
+    actually finished: the sell is still working at the venue, or the venue
+    still reports a position. Booking a P&L in either case would report a result
+    for shares that are still at risk.
+    """
+    ticker = str(trade.get("ticker", "")).upper()
+
+    # Still working — unresolved order, unresolved trade.
+    if str(trade.get("exit_order_id") or "") in statuses:
+        return None
+
+    # The venue still shows a position: the sell did not fill, or filled only in
+    # part. Either way this is not a closed trade yet.
+    if held.get(ticker, 0) > 0:
+        return None
+
+    entry_price = trade.get("entry_price") or trade.get("limit_price")
+    qty = float(trade.get("filled_qty") or trade.get("exit_qty_submitted")
+                or trade.get("qty") or 0)
+    filled_at = trade.get("filled_at") or trade.get("opened_at")
+    if isinstance(filled_at, datetime) and filled_at.tzinfo is None:
+        filled_at = filled_at.replace(tzinfo=timezone.utc)
+
+    closing = _closing_sell_fills(fills, ticker, filled_at)
+    exit_price = _latest_sell_price(fills, ticker, filled_at)
+
+    update: dict = {"status": TradeStatus.CLOSED, "exit_price_estimated": False}
+    update.update(_accrue_commission(trade, closing))
+
+    if exit_price and entry_price and qty:
+        update["exit_price"] = round(exit_price, 4)
+        update["pnl"] = round((exit_price - float(entry_price)) * qty, 2)
+        commission = update.get("commission_paid", trade.get("commission_paid"))
+        complete = update.get("commission_complete", trade.get("commission_complete"))
+        if commission is not None and complete:
+            update["pnl_net"] = round(update["pnl"] - float(commission), 2)
+    else:
+        # No execution to price it from — IB serves only the current session, so
+        # anything closed on an earlier day is unrecoverable. Drop the estimate
+        # rather than promote it: it was computed from the limit we asked for,
+        # and on a manual close that limit is the position's own average cost,
+        # which makes the figure ~0 every time. Counting that as a realised
+        # result would quietly flatten the record toward break-even.
+        update["pnl"] = None
+        update["pnl_net"] = None
+        update["exit_price"] = None
+
+    # Keep the reason the trade already carries. Only a row written before
+    # `execute_exit` recorded one needs a placeholder, and "unrecorded" is the
+    # honest word for it — not `bracket_or_manual`, which would claim a stop
+    # fired when the agent or the user did the selling.
+    if not trade.get("exit_reason"):
+        update["exit_reason"] = "closed_reason_unrecorded"
+
+    return update
 
 
 def _closing_sell_fills(fills: list, ticker: str, after: datetime | None) -> list:

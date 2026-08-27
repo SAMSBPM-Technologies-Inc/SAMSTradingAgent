@@ -231,6 +231,9 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
                 "stop_loss": t.get("stop_loss"),
                 "take_profit": t.get("take_profit"),
                 "exit_reason": t.get("exit_reason"),
+                # The code behind the sentence, so the client can mark an exit
+                # the agent chose differently from one a stop fired.
+                "exit_trigger": t.get("exit_trigger"),
                 "status": t.get("status"),
                 "signal_type": t.get("signal_type"),
                 "is_paper": t.get("is_paper", True),
