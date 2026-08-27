@@ -44,6 +44,9 @@
   --home-band-fg: #f7f4ee;
   --home-band-muted: rgba(247, 244, 238, 0.6);
   --home-band-rule: rgba(247, 244, 238, 0.16);
+  /* The quiet counterweight on the sign-in backdrop. Barely a colour — enough
+     to stop the page reading as a single flat wash. */
+  --home-glow-cool-soft: rgba(31, 92, 168, 0.07);
 }
 
 .dark {
@@ -69,6 +72,7 @@
   --home-band-fg: #f0ece4;
   --home-band-muted: rgba(240, 236, 228, 0.58);
   --home-band-rule: rgba(240, 236, 228, 0.13);
+  --home-glow-cool-soft: rgba(84, 140, 214, 0.09);
 }
 
 @layer base {
@@ -393,6 +397,58 @@ html:has(.home-scroll) {
 
   .home-rise,
   .home-bar {
+    animation: none;
+  }
+}
+
+/* ── Sign-in backdrop ─────────────────────────────────────────────────────
+   The sign-in page was a form floating in an empty field. This gives it a
+   ground without giving it a subject: one warm wash off the top-left, a
+   cooler counterweight bottom-right, and a fine rule grid that fades out well
+   before it reaches the card.
+
+   Deliberately drawn rather than photographed. A photograph would need a
+   second asset for dark mode, would be the largest thing on the page, and
+   would compete with the one control the screen exists for. Everything here
+   is two pseudo-elements and costs nothing to load.
+
+   Same tokens as the landing page, so the two screens are visibly the same
+   product. */
+.auth-field {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.auth-field::before {
+  content: '';
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(40% 44% at 16% 6%, var(--home-wash), transparent 68%),
+    radial-gradient(36% 40% at 88% 96%, var(--home-glow-cool-soft), transparent 70%);
+}
+
+.auth-field::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, var(--home-rule) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--home-rule) 1px, transparent 1px);
+  background-size: 72px 72px;
+  /* Fades to nothing around the middle, where the card sits — the grid is a
+     ground for the page, not a texture behind the inputs. */
+  mask-image: radial-gradient(60% 52% at 50% 46%, transparent 18%, #000 92%);
+  -webkit-mask-image: radial-gradient(60% 52% at 50% 46%, transparent 18%, #000 92%);
+  opacity: 0.75;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Nothing here animates; noted so the next person does not add something
+     that does without checking. */
+  .auth-field {
     animation: none;
   }
 }

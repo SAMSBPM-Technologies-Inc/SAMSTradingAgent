@@ -293,6 +293,14 @@ in both theme blocks; the band inverts through its own pair rather than
 swapping `--color-fg`, because a cream block is an accent in light mode and a
 flashbang in dark.
 
+**There is one drawing of what the system does.**
+`scripts/render_pipeline_diagram.py` is its only source: geometry authored
+once, both palettes derived, emitting `frontend/public/img/pipeline-{light,dark}.svg`.
+The landing page swaps the two on the theme toggle, and the README and
+`docs/02-architecture.md` embed the same files through `<picture>`. Edit the
+script, never the SVGs — and keep its four stage names identical to the four
+steps the landing page prints beneath it, which have disagreed once already.
+
 **The identity lives in `components/Logo.tsx`.** `IconMark` and `LogoLockup`
 were local to `Layout.tsx` while the app chrome was the only consumer; the
 landing page was the second, and promptly drew its own gradient "S" that

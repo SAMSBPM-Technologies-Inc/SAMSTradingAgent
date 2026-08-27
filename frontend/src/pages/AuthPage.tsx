@@ -143,12 +143,15 @@ export default function AuthPage() {
   const onSuccess = () => navigate('/', { replace: true })
 
   return (
-    <div className="min-h-dvh flex flex-col bg-[var(--color-bg)] transition-colors duration-200">
+    <div className="relative min-h-dvh flex flex-col overflow-hidden bg-[var(--color-bg)] transition-colors duration-200">
+      {/* Ground for the page. Purely decorative and behind everything — see
+          .auth-field in index.css for why it is drawn rather than photographed. */}
+      <div className="auth-field" aria-hidden="true" />
       {/* Top bar. The shared lockup, not a local approximation of it — this
           page drew its own gradient "S" and orange wordmark for long enough
           that signing in looked like a different product from the app behind
           it. */}
-      <div className="flex items-center justify-between px-4 h-14">
+      <div className="relative flex items-center justify-between px-4 h-14">
         <Link to="/" className="rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/50">
           <LogoLockup />
         </Link>
@@ -156,7 +159,7 @@ export default function AuthPage() {
       </div>
 
       {/* Center card */}
-      <div className="flex-1 flex items-center justify-center px-4 py-8">
+      <div className="relative flex-1 flex items-center justify-center px-4 py-8">
         <div className="w-full max-w-sm">
           <div className="text-center mb-8">
             <h1

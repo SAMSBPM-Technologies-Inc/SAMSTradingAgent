@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ArrowRight, ArrowUpRight, Check } from 'lucide-react'
 import { contactApi } from '../lib/api'
 import { IconMark, LogoLockup } from '../components/Logo'
+import PipelineDiagram from '../components/PipelineDiagram'
 import ThemeToggle from '../components/ThemeToggle'
 import LoadingSpinner from '../components/LoadingSpinner'
 
@@ -299,7 +300,9 @@ function Loop() {
       title="From raw ticks to a position, twelve times an hour."
       lede="The same cycle runs on every watched name, all session. Each stage records what it did, so no step has to be taken on faith."
     >
-      <ol className="grid border-t home-hr sm:grid-cols-2 lg:grid-cols-4">
+      <PipelineDiagram />
+
+      <ol className="mt-14 grid border-t home-hr sm:grid-cols-2 lg:grid-cols-4">
         {STEPS.map(([title, body], i) => (
           <li
             key={title}
