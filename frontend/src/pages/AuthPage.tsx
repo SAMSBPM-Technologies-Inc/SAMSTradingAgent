@@ -1,11 +1,12 @@
 import { useState, forwardRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Eye, EyeOff, LogIn } from 'lucide-react'
 import { authApi } from '../lib/api'
 import { useAuth } from '../lib/auth-context'
+import { LogoLockup } from '../components/Logo'
 import ThemeToggle from '../components/ThemeToggle'
 import LoadingSpinner from '../components/LoadingSpinner'
 
@@ -143,16 +144,14 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-dvh flex flex-col bg-[var(--color-bg)] transition-colors duration-200">
-      {/* Top bar */}
+      {/* Top bar. The shared lockup, not a local approximation of it — this
+          page drew its own gradient "S" and orange wordmark for long enough
+          that signing in looked like a different product from the app behind
+          it. */}
       <div className="flex items-center justify-between px-4 h-14">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center">
-            <span className="text-white font-bold text-sm" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>S</span>
-          </div>
-          <span className="font-bold text-brand-500 tracking-tight" style={{ fontFamily: 'Fraunces, Georgia, serif' }}>
-            SAMSBPM
-          </span>
-        </div>
+        <Link to="/" className="rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500/50">
+          <LogoLockup />
+        </Link>
         <ThemeToggle />
       </div>
 
