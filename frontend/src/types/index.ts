@@ -450,6 +450,13 @@ export interface TradeRecord {
   filled_qty?: number
   stop_loss?: number
   take_profit?: number
+  /** Why the position closed, in the words a person reads. */
+  exit_reason?: string | null
+  /** The stable code behind it: SELL_SIGNAL / EXIT_ALERT / MANUAL_CLOSE.
+   *  Absent on an exit nobody here submitted — a stop or target firing. */
+  exit_trigger?: string | null
+  /** True while exit_price and pnl are the levels we asked for, not a fill. */
+  exit_price_estimated?: boolean | null
 }
 
 export interface AuthResponse {
@@ -544,6 +551,8 @@ export interface ClosedTrade {
   stop_loss: number | null
   take_profit: number | null
   exit_reason: string | null
+  /** The stable code behind exit_reason; null when a stop or target fired. */
+  exit_trigger?: string | null
   status: string
   signal_type: string | null
   is_paper: boolean

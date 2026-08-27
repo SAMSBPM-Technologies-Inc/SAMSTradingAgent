@@ -17,6 +17,7 @@ import type {
   WatchlistItem,
 } from '../../types'
 import { relativeTime } from '../../lib/format'
+import { useNow } from '../../lib/use-poll'
 import { downloadPdf, downloadTxt, emailReport } from '../../lib/report'
 import { SOURCE_DESCRIPTION, tradeSource } from '../../lib/trade-source'
 import { Disclaimer } from '../Layout'
@@ -34,6 +35,9 @@ import { ResearchPanel } from './ResearchPanel'
 const PriceChart = lazy(() => import('../PriceChart'))
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
+/** Mirrors `_CACHE_TTL_MINUTES` in backend/app/routes/analysis.py. */
+const ANALYSIS_TTL_MS = 30 * 60 * 1000
 
 // ── Why ───────────────────────────────────────────────────────────────────────
 
@@ -291,9 +295,18 @@ interface TickerDetailProps {
   onUnwatch: () => void
 }
 
-export default function TickerDetail({
+/**
+ * Identity and verdict: the ticker, the signal, the price, your position, the
+ * score, and the one-line "why".
+ *
+ * Split from the analysis below it so the two can be ordered independently.
+ * On mobile the order ticket sits between them — you read what the name is and
+ * what the engine concluded, then you can act, and the evidence follows. The
+ * ticket first would invite an order before the verdict had been read; the
+ * whole analysis first buried the ticket three screens down.
+ */
+export function TickerHeader({
   data,
-  item,
   holding,
   position,
   watched,
@@ -301,9 +314,17 @@ export default function TickerDetail({
   onRefresh,
   onWatch,
   onUnwatch,
-}: TickerDetailProps) {
+}: Omit<TickerDetailProps, 'item'>) {
   const chg = data.day_change_pct
   const tone = whyTone(data.signal)
+
+  // Ticks so the age below stays true while the tab sits open. The threshold
+  // is the server's own `_CACHE_TTL_MINUTES`: past it, `/analyze` would rebuild
+  // rather than serve this, which makes it exactly the point where what is on
+  // screen stops being what the engine would say.
+  const now = useNow()
+  const generatedMs = Date.parse(data.generated_at)
+  const stale = Number.isFinite(generatedMs) && now - generatedMs > ANALYSIS_TTL_MS
 
   return (
     <>
@@ -320,10 +341,27 @@ export default function TickerDetail({
             <SignalBadge signal={data.signal} size="lg" />
             {data.conviction && <ConvictionBadge conviction={data.conviction} />}
           </div>
-          <div className="mt-0.5 text-[11.5px] text-[var(--color-fg-muted)]">
-            {data.time_horizon ? `${data.time_horizon} horizon · ` : ''}
-            scored {relativeTime(data.generated_at)}
-            {data.confidence != null ? ` · ${Math.round(data.confidence * 100)}% confidence` : ''}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-1 text-[11.5px]
+                          text-[var(--color-fg-muted)]">
+            {data.time_horizon && <span>{data.time_horizon} horizon ·</span>}
+            <span>scored {relativeTime(data.generated_at)}</span>
+            {/* Past the server's own cache window this analysis is older than
+                anything the engine would still serve, so say so rather than
+                letting a quiet "scored 47m ago" pass for current. `useNow`
+                keeps it ticking; it used to render once and then stand still
+                for as long as the tab stayed open. */}
+            {stale && (
+              <span
+                className="inline-flex items-center gap-1 rounded px-1.5 py-px text-[10.5px] font-semibold"
+                style={{ background: 'var(--tint-hold)', color: 'var(--accent-hold)' }}
+              >
+                <AlertCircle className="h-3 w-3" aria-hidden="true" />
+                Stale — re-analyse
+              </span>
+            )}
+            {data.confidence != null && (
+              <span>· {Math.round(data.confidence * 100)}% confidence</span>
+            )}
           </div>
         </div>
 
@@ -348,7 +386,7 @@ export default function TickerDetail({
         <div className="flex w-full items-center gap-1.5">
           <button
             onClick={watched ? onUnwatch : onWatch}
-            className="chip"
+            className="chip touch-target"
             aria-label={watched ? `Remove ${data.ticker} from watchlist` : `Add ${data.ticker} to watchlist`}
           >
             {watched
@@ -356,7 +394,7 @@ export default function TickerDetail({
               : <><Plus className="h-3 w-3" aria-hidden="true" /> Watch</>}
           </button>
 
-          <button onClick={onRefresh} disabled={refreshing} className="chip disabled:opacity-40">
+          <button onClick={onRefresh} disabled={refreshing} className="chip touch-target disabled:opacity-40">
             <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
             {refreshing ? 'Refreshing…' : 'Re-analyse'}
           </button>
@@ -364,7 +402,7 @@ export default function TickerDetail({
           <Menu
             label="Export report"
             align="left"
-            triggerClassName="chip"
+            triggerClassName="chip touch-target"
             trigger={<><Download className="h-3 w-3" aria-hidden="true" /> Export</>}
           >
             {(close) => (
@@ -384,7 +422,7 @@ export default function TickerDetail({
           {watched && (
             <button
               onClick={onUnwatch}
-              className="chip ml-auto hover:!text-[var(--accent-sell)]"
+              className="chip touch-target ml-auto hover:!text-[var(--accent-sell)]"
               aria-label={`Remove ${data.ticker} from watchlist`}
             >
               <Trash2 className="h-3 w-3" aria-hidden="true" />
@@ -405,6 +443,17 @@ export default function TickerDetail({
         </p>
       </div>
 
+    </>
+  )
+}
+
+/** Everything behind the verdict: chart, attribution, risk, cases, research. */
+export function TickerAnalysis({
+  data,
+  item,
+}: Pick<TickerDetailProps, 'data' | 'item'>) {
+  return (
+    <>
       {/* ── Chart + timing ────────────────────────────────────────────────── */}
       <div className="border-b border-[var(--color-border)] px-[18px] py-3.5">
         <Suspense
@@ -567,6 +616,7 @@ export default function TickerDetail({
     </>
   )
 }
+
 
 // ── Analysis sources ──────────────────────────────────────────────────────────
 //

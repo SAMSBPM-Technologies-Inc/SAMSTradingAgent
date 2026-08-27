@@ -1,6 +1,4 @@
-import { useEffect, useState } from 'react'
-import { tradingApi } from '../lib/api'
-import type { AccountSummaryResponse } from '../types'
+import { useTradingSettings } from '../lib/trading-context'
 
 /**
  * Persistent broker account strip, pinned under the header on every screen.
@@ -68,31 +66,10 @@ function Bar({ children }: { children: React.ReactNode }) {
 }
 
 export default function AccountBar() {
-  const [account, setAccount] = useState<AccountSummaryResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let cancelled = false
-
-    const load = async () => {
-      try {
-        const { data } = await tradingApi.getAccount()
-        if (!cancelled) setAccount(data)
-      } catch {
-        // Non-fatal — this strip must never break the screen it sits above.
-        if (!cancelled) setAccount(null)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-
-    load()
-    const id = setInterval(load, 30_000)
-    return () => {
-      cancelled = true
-      clearInterval(id)
-    }
-  }, [])
+  // Reads the shared copy rather than fetching and polling its own. The order
+  // ticket sizes from the same object, so the equity shown here and the equity
+  // an order is sized against cannot drift apart.
+  const { account, accountLoading: loading } = useTradingSettings()
 
   if (loading) {
     return (

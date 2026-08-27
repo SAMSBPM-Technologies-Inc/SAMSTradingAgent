@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ShoppingCart, WifiOff } from 'lucide-react'
 import { tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
@@ -69,8 +69,12 @@ export default function OrderTicket({
   onPlaced?: () => void
 }) {
   const { toast } = useToast()
-  const { settings } = useTradingSettings()
-  const [equity, setEquity] = useState<number | null>(null)
+  // Equity comes from the shared account copy, which the strip above also
+  // reads and which refreshes on a timer. Fetching it here separately meant a
+  // ticket sizing against a number that had not moved since the page loaded,
+  // beside a strip that had.
+  const { settings, account } = useTradingSettings()
+  const equity = account?.connected ? account.net_liquidation : null
   const [qty, setQty] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [confirmText, setConfirmText] = useState('')
@@ -83,14 +87,6 @@ export default function OrderTicket({
     [data.ticker],
   )
 
-  useEffect(() => {
-    let cancelled = false
-    tradingApi.getAccount()
-      .then(({ data: a }) => { if (!cancelled) setEquity(a.connected ? a.net_liquidation : null) })
-      .catch(() => { if (!cancelled) setEquity(null) })
-    return () => { cancelled = true }
-  }, [])
-
   const price = data.current_price ?? 0
   const isLive = settings ? !settings.paper_trading : false
   const connected = settings?.connected ?? false
@@ -101,11 +97,28 @@ export default function OrderTicket({
 
   // Switching ticker must reset the quantity — carrying 400 shares of a $3
   // stock onto a $900 one is how you accidentally ask for a $360,000 order.
+  //
+  // Keyed on the ticker alone. It used to also depend on `suggested`, which
+  // changes when the async account fetch lands: a quantity typed in the second
+  // or so before equity arrived was silently overwritten by the suggestion,
+  // and on a slow connection that window is wide enough to hit every time.
+  // `touched` is what separates "the user has not chosen yet" from "the user
+  // chose and we are about to overrule them".
+  const touched = useRef(false)
+
   useEffect(() => {
-    setQty(suggested > 0 ? String(suggested) : '')
+    touched.current = false
+    setQty('')
     setConfirmText('')
     setResult(null)
-  }, [data.ticker, suggested])
+  }, [data.ticker])
+
+  // Fill in the suggestion once it can be computed, but never over a number the
+  // user typed.
+  useEffect(() => {
+    if (touched.current) return
+    if (suggested > 0) setQty(String(suggested))
+  }, [suggested])
 
   const parsedQty = Number(qty) || 0
   const notional = parsedQty * price
@@ -213,10 +226,11 @@ export default function OrderTicket({
                 min={1}
                 inputMode="numeric"
                 value={qty}
-                onChange={(e) => setQty(e.target.value)}
-                className="num h-[30px] w-full rounded-md border border-[var(--color-border)]
+                onChange={(e) => { touched.current = true; setQty(e.target.value) }}
+                className="num h-11 w-full rounded-md border border-[var(--color-border)]
                            bg-[var(--color-bg)] px-2.5 text-[13px] text-[var(--color-fg)]
-                           outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500"
+                           outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500
+                           sm:h-[30px]"
               />
               <p className="mt-1 text-[9.5px] text-[var(--color-fg-muted)]">
                 {suggested > 0
@@ -226,8 +240,8 @@ export default function OrderTicket({
             </div>
             <div>
               <span className="label-micro mb-1 block">Limit price</span>
-              <div className="num flex h-[30px] items-center rounded-md border border-[var(--color-border)]
-                              bg-[var(--color-bg)] px-2.5 text-[13px]">
+              <div className="num flex h-11 items-center rounded-md border border-[var(--color-border)]
+                              bg-[var(--color-bg)] px-2.5 text-[13px] sm:h-[30px]">
                 {price > 0 ? usd.format(price) : '—'}
               </div>
               <p className="mt-1 text-[9.5px] text-[var(--color-fg-muted)]">Last known price</p>
@@ -257,8 +271,9 @@ export default function OrderTicket({
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
                 autoComplete="off"
-                className="h-[30px] w-full rounded-md border border-[var(--accent-sell)]
-                           bg-[var(--color-bg)] px-2.5 text-[12.5px] text-[var(--color-fg)] outline-none"
+                className="h-11 w-full rounded-md border border-[var(--accent-sell)]
+                           bg-[var(--color-bg)] px-2.5 text-[12.5px] text-[var(--color-fg)]
+                           outline-none sm:h-[30px]"
               />
             </div>
           )}

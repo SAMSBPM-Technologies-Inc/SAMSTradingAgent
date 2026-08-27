@@ -1,7 +1,12 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { tradingApi } from './api'
 import { useAuth } from './auth-context'
-import type { AutoTradeSettings, AutoTradeSettingsResponse } from '../types'
+import { usePoll } from './use-poll'
+import type {
+  AccountSummaryResponse,
+  AutoTradeSettings,
+  AutoTradeSettingsResponse,
+} from '../types'
 
 /**
  * One owner for the auto-trade settings document.
@@ -18,6 +23,13 @@ import type { AutoTradeSettings, AutoTradeSettingsResponse } from '../types'
  * `save` takes a patch and PUTs the merged whole, because the API replaces the
  * document rather than patching it — sending a partial would silently reset
  * every field the caller didn't mention.
+ *
+ * The account summary lives here for the same reason. Four screens fetched it
+ * independently with no shared cache — the account strip, the order ticket,
+ * Settings and Positions — which cost three round-trips per Trade page load
+ * and, worse, let two of them disagree: the strip refreshed every 30 seconds
+ * while the ticket read equity once and never again, so the number sizing an
+ * order could differ from the number displayed above it.
  */
 
 interface TradingContextValue {
@@ -27,6 +39,11 @@ interface TradingContextValue {
   refresh: () => Promise<void>
   /** Merge a patch over the current settings and persist the whole document. */
   save: (patch: Partial<AutoTradeSettings>) => Promise<AutoTradeSettingsResponse>
+
+  /** Broker balances. One copy, polled here, read everywhere. */
+  account: AccountSummaryResponse | null
+  accountLoading: boolean
+  refreshAccount: () => Promise<void>
 }
 
 const TradingContext = createContext<TradingContextValue | null>(null)
@@ -35,6 +52,8 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
   const { token } = useAuth()
   const [settings, setSettings] = useState<AutoTradeSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [account, setAccount] = useState<AccountSummaryResponse | null>(null)
+  const [accountLoading, setAccountLoading] = useState(true)
 
   const refresh = useCallback(async () => {
     if (!token) {
@@ -59,6 +78,34 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
     refresh()
   }, [refresh])
 
+  const refreshAccount = useCallback(async () => {
+    if (!token) {
+      setAccount(null)
+      setAccountLoading(false)
+      return
+    }
+    try {
+      const { data } = await tradingApi.getAccount()
+      setAccount(data)
+    } catch {
+      // Non-fatal: the strip shows "disconnected" rather than stale balances,
+      // and the order ticket falls back to asking for an explicit quantity.
+      setAccount(null)
+    } finally {
+      setAccountLoading(false)
+    }
+  }, [token])
+
+  useEffect(() => {
+    setAccountLoading(true)
+    refreshAccount()
+  }, [refreshAccount])
+
+  // Balances move intraday. Polled once, here, instead of once per consumer —
+  // and paused while the tab is hidden rather than spending broker round-trips
+  // on a screen nobody is looking at.
+  usePoll(refreshAccount, 30_000, !!token)
+
   const save = useCallback(
     async (patch: Partial<AutoTradeSettings>) => {
       if (!settings) throw new Error('Trading settings are not loaded yet')
@@ -71,7 +118,9 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
   )
 
   return (
-    <TradingContext.Provider value={{ settings, loading, refresh, save }}>
+    <TradingContext.Provider
+      value={{ settings, loading, refresh, save, account, accountLoading, refreshAccount }}
+    >
       {children}
     </TradingContext.Provider>
   )

@@ -52,7 +52,10 @@ function LogoLockup({ compact = false }: { compact?: boolean }) {
     <div className="flex flex-shrink-0 select-none items-center gap-2.5">
       <IconMark size={compact ? 28 : 30} />
       {!compact && (
-        <span className="flex flex-col items-center gap-[3px]">
+        // Hidden below sm: at 390px the full lockup is 129px of a 390px bar,
+        // and the room it takes is the room the header controls need to be
+        // finger-sized. The mark alone still identifies the app.
+        <span className="hidden flex-col items-center gap-[3px] sm:flex">
           <span
             className="leading-none text-[var(--color-fg)]"
             style={{ fontFamily: 'Fraunces, Georgia, serif', fontWeight: 600, fontSize: '15px', letterSpacing: '0.005em' }}
@@ -149,7 +152,8 @@ function AutonomyPill() {
   return (
     <Menu
       label={`Autonomy mode: ${MODE_LABEL[mode]}. Change`}
-      triggerClassName="num h-[26px] rounded-[6px] px-2.5 text-[11px] font-semibold uppercase tracking-[0.06em] disabled:opacity-50"
+      triggerClassName="num h-11 rounded-[6px] px-2.5 text-[11px] font-semibold uppercase
+                        tracking-[0.06em] disabled:opacity-50 sm:h-[26px]"
       triggerStyle={{ background: tone.bg, color: tone.fg }}
       trigger={MODE_LABEL[mode]}
     >
@@ -212,7 +216,11 @@ function DesktopHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
       className="sticky top-0 z-30 flex h-12 flex-shrink-0 items-center gap-3 border-b
                  border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 md:gap-5"
     >
-      <button onClick={() => navigate('/')} aria-label="SAMSBPM Trading Agent — go to Trade">
+      <button
+        onClick={() => navigate('/')}
+        aria-label="SAMSBPM Trading Agent — go to Trade"
+        className="touch-target"
+      >
         <LogoLockup />
       </button>
 
@@ -267,8 +275,9 @@ function DesktopHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
         <button
           onClick={onOpenPalette}
           aria-label="Search"
-          className="grid h-7 w-7 place-items-center rounded-[6px] border border-[var(--color-border)]
-                     text-[var(--color-fg-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-fg)] lg:hidden"
+          className="grid h-11 w-11 place-items-center rounded-[6px] border border-[var(--color-border)]
+                     text-[var(--color-fg-muted)] hover:bg-[var(--color-hover)]
+                     hover:text-[var(--color-fg)] sm:h-7 sm:w-7 lg:hidden"
         >
           <Search className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
@@ -279,8 +288,9 @@ function DesktopHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
         <button
           onClick={toggleTheme}
           aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="grid h-7 w-7 place-items-center rounded-[6px] border border-[var(--color-border)]
-                     text-[12px] text-[var(--color-fg-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-fg)]"
+          className="grid h-11 w-11 place-items-center rounded-[6px] border border-[var(--color-border)]
+                     text-[12px] text-[var(--color-fg-muted)] hover:bg-[var(--color-hover)]
+                     hover:text-[var(--color-fg)] sm:h-7 sm:w-7"
         >
           <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
         </button>
@@ -290,8 +300,8 @@ function DesktopHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
           trigger={
             <span
               aria-hidden="true"
-              className="num grid h-[26px] w-[26px] place-items-center rounded-full bg-brand-500
-                         text-[11px] font-semibold text-white"
+              className="num grid h-11 w-11 place-items-center rounded-full bg-brand-500
+                         text-[14px] font-semibold text-white sm:h-[26px] sm:w-[26px] sm:text-[11px]"
             >
               {(user?.display_name ?? user?.email ?? 'U')[0].toUpperCase()}
             </span>

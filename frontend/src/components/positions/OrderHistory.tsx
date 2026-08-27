@@ -5,6 +5,9 @@ import { useNavigate } from 'react-router-dom'
 import { Filter as FilterIcon, Inbox } from 'lucide-react'
 import { dateKey, formatDate, formatTime } from '../../lib/format'
 import { SOURCE_LABEL, tradeSource, type TradeSource } from '../../lib/trade-source'
+import { exitReasonLabel } from '../../lib/exit-reason'
+import { useIsCompact } from '../../lib/use-media-query'
+import { RecordCard } from './RecordCard'
 import type { TradeRecord } from '../../types'
 
 /**
@@ -249,6 +252,7 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
     setOrderFilters((f) => ({ ...f, [key]: value }))
   const hasActiveFilters = Object.values(orderFilters).some((v) => v !== '')
   const clearOrderFilters = () => setOrderFilters(EMPTY_ORDER_FILTERS)
+  const compact = useIsCompact()
 
   // Tab counts reflect the full history regardless of the column filters, so
   // switching tabs never hides a status because a filter from a different one
@@ -328,6 +332,59 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
         )}
       </div>
 
+      {/* Below md this table is 48rem wide in a 356px column — Price, P&L,
+          Source and Status all fall off the right edge with nothing to say they
+          are there. Cards carry the same eight fields vertically. Rendered
+          instead of the table, never alongside it. */}
+      {compact ? (
+        <div
+          id="order-history-panel"
+          role="tabpanel"
+          aria-labelledby={`order-tab-${activeStatus}`}
+          className="overflow-hidden rounded-lg border border-[var(--color-border)]
+                     bg-[var(--color-surface)]"
+        >
+          {filteredOrders.length === 0 ? (
+            <p className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
+              {hasActiveFilters
+                ? 'No orders match these filters.'
+                : `No ${activeTabLabel.toLowerCase()} orders.`}
+            </p>
+          ) : (
+            filteredOrders.map((o) => (
+              <RecordCard
+                key={o.id}
+                title={o.ticker}
+                onTitleClick={() => navigate(`/ticker/${o.ticker}`)}
+                badges={
+                  <>
+                    <StatusPill status={o.status} />
+                    <SourceLabel signalType={o.signal_type} />
+                  </>
+                }
+                fields={[
+                  {
+                    label: 'Date (ET)',
+                    value: (
+                      <>
+                        {formatDate(o.opened_at)}{' '}
+                        <span className="text-[var(--color-fg-muted)]">
+                          {formatTime(o.opened_at)}
+                        </span>
+                      </>
+                    ),
+                  },
+                  { label: 'Side', value: o.action },
+                  { label: 'Qty', value: o.qty || '—' },
+                  { label: 'Price', value: money(o.entry_price ?? o.limit_price ?? null) },
+                  { label: 'P&L', value: <Pnl value={o.pnl} /> },
+                ]}
+                note={o.reason ?? exitReasonLabel(o.exit_reason)}
+              />
+            ))
+          )}
+        </div>
+      ) : (
       <div
         id="order-history-panel"
         role="tabpanel"
@@ -583,6 +640,7 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
           </table>
         </div>
       </div>
+      )}
 
     </div>
   )

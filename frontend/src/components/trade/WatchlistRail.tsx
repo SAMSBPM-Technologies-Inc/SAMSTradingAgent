@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Plus, RefreshCw, Search, X } from 'lucide-react'
 import { analyzeApi, watchlistApi } from '../../lib/api'
 import { relativeTime } from '../../lib/format'
+import { useNow } from '../../lib/use-poll'
 import type { Signal, WatchlistItem, WatchlistSetupCounts } from '../../types'
 import LoadingSpinner from '../LoadingSpinner'
 
@@ -30,6 +31,18 @@ function matches(item: WatchlistItem, f: RailFilter): boolean {
   if (f === 'BUY') return item.signal === 'BUY'
   return item.trigger === f
 }
+
+/**
+ * Row and header share one column template, declared once so they cannot drift.
+ *
+ * The numeric columns were 62/46/34px, sized generously, which left the symbol
+ * — the only thing in the row with no other representation — squeezed into
+ * whatever the signal badge did not want. Five of twelve tickers truncated at
+ * this width: NVDA read "N…", GOOGL read "GO…". A price needs 6 characters
+ * ("912.44"), a change 4 ("+4.9"), a score 2, so the widths below are what
+ * those actually need and the surplus goes back to the symbol.
+ */
+const SYMBOL_GRID = '1fr 54px 40px 28px'
 
 const SIGNAL_TONE: Record<Signal | 'PENDING', { bg: string; fg: string }> = {
   BUY: { bg: 'var(--tint-buy)', fg: 'var(--accent-buy)' },
@@ -82,7 +95,9 @@ function SortHeader({ field, sort, onSort, align = 'right', children }: {
       aria-label={`Sort by ${field.replace('_', ' ')}${
         active ? `, currently ${sort!.dir === 'desc' ? 'descending' : 'ascending'}` : ''
       }`}
-      className={`flex items-center gap-0.5 uppercase tracking-[0.1em] transition-colors
+      // h-full so the button fills the header strip rather than sitting 14px
+      // tall inside it — the strip is already finger-height on touch.
+      className={`flex h-full items-center gap-0.5 uppercase tracking-[0.1em] transition-colors
                   hover:text-[var(--color-fg)] focus:outline-none focus-visible:ring-1
                   focus-visible:ring-brand-500 ${align === 'right' ? 'justify-end' : ''}
                   ${active ? 'text-[var(--color-fg)]' : ''}`}
@@ -224,6 +239,10 @@ export default function WatchlistRail({
   onRefresh,
   onAdded,
 }: WatchlistRailProps) {
+  // Re-renders the "updated Nm ago" line below; it is read off `lastUpdated`,
+  // which only changes on a fetch.
+  useNow()
+
   const [filter, setFilter] = useState<RailFilter>('ALL')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortState>(null)
@@ -243,7 +262,11 @@ export default function WatchlistRail({
   )
 
   return (
-    <aside className="flex min-h-0 flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]">
+    // A div, not an <aside>: TradePage now wraps this in the labelled landmark
+    // (it owns the drawer/column positioning), and nesting a second complementary
+    // role inside it would announce the watchlist twice.
+    <div className="flex min-h-0 flex-1 flex-col border-r border-[var(--color-border)]
+                    bg-[var(--color-surface)]">
       <div className="flex flex-col gap-1.5 border-b border-[var(--color-border)] p-2">
         {adding ? (
           <AddTicker onAdded={onAdded} onClose={() => setAdding(false)} />
@@ -260,16 +283,17 @@ export default function WatchlistRail({
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Filter watchlist"
                   aria-label="Filter watchlist"
-                  className="h-7 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]
-                             pl-7 pr-2 text-[12px] text-[var(--color-fg)] outline-none focus:border-brand-500"
+                  className="h-11 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]
+                             pl-7 pr-2 text-[12px] text-[var(--color-fg)] outline-none
+                             focus:border-brand-500 sm:h-7"
                 />
               </div>
               <button
                 onClick={() => setAdding(true)}
                 aria-label="Add a ticker to the watchlist"
-                className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-md border
+                className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-md border
                            border-[var(--color-border)] text-[var(--color-fg-muted)]
-                           hover:bg-[var(--color-hover)] hover:text-[var(--color-fg)]"
+                           hover:bg-[var(--color-hover)] hover:text-[var(--color-fg)] sm:h-7 sm:w-7"
               >
                 <Plus className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
@@ -278,9 +302,10 @@ export default function WatchlistRail({
                 disabled={loading}
                 title={lastUpdated ? `Updated ${relativeTime(lastUpdated)}` : 'Refresh watchlist'}
                 aria-label="Refresh watchlist"
-                className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-md border
+                className="grid h-11 w-11 flex-shrink-0 place-items-center rounded-md border
                            border-[var(--color-border)] text-[var(--color-fg-muted)]
-                           hover:bg-[var(--color-hover)] hover:text-[var(--color-fg)] disabled:opacity-40"
+                           hover:bg-[var(--color-hover)] hover:text-[var(--color-fg)]
+                           disabled:opacity-40 sm:h-7 sm:w-7"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} aria-hidden="true" />
               </button>
@@ -292,7 +317,7 @@ export default function WatchlistRail({
                   key={f}
                   onClick={() => setFilter(f)}
                   aria-pressed={filter === f}
-                  className="chip flex-1 px-1.5"
+                  className="chip touch-target flex-1 px-1.5"
                 >
                   {FILTER_LABEL[f]}
                   <span className="num ml-1 opacity-55">{counts[f]}</span>
@@ -304,9 +329,12 @@ export default function WatchlistRail({
       </div>
 
       <div
-        className="grid h-[22px] items-center gap-0 border-b border-[var(--color-border)] px-2.5
+        // 36px on touch rather than 44: sorting is a secondary action, and a
+        // 44px strip above a 12-row list costs a row of actual content. The
+        // rows themselves — the primary target — are a full 45px.
+        className="grid h-9 items-center gap-0 border-b border-[var(--color-border)] px-2.5 sm:h-[22px]
                    text-[9.5px] uppercase tracking-[0.1em] text-[var(--color-fg-muted)]"
-        style={{ gridTemplateColumns: '1fr 62px 46px 34px' }}
+        style={{ gridTemplateColumns: SYMBOL_GRID }}
       >
         <SortHeader field="ticker" sort={sort} onSort={setSort} align="left">Symbol</SortHeader>
         <SortHeader field="current_price" sort={sort} onSort={setSort}>Last</SortHeader>
@@ -344,12 +372,16 @@ export default function WatchlistRail({
                 key={r.ticker}
                 onClick={() => onSelect(r.ticker)}
                 aria-current={isSel ? 'true' : undefined}
-                className={`grid w-full items-center gap-0 border-b border-[var(--color-border)] py-[5px]
-                            pl-2 pr-2.5 text-left transition-colors hover:bg-[var(--color-hover)]
+                // Real height, not a halo: rows are stacked flush, so an
+                // overlapping hit area would put the tap on the neighbouring
+                // ticker — the one failure mode worse than a small target.
+                className={`grid w-full items-center gap-0 border-b border-[var(--color-border)]
+                            py-[13px] pl-2 pr-2.5 text-left transition-colors hover:bg-[var(--color-hover)]
+                            sm:py-[5px]
                             focus:outline-none focus-visible:bg-[var(--color-hover)]
                             ${isSel ? 'bg-[var(--color-hover)]' : ''}`}
                 style={{
-                  gridTemplateColumns: '1fr 62px 46px 34px',
+                  gridTemplateColumns: SYMBOL_GRID,
                   borderLeft: `2px solid ${isSel ? '#f2600c' : 'transparent'}`,
                 }}
               >
@@ -375,11 +407,18 @@ export default function WatchlistRail({
                       className="h-1.5 w-1.5 flex-shrink-0 rounded-[2px] bg-brand-500"
                     />
                   )}
+                  {/* "PENDING" is 49px — the widest badge, on the row with
+                      the least to say. "NEW" means the same thing (watched, not
+                      yet scored) in half the width, and the full word stays in
+                      the accessible name. */}
                   <span
                     className="flex-shrink-0 rounded px-1 py-px text-[9px] font-bold leading-[1.4]"
                     style={{ background: tone.bg, color: tone.fg }}
                   >
-                    {r.signal}
+                    <span aria-hidden="true">{r.signal === 'PENDING' ? 'NEW' : r.signal}</span>
+                    <span className="sr-only">
+                      {r.signal === 'PENDING' ? 'not yet scored' : r.signal}
+                    </span>
                   </span>
                   <span className="sr-only">
                     {r.trigger === 'ENTRY' ? ', entry setup' : r.trigger === 'EXIT_ALERT' ? ', exit alert' : ''}
@@ -410,6 +449,13 @@ export default function WatchlistRail({
 
       <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-[var(--color-border)] px-2.5 py-2
                       text-[10px] text-[var(--color-fg-muted)]">
+        {/* When these prices were read. It lived in the refresh button's
+            `title`, which never appears on a touch device — so on a phone the
+            one screen that quotes prices could not say how old they were. */}
+        <span className="w-full">
+          {lastUpdated ? `Updated ${relativeTime(lastUpdated)}` : 'Not yet updated'}
+          {' · refreshes each minute'}
+        </span>
         <span className="flex items-center gap-1">
           <span aria-hidden="true" className="h-[5px] w-[5px] rounded-full bg-[var(--accent-buy)]" />
           Entry setup
@@ -423,6 +469,6 @@ export default function WatchlistRail({
           Held
         </span>
       </div>
-    </aside>
+    </div>
   )
 }

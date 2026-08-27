@@ -136,18 +136,29 @@ function RanksVerdict({ report }: { report: CalibrationReport }) {
 
 // ── Tables ────────────────────────────────────────────────────────────────────
 
+/**
+ * These stay tables at every width, unlike the record lists on Positions.
+ *
+ * The whole point of a calibration table is reading one band against the next —
+ * does the win rate climb with the score? — and a stack of cards destroys
+ * exactly that comparison. So instead of restructuring, they are made to fit:
+ * tighter cells and a smaller floor below md, where 38rem in a 356px column was
+ * hiding 41% of every row including the median and the significance marker.
+ */
 function TableShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="card overflow-hidden p-0">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[38rem]">{children}</table>
+        <table className="w-full min-w-[21rem] text-[12px] sm:min-w-[38rem] sm:text-sm">
+          {children}
+        </table>
       </div>
     </div>
   )
 }
 
-const TH = 'px-4 py-2.5 text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]'
-const TD = 'px-4 py-3'
+const TH = 'px-2 py-2.5 text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)] sm:px-4'
+const TD = 'px-2 py-3 sm:px-4'
 
 function ScoreBucketsTable({ rows }: { rows: ScoreBucket[] }) {
   const max = Math.max(...rows.map((r) => Math.abs(r.avg_return ?? 0)), 0.0001)
@@ -160,7 +171,8 @@ function ScoreBucketsTable({ rows }: { rows: ScoreBucket[] }) {
           <th scope="col" className={`${TH} text-right`}>Win rate</th>
           <th scope="col" className={`${TH} text-right`}>Avg 20d</th>
           <th scope="col" className={`${TH} text-right`}>Median</th>
-          <th scope="col" className={`${TH} text-left w-32`}>&nbsp;</th>
+          {/* Decorative — the first column to drop when space is short. */}
+          <th scope="col" className={`${TH} hidden w-32 text-left md:table-cell`}>&nbsp;</th>
         </tr>
       </thead>
       <tbody>
@@ -177,7 +189,9 @@ function ScoreBucketsTable({ rows }: { rows: ScoreBucket[] }) {
             <td className={`${TD} text-right tabular-nums text-[var(--color-fg-muted)]`}>
               {signedPct(r.median_return)}
             </td>
-            <td className={TD}><ReturnBar value={r.avg_return} max={max} /></td>
+            <td className={`${TD} hidden md:table-cell`}>
+              <ReturnBar value={r.avg_return} max={max} />
+            </td>
           </tr>
         ))}
       </tbody>
