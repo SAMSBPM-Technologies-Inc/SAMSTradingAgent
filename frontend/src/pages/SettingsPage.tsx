@@ -294,11 +294,11 @@ function AutonomyCard({ equity, aboveScore, watched }: {
                 worse experience for a screen reader than either alone. */}
             <div
               role="group"
-              aria-label="Act unattended only at conviction"
+              aria-label="Act unattended only at analyst conviction"
               className="flex flex-wrap items-center gap-2.5"
             >
               <span className="text-[11.5px] text-[var(--color-fg-muted)]">
-                Act unattended only at conviction
+                Act unattended only at analyst conviction
               </span>
               <span className="flex gap-1">
                 {(['HIGH', 'MEDIUM', 'LOW'] as Conviction[]).map((c) => (
@@ -314,7 +314,7 @@ function AutonomyCard({ equity, aboveScore, watched }: {
               </span>
             </div>
             <p className="w-full text-[10.5px] text-[var(--color-fg-muted)]">
-              Anything weaker queues for your approval on Trade. An entry with no conviction
+              Anything weaker queues for your approval on Trade. An entry with no analyst conviction
               attached — the analyst may not have run — always queues.
             </p>
           </div>
@@ -748,7 +748,7 @@ function AlertsCard() {
           checked={settings.notify_on_high_conviction}
           onChange={(v) => set('notify_on_high_conviction', v)}
           label="High conviction"
-          note="Only when conviction becomes HIGH — not every cycle it stays there."
+          note="Only when analyst conviction becomes HIGH — not every cycle it stays there."
         />
         <Toggle
           checked={settings.notify_on_trade ?? false}

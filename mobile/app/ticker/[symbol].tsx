@@ -306,7 +306,7 @@ function buildExportText(data: AnalyzeResponse): string {
     `Generated: ${new Date(data.generated_at).toLocaleString()}`,
     '',
     `Signal: ${data.signal}  |  Score: ${Math.round(data.score * 100)}/100  |  Confidence: ${Math.round(data.confidence * 100)}%`,
-    data.conviction ? `Conviction: ${data.conviction}` : '',
+    data.conviction ? `Analyst conviction: ${data.conviction}` : '',
     data.price_target ? `Price Target: $${data.price_target.toFixed(2)}` : '',
     data.stop_loss ? `Stop Loss: $${data.stop_loss.toFixed(2)}` : '',
     data.time_horizon ? `Time Horizon: ${data.time_horizon}` : '',

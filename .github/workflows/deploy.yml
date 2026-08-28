@@ -259,12 +259,57 @@ jobs:
             #                            here, which is how ANALYST_MODEL ended
             #                            up frozen at claude-opus-4-6.
             #
-            # The two enable flags are seeded false and then left alone, because
-            # the rollout plan is to turn them on by hand on the server, one at
-            # a time, while watching. A later deploy must not silently switch
-            # research back off after it has been enabled — nor switch it on.
-            set_if_missing_or_empty RESEARCH_AGENTS_ENABLED        false
-            set_if_missing_or_empty RESEARCH_VETO_ENABLED          false
+            # The two enable flags were seeded once and then left to the box, on
+            # a rollout plan of turning them on by hand while watching. They are
+            # injected now, which reverses that deliberately: the flags are
+            # version-controlled and reviewable here, and `set_if_missing_or_empty`
+            # could never have switched them ON anyway — it skips any key that is
+            # already present and non-empty, so a box seeded false on its first
+            # deploy stays false however the default here is edited. Changing the
+            # value below without changing the helper would have looked like an
+            # enablement and done nothing.
+            #
+            # AGENTS_ENABLED only costs money and produces dossiers. It reaches
+            # no order path: research can veto a BUY and can never create,
+            # enlarge, or exit one.
+            inject_secret           RESEARCH_AGENTS_ENABLED        true
+            # VETO_ENABLED is the one that moves money, and it refuses a
+            # *manually placed* order too — it sits in `_prepare_entry` with the
+            # shared guard chain, not in the agent's own selection path. Its
+            # floor of 35 was chosen the way BUY_THRESHOLD = 0.70 was chosen,
+            # by picking one, and until `GET /performance/research-calibration`
+            # has graded dossiers there is no evidence it is right.
+            #
+            # So it runs as a dry run instead, which needed no extra machinery:
+            # with agents on and this off, every dossier still computes and
+            # reports `would_block` — the same judgement, without the refusal.
+            # That accumulates exactly the evidence the counterfactual needs.
+            #
+            # Flip to true once `veto_counterfactual` on
+            # /performance/research-calibration says `conclusive: true` AND a
+            # positive `alpha_saved` — i.e. the names it would have refused
+            # actually did worse. Roughly three weeks of dossiers. Turning it on
+            # before then is guessing with extra steps, and the thing being
+            # guessed with is entry refusals on hand-placed orders.
+            inject_secret           RESEARCH_VETO_ENABLED          false
+
+            # ── Rebuttal, memory, stances and sentiment breadth ───────────────
+            # One rebuttal exchange is on by default: two extra orchestrator
+            # calls per dossier, and the step that changes the verdict. The
+            # stance panel and both sentiment sources are off — advisory or
+            # evidence-only, and each is more calls for a reading nothing acts
+            # on yet.
+            inject_secret           RESEARCH_DEBATE_ROUNDS         1
+            inject_secret           RESEARCH_OUTCOME_HORIZON_DAYS  20
+            inject_secret           RESEARCH_MEMORY_SAME_TICKER    5
+            inject_secret           RESEARCH_MEMORY_CROSS_TICKER   3
+            inject_secret           RESEARCH_STANCE_PANEL_ENABLED  false
+            inject_secret           SOCIAL_SENTIMENT_ENABLED       false
+            inject_secret           PREDICTION_MARKETS_ENABLED     false
+            # What every realised return is measured against. Nothing in the
+            # engine had a benchmark before this; a +6% signal in a +8% market
+            # was recorded as a win.
+            inject_secret           BENCHMARK_TICKER               SPY
 
             # Everything below stays injected so it never freezes on whatever
             # the first deploy happened to write. Model ids especially: these

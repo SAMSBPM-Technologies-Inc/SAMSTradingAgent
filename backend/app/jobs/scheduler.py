@@ -28,6 +28,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import get_settings
 from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
+from app.services.benchmark import (
+    alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
+)
 from app.services.pipeline import run_pipeline_all
 from app.utils.logger import get_logger
 
@@ -198,6 +201,35 @@ async def _research_refresh_job() -> None:
                     tickers=len(ordered))
     except Exception as exc:
         logger.error("research_refresh_job_failed", error=str(exc))
+
+
+async def _research_outcomes_job() -> None:
+    """
+    Grade dossiers old enough to have an outcome, once a day.
+
+    This is the half of the loop that did not exist. Dossiers were written as a
+    retained series and read one at a time, newest first — no reading was ever
+    compared to a result, so no agent had been told it was wrong about a name
+    and `RESEARCH_VETO_MIN_CONVICTION` sat at a guessed number with no evidence
+    behind it.
+
+    Runs *before* the refresh rather than after, and the ordering is
+    load-bearing: a dossier built today should be able to cite the grade
+    yesterday's dossier just received. Reversed, every reading would carry a
+    record one day out of date, forever.
+
+    Failures are per-dossier and swallowed inside `settle_dossiers`. An
+    unsettled dossier is simply one the next pass picks up.
+    """
+    settings = get_settings()
+    if not settings.research_agents_enabled:
+        return
+    try:
+        from app.services.research.outcomes import settle_dossiers
+
+        await settle_dossiers()
+    except Exception as exc:
+        logger.error("research_outcomes_job_failed", error=str(exc))
 
 
 async def _held_first(tickers: list[str]) -> list[str]:
@@ -418,6 +450,15 @@ async def _performance_tracker_job() -> None:
         for rec in unsettled:
             by_ticker[rec["ticker"]].append(rec)
 
+        # One series for the whole pass. Every record below is settled to *now*,
+        # so they all share the closing end of the window and differ only in
+        # where it opened — which is a lookup, not a fetch.
+        settled_at = datetime.now(tz=timezone.utc)
+        bench_series = await benchmark_closes()
+        bench_close_now = (
+            close_on_or_before(bench_series, settled_at) if bench_series is not None else None
+        )
+
         for ticker, records in by_ticker.items():
             try:
                 current_price = await _fetch_current_price(ticker)
@@ -435,12 +476,32 @@ async def _performance_tracker_job() -> None:
                         was_correct = ret < 0
                     # HOLD is not directional — leave None
 
+                    # The benchmark over this record's own window. Both stay
+                    # None when the series could not be read: a zero here would
+                    # report the signal's full return as alpha, and would do it
+                    # in the flattering direction every time the market rose.
+                    bench_ret: float | None = None
+                    if bench_close_now is not None and bench_series is not None:
+                        opened = rec.get("generated_at")
+                        bench_open = (
+                            close_on_or_before(bench_series, opened)
+                            if isinstance(opened, datetime) else None
+                        )
+                        if bench_open:
+                            bench_ret = (bench_close_now - bench_open) / bench_open
+                    excess = alpha(ret, bench_ret)
+
                     await db[COLL_SIGNAL_HISTORY].update_one(
                         {"_id": rec["_id"]},
                         {"$set": {
                             "price_20d_later": round(current_price, 4),
                             "return_20d":      round(ret, 6),
                             "was_correct":     was_correct,
+                            "benchmark_ticker":     benchmark_ticker(),
+                            "benchmark_return_20d": (
+                                round(bench_ret, 6) if bench_ret is not None else None
+                            ),
+                            "alpha_20d": round(excess, 6) if excess is not None else None,
                         }},
                     )
             except Exception as exc:
@@ -529,6 +590,22 @@ def start_scheduler() -> None:
                                 day_of_week="mon-fri", timezone=ET),
             id="research_refresh",
             name="Deep research dossier refresh",
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
+        )
+
+    # 1e. Research outcome settlement — 30 minutes before the refresh, so a
+    #     dossier written today can cite the grade the previous one just
+    #     received. The other order would leave every reading working from a
+    #     record one day stale, permanently.
+    if settings.research_agents_enabled:
+        scheduler.add_job(
+            _research_outcomes_job,
+            trigger=CronTrigger(hour=settings.research_daily_refresh_hour, minute=0,
+                                day_of_week="mon-fri", timezone=ET),
+            id="research_outcomes",
+            name="Deep research outcome settlement",
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,

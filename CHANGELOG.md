@@ -14,6 +14,190 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.13.0] — 2026-08-28
+
+**The engine now knows whether it was right, and measures that against the
+market rather than against zero.** Two things were missing and they compounded.
+Nothing anywhere carried a benchmark — a signal that returned +6% over twenty
+days was recorded as correct and fed to the calibration report, in a month the
+index rose 8%. And nothing fed an outcome back: settled returns were reported
+to a human and the loop stopped there, so no agent, prompt or score had ever
+been told it was wrong about a name.
+
+Every realised return now carries what the market did over the same days.
+Settled signals gain `benchmark_return_20d` and `alpha_20d`; closed trades gain
+`benchmark_return` and `alpha` over the position's own window; the performance
+and calibration screens show both, on **separate sample counts** — records
+settled before this shipped have a return and no alpha, and one count against
+both numbers would give a handful of samples the authority of hundreds. An
+alpha that cannot be computed stays absent rather than zero, the same rule
+`commission_paid` follows and for the same reason: a zero benchmark reports the
+whole return as skill, in the flattering direction, every time the market rose.
+
+**Deep research now learns from its own record.** A daily job grades every
+dossier about twenty days after it was written, then writes a short lesson — and
+that lesson is subject to the same rule as everything else in the module. It
+must cite evidence ids from the ledger the original reading was built on;
+uncited prose is deleted and a fabricated id is recorded, exactly as in a
+report. Prior graded readings then enter the next dossier's ledger as
+`O`-prefixed evidence, visible to all four analysts and the synthesiser, so a
+claim about the past record has to carry a citation like any other claim. That
+is the part worth stating plainly: the obvious way to do this is to paste past
+lessons into the prompt as prose, which is what the framework this project is
+measured against does — and it makes the injected text the one unattributable
+thing in the pipeline.
+
+Correctness is judged on **alpha, not raw return**. Bullish on a name that rose
+4% while the market rose 9% was not right. A NEUTRAL reading and an unmeasurable
+window are scored `None`, never as misses — the same handling `was_correct`
+gives HOLD.
+
+**Memory can lower a conviction and can never raise one.** The derived anchor is
+computed from company data alone, never sees an `O` item, and the synthesiser is
+still hard-clamped to ±15 of it. Same rule as the veto, same reason: a mechanism
+that can only subtract fails safe when it is wrong.
+
+**The risk analyst now gets answered.** After all four specialists have written
+independently, one exchange runs: the risk agent is shown the constructive
+evidence for the first time and says which of its concerns it answers, while a
+defence is asked of the same material which risks it fails to answer. Both are
+citation-filtered. The property that makes this safe is that neither side saw
+the other while forming its view — a debate whose second speaker reacts to the
+first inherits its framing, which is precisely the anchoring the unanchored
+fan-out was built to avoid. Exactly one exchange, because successive rounds
+converge on agreement and that reads as resolution without being any.
+
+**A new page section says whether any of this is worth its cost.**
+`/calibration` now carries a research arm: does a higher research conviction
+earn a higher forward alpha, were the verdicts right, and — the question
+`RESEARCH_VETO_ENABLED` has never had an answer to — did the names research
+would have refused actually do worse? Same discipline as the rest of the page:
+`n` on every row, thin samples marked, and no auto-tuning.
+
+**Research is enabled in production. The veto runs as a dry run.** Both flags
+now ship from the workflow rather than being seeded once and left on the box —
+worth noting, because `set_if_missing_or_empty` skips a key that is already
+present, so editing its default could never have switched them on.
+
+Agents are on: dossiers get built, graded, and fed back. `RESEARCH_VETO_ENABLED`
+stays false deliberately, and that costs nothing to observe — with agents on,
+every dossier still computes and reports `would_block`, which is the same
+judgement without the refusal. That is what accumulates the evidence the
+counterfactual needs. Turning the refusal on before that evidence exists would
+mean guessing, and the thing being guessed with is entry refusals on
+hand-placed orders.
+
+**Also in this release.** The single-call analyst — the path that actually
+drives every trade — moved to structured outputs through the same tested seam
+the research agents use, retiring the two regexes that stripped markdown fences
+off its JSON, and gained its first tests in the life of the project. An
+advisory stance panel (aggressive / conservative / neutral, reading the *trade*
+rather than the company) is available behind `RESEARCH_STANCE_PANEL_ENABLED`.
+StockTwits, Reddit and Polymarket can be collected as research evidence behind
+`SOCIAL_SENTIMENT_ENABLED` and `PREDICTION_MARKETS_ENABLED`.
+
+### Known gaps
+
+- **No dossier has ever been graded, so the veto floor is still a guess.**
+  `RESEARCH_VETO_MIN_CONVICTION = 35` was chosen the way `BUY_THRESHOLD = 0.70`
+  was chosen, by picking one. The veto is therefore left off and reporting
+  only. Switch it on when `veto_counterfactual` on
+  `/performance/research-calibration` shows `conclusive: true` and a positive
+  `alpha_saved` — meaning the names it would have refused actually did worse.
+  Roughly three weeks of dossiers away. Worth knowing when that day comes: the
+  veto sits in `_prepare_entry` with the shared guard chain, so it **refuses a
+  manually placed order too**, not just an agent-selected one.
+- **Nothing has been graded yet.** The research calibration arm, the prior
+  record, and every lesson are empty until the settlement job has run against
+  dossiers twenty days old. Until then the memory loop is wired but silent, and
+  the panel says so rather than implying the agents know a history they do not.
+- **The rebuttal is one exchange and costs two extra orchestrator calls per
+  dossier** — roughly +40% on the deep path, on top of the daily job now being
+  live. `RESEARCH_DEBATE_ROUNDS=0` restores the previous path exactly.
+- **The stance panel is not on the order ticket.** It lives only in the research
+  panel, because the ticket deliberately does not load a full dossier — it reads
+  the veto endpoint alone. The stances are advisory in any case: no order
+  quantity follows from them, and they are not shown account exposure, since a
+  dossier is shared across users rather than built per account.
+- **StockTwits, Reddit and Polymarket are development-grade sources** —
+  undocumented endpoints, no licence, no SLA, and message boards are promoted
+  and botted. Nothing computes a sentiment *score* from them; counts and
+  ratios enter the ledger and an agent must cite them. They are off by default
+  and touch no part of the composite score.
+- Trades closed before 1.13.0 can never carry an alpha, the same way trades
+  closed before 1.6.0 can never be netted of commission.
+- Mobile screens still hardcode a light-only palette, so the new debate, stance
+  and outcome sections follow that rather than the theme.
+
+---
+
+## [1.12.0] — 2026-08-28
+
+**You can now see what deep research is doing to your trades, before it does
+it.** Research has always been able to block a BUY — `_research_veto` sits in
+`_prepare_entry` with the risk guards — but the only way to discover it was
+standing on a ticker was to place an order, have it refused, and read the
+sentence afterwards in the order history. A standing condition observable only
+by tripping over it is one nobody can plan around.
+
+The dossier panel on the ticker page now carries the reading directly: a chip
+in the header when research blocks buying in that name, and a sentence
+underneath naming the trigger, the threshold, and — when nothing is blocking —
+how much room is left, because a conviction of 38 against a floor of 35 is a
+different situation from 90 against 35 and the number alone does not say which.
+The order ticket carries it too, next to the risk-gate warning, with one
+correction that matters: the risk gate restricts what the *agent* may pick and
+you can always override it, while the research veto refuses a hand-placed order
+as well. Someone reading only the risk-gate wording would have concluded
+otherwise.
+
+**A dossier that would block reports itself even when the veto is off.**
+`RESEARCH_VETO_ENABLED` defaults to false, so on most deployments — including
+this one — the honest statement is not "blocked" but "research reads this name
+badly enough to refuse the entry, and would, if you switched the veto on".
+Those are separate fields (`blocking`, `would_block`), separate wording, and
+separate colours. Collapsing them into one boolean would have answered "nothing
+is blocked" and hidden the only evidence available for deciding whether to turn
+the veto on.
+
+**Two different numbers are no longer both called conviction.** The analyst's
+conviction is `HIGH`/`MEDIUM`/`LOW` and decides whether the agent may execute
+unattended; deep research's is 0–100 and feeds the entry veto. Different scale,
+different producer, different gate, same word — and both visible on the same
+ticker page. The research one is now `research_conviction`
+(`derived_research_conviction` for its anchor) everywhere it leaves the research
+module, and reads "Research conviction 72/100" in both clients. The analyst's
+keeps the bare name in the API and is labelled "analyst conviction" wherever the
+word previously stood alone. Dossiers stored under the old key are still read —
+they are a retained series, and the daily job reaches one ticker at a time.
+
+The veto judgement itself is now a pure function (`services/research/veto.py`)
+over a dossier and the settings, which is why the same reading can refuse an
+order and explain itself on a screen. Its fail-open behaviour is unchanged and
+still the point: a missing dossier, an undated one, a stale one, or an
+unreadable database all allow the trade, each now saying which it was.
+
+### Known gaps
+
+- **Nothing above is live in production.** `RESEARCH_AGENTS_ENABLED` and
+  `RESEARCH_VETO_ENABLED` are both `false` by default and in the deploy
+  workflow, and the daily refresh job returns immediately when agents are
+  disabled. With no dossiers stored, every veto status reads `no_dossier` and
+  blocks nothing. Turning on the veto alone would be a no-op; the agents have
+  to be enabled first and the daily job left to populate the collection.
+- The status is computed on read, so a dossier rebuilt between the ticket
+  loading and the order submitting is not reflected in the banner. The server
+  runs the real guard at submit and is the authority — the banner is a
+  courtesy, and the button is deliberately left enabled rather than have the
+  client assert a verdict it cannot refresh.
+- The dashboard does not show veto state. A user scanning a watchlist still
+  cannot tell which names research is standing on without opening each one.
+- Mobile screens still hardcode a light-only palette, so the new chips and
+  banners follow that rather than the theme. Unchanged from before, but it now
+  covers two more elements.
+
+---
+
 ## [1.11.1] — 2026-08-27
 
 **A loading ticker says what it is doing.** `/analyze` can run for several

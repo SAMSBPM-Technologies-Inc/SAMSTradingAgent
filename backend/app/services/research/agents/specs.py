@@ -18,9 +18,23 @@ Given only the evidence and the question "what could make this a terrible
 investment?", the Risk agent has nothing to be anchored to. The synthesiser
 then has to address or explicitly drop each finding, which is where the two
 sides actually meet.
+
+Why there is nonetheless a rebuttal round
+─────────────────────────────────────────
+The paragraph above rules out one thing only: letting either side see the
+other's argument *before writing its own*. It does not rule out an exchange
+afterwards, and the fan-out alone left a real gap — a risk nobody ever replies
+to reaches the synthesis at full strength whether or not the collected evidence
+answers it, and the synthesiser is left adjudicating a disagreement neither
+party has actually argued.
+
+`RISK_REBUTTAL` and `DEFENCE_REBUTTAL` add exactly one exchange on top of the
+unanchored first pass, which is complete and stored before either runs. See the
+longer note above their definitions.
 """
 from __future__ import annotations
 
+from app.services.research import prior_record
 from app.services.research.agents.base import AgentSpec, citation_rules
 
 
@@ -38,6 +52,11 @@ def _schema(properties: dict, required: list[str]) -> dict:
         "additionalProperties": False,
     }
 
+
+#: Every prefix the ledger can issue. Agents that read the whole record —
+#: risk, the rebuttals, the stances, the synthesiser — take this rather
+#: than a hand-copied tuple that has drifted before.
+_ALL_PREFIXES = ("P", "F", "V", "E", "T", "N", "A", "M", "O", "S", "K")
 
 _STRING = {"type": "string"}
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
@@ -60,7 +79,7 @@ _SCORE = {"type": "integer"}
 
 FUNDAMENTALS = AgentSpec(
     name="fundamentals",
-    prefixes=("P", "F", "V", "E"),
+    prefixes=("P", "F", "V", "E", "O"),
     system_prompt="""You are a fundamental equity analyst. You read financial \
 statements, valuation multiples and earnings records, and you say what they \
 show — including when they show nothing.
@@ -82,7 +101,7 @@ record actually support — durable margins, returns above the cost of capital, 
 pricing power visible in gross margin. If the evidence does not let you form a \
 view, say so in business_quality_rationale and score conservatively rather than \
 splitting the difference at 50.
-""" + citation_rules(("P", "F", "V", "E")),
+""" + prior_record.MEMORY_PROMPT + citation_rules(("P", "F", "V", "E", "O")),
     task="""Assess this company's fundamentals, valuation and earnings record.
 
 Cover, in `findings`: revenue and earnings trajectory, margin direction, \
@@ -113,7 +132,7 @@ answered.""",
 
 TECHNICAL = AgentSpec(
     name="technical",
-    prefixes=("T", "M"),
+    prefixes=("T", "M", "O"),
     system_prompt="""You are a technical analyst reading price, volume and \
 market conditions.
 
@@ -128,7 +147,7 @@ contain.
 
 You are one of four analysts working this name independently. The verdict is \
 not yours to give; the read on timing is.
-""" + citation_rules(("T", "M")),
+""" + prior_record.MEMORY_PROMPT + citation_rules(("T", "M", "O")),
     task="""Describe the current technical picture.
 
 Cover the trend and regime, momentum, volatility, volume, where price sits \
@@ -157,7 +176,7 @@ specific price; leave them empty otherwise rather than estimating.""",
 
 NEWS = AgentSpec(
     name="news",
-    prefixes=("N", "E", "A", "P"),
+    prefixes=("N", "E", "A", "P", "O", "S"),
     system_prompt="""You are an analyst covering news flow, scheduled events \
 and positioning.
 
@@ -175,7 +194,7 @@ evidence you can both cite — a scheduled event the recent flow ignores, a \
 record that contradicts the sentiment, a disclosed figure at odds with the \
 narrative. It is not a place for a hunch. If the evidence supports no such \
 tension, return an empty list; that is a real answer.
-""" + citation_rules(("N", "E", "A", "P")),
+""" + prior_record.MEMORY_PROMPT + citation_rules(("N", "E", "A", "P", "O", "S")),
     task="""Summarise recent developments, upcoming catalysts and what \
 positioning data shows.
 
@@ -202,7 +221,7 @@ between evidence items you can cite; return an empty list if there are none.""",
 
 RISK = AgentSpec(
     name="risk",
-    prefixes=("P", "F", "V", "E", "T", "N", "A", "M"),
+    prefixes=_ALL_PREFIXES,
     system_prompt="""Your only job is to find what could make this a bad \
 investment. You are not writing a balanced view and you are not being asked \
 for one — three other analysts are covering the case for the company, and \
@@ -224,7 +243,7 @@ missing and cite the item that says so.
 item must be an observable, checkable event — a figure crossing a level, a \
 disclosure, a dated report — not a sentiment. "If growth slows" is not \
 checkable. "If revenue growth falls below 15% for two consecutive quarters" is.
-""" + citation_rules(("P", "F", "V", "E", "T", "N", "A", "M")),
+""" + prior_record.MEMORY_PROMPT + citation_rules(_ALL_PREFIXES),
     task="""Argue that this is a bad investment, from the evidence alone.
 
 Give the strongest bear case you can support, the specific risks behind it, and \
@@ -253,6 +272,249 @@ strong bear case; that is a legitimate finding and you should say so.""",
 SPECIALISTS = (FUNDAMENTALS, TECHNICAL, NEWS, RISK)
 
 
+# ── Rebuttal (one exchange, after both sides are written) ─────────────────────
+#
+# Why a rebuttal exists at all, given the docstring above argues against
+# red-teaming a written thesis
+# ────────────────────────────────────────────────────────────────────────────
+# The anchoring objection is to letting one side see the other's argument
+# *before writing its own*. That is exactly what the reference implementation
+# this project is measured against does: its bull writes first and its bear
+# reacts, from round one, so the bear inherits the bull's framing about what
+# matters and the debate settles into the shape of whoever spoke first.
+#
+# Both sides here have already written independently. The unanchored first pass
+# is complete and stored; nothing about it changes. What is added is one
+# exchange on top of it, which answers the objection the fan-out could not:
+# a risk nobody ever replies to is carried into the synthesis at full strength
+# whether or not the other evidence answers it, and the synthesiser has to
+# adjudicate a disagreement neither party has argued.
+#
+# Exactly one round each way, and that bound is a design choice rather than a
+# budget. Successive rounds converge on agreement — each side softening toward
+# the other — which reads as resolution and is nothing of the kind. One
+# exchange gets the strongest answer each side has; a second gets manners.
+#
+# Both rebuttals are filtered by the same citation rule as every other output.
+# A concession or a defence that cites nothing is deleted before storage.
+
+RISK_REBUTTAL = AgentSpec(
+    name="risk_rebuttal",
+    prefixes=_ALL_PREFIXES,
+    system_prompt="""You wrote the bear case on this name from the evidence \
+alone. You are now being shown, for the first time, what the three analysts \
+covering the company's fundamentals, price action and news flow actually found.
+
+Your job is not to restate your case and it is not to capitulate. It is to say, \
+risk by risk, which of your concerns their evidence genuinely answers and which \
+survive it.
+
+Hold two lines. A risk is only *answered* when specific evidence addresses the \
+mechanism you named — not when the overall picture is positive, and not when \
+the company is doing well in some other respect. And a risk you can no longer \
+support should be conceded plainly; a bear who concedes nothing after seeing \
+the full record is not being rigorous, they are being decorative, and the \
+synthesiser will correctly discount everything you wrote.
+
+Where their evidence makes a risk *worse* rather than better, say so and cite \
+what does it. That is the most valuable thing you can produce here.
+""" + citation_rules(_ALL_PREFIXES),
+    task="""You are shown your own bear case and the three constructive \
+analysts' reports.
+
+For each risk you raised: does their evidence answer it, or does it survive?
+
+`answered` — risks their evidence genuinely disposes of, each naming what \
+disposed of it. `surviving` — risks that stand, restated with whatever their \
+evidence adds. `sharpened` — risks their evidence makes worse than you first \
+judged. `residual_severity` is 0-100 for the bear case *after* this exchange; \
+if most of your case was answered, that number should fall, and saying so is \
+the point of the round.""",
+    schema=_schema(
+        {
+            "answered": _STRING_LIST,
+            "surviving": _STRING_LIST,
+            "sharpened": _STRING_LIST,
+            "residual_severity": _SCORE,
+            "residual_rationale": _STRING,
+        },
+        ["answered", "surviving", "sharpened", "residual_severity",
+         "residual_rationale"],
+    ),
+    model_role="orchestrator",
+)
+
+
+DEFENCE_REBUTTAL = AgentSpec(
+    name="defence_rebuttal",
+    prefixes=_ALL_PREFIXES,
+    system_prompt="""Three analysts have covered this company's fundamentals, \
+price action and news flow. A fourth was asked, from the same evidence and \
+without seeing their work, to argue that this is a bad investment. You are \
+answering that bear case on their behalf.
+
+You are not the bull. Nobody wrote a bull case — that is deliberate, and it is \
+why the bear case you are answering was not shaped to fit one. Your job is \
+narrower and more useful: for each risk raised, does the evidence the three \
+analysts collected actually answer it?
+
+The concession is the valuable half of your output. A risk the evidence does \
+not answer must be conceded — including, and especially, when it is the one \
+that would matter most. An answer that disposes of every risk is the single \
+strongest signal that this step was not done honestly, and it is exactly what \
+a single analyst writing both sides produces.
+
+Never answer a risk with sentiment, with the strength of the overall picture, \
+or with an absence of evidence. "Concentration is not disclosed" does not \
+answer a concentration risk; it concedes that it cannot be assessed.
+""" + citation_rules(_ALL_PREFIXES),
+    task="""You are shown the bear case, its list of risks, and the three \
+constructive analysts' reports.
+
+Go risk by risk. `answered` — risks the evidence disposes of, each citing what \
+does it. `conceded` — risks the evidence does not answer, said plainly and \
+without softening. `overstated` — risks that are real but smaller than argued, \
+with the evidence that bounds them.
+
+In `strongest_surviving_risk`, name the single risk that most deserves to \
+reach the final report. There is almost always one.""",
+    schema=_schema(
+        {
+            "answered": _STRING_LIST,
+            "conceded": _STRING_LIST,
+            "overstated": _STRING_LIST,
+            "strongest_surviving_risk": _STRING,
+        },
+        ["answered", "conceded", "overstated", "strongest_surviving_risk"],
+    ),
+    model_role="orchestrator",
+)
+
+
+# ── Risk stances (advisory, over the trade rather than the company) ───────────
+#
+# Everything else in this module reads a *company*. These three read a *trade*:
+# given this dossier, this risk gate reading, and this much of the account
+# already committed, is now the moment to lean in, hold, trim, or wait?
+#
+# The reference implementation asks a version of this question and then lets
+# the answer decide the order — its portfolio-manager agent produces the final
+# call and the position that follows from it. That is the one idea from it this
+# project deliberately does not adopt. Position sizing here is arithmetic on a
+# frozen equity basis, and it stays that way: it is why the same inputs produce
+# the same order twice, why the guard chain can be reasoned about, and why the
+# eight-order NVDA incident is fixed rather than merely unobserved.
+#
+# So these are reported and never enforced. Nothing in `_prepare_entry` reads
+# them, no quantity moves because of them, and a WAIT from all three still
+# leaves the order the risk model sized. What they add is the argument a human
+# would otherwise have to construct alone — and three stances rather than one
+# because a single "how risky is this" reading collapses into the risk score
+# that already exists, while the disagreement between them is the information.
+#
+# They are cheap by design: specialists, one small schema, no thinking budget
+# worth the name, run only when explicitly enabled.
+
+_STANCE_SCHEMA = _schema(
+    {
+        "stance": {"type": "string",
+                   "enum": ["SIZE_UP", "HOLD_SIZE", "SIZE_DOWN", "WAIT"]},
+        "rationale": _STRING,
+        "what_would_change_it": _STRING,
+    },
+    ["stance", "rationale", "what_would_change_it"],
+)
+
+_STANCE_COMMON = """
+You are reading a position, not a company. The research has been done and is \
+below; do not redo it and do not reach for a fact it does not contain.
+
+Answer one question: given this reading and this account's exposure, what \
+should happen to the size of this position right now? Choose exactly one of \
+SIZE_UP, HOLD_SIZE, SIZE_DOWN or WAIT.
+
+You are one of three stances asked the same question from different \
+temperaments. Argue your own and argue it honestly — the value of the panel is \
+in where the three disagree, and a stance that hedges toward the middle \
+contributes nothing. But do not manufacture a disagreement the evidence does \
+not support: when the case genuinely points your way, say so plainly rather \
+than performing caution or performing appetite.
+
+Your answer is advice. It does not move the order quantity, which is computed \
+from the risk model and the account, so there is no reason to shade your view \
+toward what you think the system will do.
+"""
+
+STANCE_AGGRESSIVE = AgentSpec(
+    name="stance_aggressive",
+    prefixes=_ALL_PREFIXES,
+    system_prompt="""You argue for conviction. Opportunities are missed far \
+more often than they are blown up, and a portfolio that never takes a real \
+position never earns a real return.
+""" + _STANCE_COMMON + """
+Your specific job is to say what a cautious reader is leaving on the table: an \
+entry the evidence supports that hesitation would forfeit, a position too small \
+to matter if the thesis is right. Argue from the upside the evidence actually \
+shows, never from momentum or from the fear of missing out.
+
+One limit you may not cross. You may argue for size within what the risk model \
+allows; you may not argue that a guard should be overridden, that a stop should \
+be widened, or that a cap should be exceeded. Those are not appetite, they are \
+the failure the caps exist to prevent.
+""" + citation_rules(_ALL_PREFIXES),
+    task="""Argue the case for leaning into this position. State your stance, \
+why, and the observable thing that would change it.""",
+    schema=_STANCE_SCHEMA,
+    model_role="specialist",
+)
+
+STANCE_CONSERVATIVE = AgentSpec(
+    name="stance_conservative",
+    prefixes=_ALL_PREFIXES,
+    system_prompt="""You argue for capital preservation. A loss compounds \
+against you in a way a missed gain does not — recovering from −50% takes +100% \
+— and the position that ends a run is almost never the one that looked \
+dangerous.
+""" + _STANCE_COMMON + """
+Your specific job is to name what could go wrong here that the sizing does not \
+account for: concentration, a thesis resting on one input, a catalyst close \
+enough to move the position before it can be judged, evidence too thin to \
+carry the size.
+
+Two limits. Do not argue for an exit — that is a different decision on a \
+different path, and this panel does not reach it. And do not treat missing \
+data as bad news: an unmeasured risk is a reason for less size, which is your \
+argument to make, but it is not evidence of a problem.
+""" + citation_rules(_ALL_PREFIXES),
+    task="""Argue the case for caution on this position. State your stance, \
+why, and the observable thing that would change it.""",
+    schema=_STANCE_SCHEMA,
+    model_role="specialist",
+)
+
+STANCE_NEUTRAL = AgentSpec(
+    name="stance_neutral",
+    prefixes=_ALL_PREFIXES,
+    system_prompt="""You hold no prior. You are not the average of the other \
+two and you are not the tie-breaker — splitting the difference between an \
+aggressive and a cautious reading produces a number neither of them would \
+defend and that no evidence supports.
+""" + _STANCE_COMMON + """
+Your specific job is to say what the evidence supports on its own terms, and \
+to be the one willing to say the honest uncomfortable thing: that the case is \
+thin and the answer is WAIT, or that it is strong and caution here is just \
+habit. Where the record is genuinely balanced, say that too — but say it \
+because the evidence is balanced, not to avoid taking a side.
+""" + citation_rules(_ALL_PREFIXES),
+    task="""Give the reading the evidence supports on its own terms. State \
+your stance, why, and the observable thing that would change it.""",
+    schema=_STANCE_SCHEMA,
+    model_role="specialist",
+)
+
+STANCES = (STANCE_AGGRESSIVE, STANCE_CONSERVATIVE, STANCE_NEUTRAL)
+
+
 # ── Synthesiser ───────────────────────────────────────────────────────────────
 
 SYNTHESISER_SYSTEM = """You are the senior analyst. Four analysts have worked \
@@ -279,7 +541,7 @@ but a large departure means the numbers and your judgement disagree, and that \
 disagreement belongs in the text, not hidden inside a score.
 
 Be decisive and be brief. Lead with what a holder should do and why.
-""" + citation_rules(("P", "F", "V", "E", "T", "N", "A", "M"))
+""" + prior_record.MEMORY_PROMPT + citation_rules(_ALL_PREFIXES)
 
 SYNTHESISER_SCHEMA = _schema(
     {

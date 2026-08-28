@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertCircle, ExternalLink, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, ExternalLink, Loader2, RefreshCw, ShieldAlert } from 'lucide-react'
 
 import { researchApi } from '../../lib/api'
-import type { DimensionScore, EvidenceItem, ResearchDossier } from '../../types'
+import type {
+  DimensionScore,
+  EvidenceItem,
+  PriorRecordCoverage,
+  ResearchDebate,
+  ResearchDossier,
+  ResearchOutcome,
+  ResearchStances,
+  ResearchVetoStatus,
+  TradeStance,
+} from '../../types'
 
 /**
  * Deep research dossier.
@@ -105,6 +115,8 @@ export function ResearchPanel({ ticker }: { ticker: string }) {
         </p>
       )}
 
+      <VetoNote veto={dossier?.veto} />
+
       {dossier && <DossierBody dossier={dossier} />}
     </div>
   )
@@ -123,9 +135,12 @@ function DossierHeader({ dossier }: { dossier: ResearchDossier }) {
           {assessment}
         </span>
       )}
-      {dossier.conviction != null && (
+      {dossier.research_conviction != null && (
         <span className="text-[12px] font-medium text-[var(--color-fg)]">
-          Conviction {Math.round(dossier.conviction)}/100
+          {/* Labelled "Research conviction", never bare "Conviction". The
+              analyst's own HIGH/MEDIUM/LOW conviction appears elsewhere on
+              this same page and gates something else entirely. */}
+          Research conviction {Math.round(dossier.research_conviction)}/100
         </span>
       )}
       <span className="text-[11px] text-[var(--color-fg-muted)]">
@@ -139,7 +154,39 @@ function DossierHeader({ dossier }: { dossier: ResearchDossier }) {
           Stale
         </span>
       )}
+      <VetoChip veto={dossier.veto} />
     </>
+  )
+}
+
+/**
+ * Whether this dossier is standing on the Buy button.
+ *
+ * Shown in the header rather than buried in the body because it is the one
+ * thing here that changes what the system will do, as opposed to what it
+ * thinks. Until now it could only be discovered by placing an order and
+ * reading the refusal afterwards in the order history.
+ *
+ * Two states, deliberately worded differently. `blocking` is a fact about
+ * right now. `would_block` with the veto switched off is a fact about a
+ * setting the user has not turned on — presenting that as "blocked" would be
+ * a lie, and hiding it would waste the only evidence they have for deciding
+ * whether to turn it on.
+ */
+function VetoChip({ veto }: { veto?: ResearchVetoStatus | null }) {
+  if (!veto?.would_block) return null
+  const blocking = veto.blocking
+  return (
+    <span
+      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+      style={{
+        background: blocking ? 'var(--tint-sell)' : 'var(--tint-hold)',
+        color: blocking ? 'var(--accent-sell)' : 'var(--accent-hold)',
+      }}
+    >
+      <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+      {blocking ? 'Blocks buying' : 'Would block'}
+    </span>
   )
 }
 
@@ -222,9 +269,14 @@ function DossierBody({ dossier }: { dossier: ResearchDossier }) {
             </div>
           )}
 
+          <Debate debate={dossier.debate} />
+          <Stances stances={dossier.stances} />
           <ConvictionNote dossier={dossier} />
         </>
       )}
+
+      <PriorRecordNote coverage={dossier.prior_record} />
+      <OutcomeNote outcome={dossier.outcome} />
 
       {dossier.data_gaps.length > 0 && (
         <Bullets
@@ -307,15 +359,85 @@ function barColor(value: number): string {
 }
 
 function ConvictionNote({ dossier }: { dossier: ResearchDossier }) {
-  const { conviction, derived_conviction: derived, report } = dossier
+  const {
+    research_conviction: conviction,
+    derived_research_conviction: derived,
+    report,
+  } = dossier
   if (conviction == null || derived == null) return null
   const gap = Math.abs(conviction - derived)
   return (
     <p className="text-[10.5px] leading-relaxed text-[var(--color-fg-muted)]">
-      Conviction {Math.round(conviction)} against an arithmetic anchor of{' '}
+      Research conviction {Math.round(conviction)} against an arithmetic anchor of{' '}
       {Math.round(derived)} computed from the scored dimensions.
       {gap >= 10 && ' The two differ materially — the numbers and the narrative are not saying the same thing.'}
       {report?.conviction_rationale ? ` ${report.conviction_rationale}` : ''}
+    </p>
+  )
+}
+
+/**
+ * What this dossier does to a BUY, stated in full.
+ *
+ * The chip in the header is the alert; this is the explanation, and it is the
+ * part that has to survive a sceptical reading. It names the trigger, the
+ * threshold, and — when nothing is blocking — how much room is left, because a
+ * conviction of 38 against a floor of 35 is a different situation from 90
+ * against 35 and the number alone does not say which.
+ */
+function VetoNote({ veto }: { veto?: ResearchVetoStatus | null }) {
+  if (!veto) return null
+
+  // Nothing to say about a dossier too old or too absent to matter. The
+  // dossier's own "Stale" chip already covers the why; repeating it as a
+  // veto sentence would imply the veto did something.
+  if (!veto.considered) {
+    if (veto.not_considered_reason === 'stale') {
+      return (
+        <Callout>
+          This dossier is older than the {veto.max_age_hours}h the veto will
+          trust, so it cannot block an entry. That is deliberate: a stale
+          dossier means the refresh job has not run, and a research outage must
+          not silently halt buying.
+        </Callout>
+      )
+    }
+    return null
+  }
+
+  if (veto.would_block) {
+    const trigger = veto.trigger === 'bearish'
+      ? 'the assessment is BEARISH'
+      : `research conviction ${Math.round(veto.research_conviction ?? 0)} is below the ${Math.round(veto.min_conviction)} floor`
+    return (
+      <Callout tone={veto.blocking ? 'sell' : undefined}>
+        {veto.blocking ? (
+          <>
+            <strong>Research is blocking new buying in {' '}
+            this name</strong> — {trigger}. Both the agent and your own Buy
+            button run the same guard, so an order placed here will be refused
+            with this reason. Selling is unaffected: research may veto an
+            entry, never an exit.
+          </>
+        ) : (
+          <>
+            Research would block a buy here — {trigger} — but the veto is
+            switched off (<code>RESEARCH_VETO_ENABLED</code>), so nothing is
+            being stopped. This is what turning it on would have caught.
+          </>
+        )}
+      </Callout>
+    )
+  }
+
+  const margin = veto.research_conviction != null
+    ? Math.round(veto.research_conviction - veto.min_conviction)
+    : null
+  return (
+    <p className="text-[10.5px] leading-relaxed text-[var(--color-fg-muted)]">
+      Research does not block buying in this name
+      {margin != null && ` — conviction clears the ${Math.round(veto.min_conviction)} floor by ${margin}`}
+      {!veto.enabled && ', and the veto is switched off in any case'}.
     </p>
   )
 }
@@ -437,16 +559,287 @@ function Evidence({ items }: { items: EvidenceItem[] }) {
   )
 }
 
-function Callout({ children }: { children: React.ReactNode }) {
+/**
+ * The panel's caveat block. `tone="sell"` is for the one case that is not a
+ * caveat but a refusal — research actively blocking an entry — which should
+ * not read in the same amber as "an agent didn't report".
+ */
+function Callout({ children, tone }: { children: React.ReactNode; tone?: 'sell' }) {
+  const palette = tone === 'sell'
+    ? { background: 'var(--tint-sell)', color: 'var(--accent-sell)' }
+    : { background: 'var(--tint-hold)', color: 'var(--accent-hold)' }
   return (
     <p
       className="flex items-start gap-2 rounded px-2.5 py-2 text-[11px] leading-relaxed"
-      style={{ background: 'var(--tint-hold)', color: 'var(--accent-hold)' }}
+      style={palette}
     >
       <AlertCircle className="mt-0.5 h-3 w-3 flex-shrink-0" aria-hidden="true" />
       <span>{children}</span>
     </p>
   )
+}
+
+/**
+ * The rebuttal exchange.
+ *
+ * Shown because the concession is the part worth the most. A bear case nobody
+ * ever answered reaches the report at full strength whether or not the
+ * evidence disposes of it, and a defence that answered every risk is the
+ * clearest sign the step was not done honestly — both are visible here and
+ * neither is visible in the merged report alone.
+ */
+function Debate({ debate }: { debate?: ResearchDebate | null }) {
+  const [open, setOpen] = useState(false)
+  if (!debate) return null
+
+  const risk = debate.risk_rebuttal
+  const defence = debate.defence_rebuttal
+  const conceded = defence?.conceded ?? []
+  const surviving = risk?.surviving ?? []
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center justify-between text-left"
+        aria-expanded={open}
+      >
+        <span className="label-micro">The rebuttal</span>
+        <span className="text-[10.5px] text-[var(--color-fg-muted)]">
+          {open ? 'hide' : 'show'}
+        </span>
+      </button>
+      <p className="mt-1 text-[10.5px] leading-snug text-[var(--color-fg-muted)]">
+        One exchange, after both sides had already written independently — so
+        neither inherited the other&rsquo;s framing. {surviving.length} risk
+        {surviving.length === 1 ? '' : 's'} survived the evidence;{' '}
+        {conceded.length} {conceded.length === 1 ? 'was' : 'were'} conceded as
+        unanswerable from what was collected.
+      </p>
+
+      {open && (
+        <div className="mt-2.5 flex flex-col gap-3">
+          {!risk && (
+            <Callout>
+              The risk analyst&rsquo;s reply did not come back. Its original
+              risks stand unanswered rather than disposed of.
+            </Callout>
+          )}
+          {!defence && (
+            <Callout>
+              No defence was recorded. Do not read any risk as answered because
+              this half is missing.
+            </Callout>
+          )}
+          <Bullets
+            label="Conceded — the evidence does not answer these"
+            items={conceded}
+            tone="sell"
+            hint="Named by the side arguing for the company. A concession here is the strongest thing in this panel."
+          />
+          <Bullets
+            label="Survived the evidence"
+            items={surviving}
+            tone="sell"
+          />
+          <Bullets
+            label="Made worse by the evidence"
+            items={risk?.sharpened ?? []}
+            tone="sell"
+          />
+          <Bullets
+            label="Answered"
+            items={defence?.answered ?? []}
+            hint="Risks the collected evidence disposes of, each citing what does it."
+          />
+          {risk?.residual_severity != null && (
+            <p className="text-[11px] leading-relaxed text-[var(--color-fg-muted)]">
+              The risk analyst put the bear case at {risk.residual_severity}/100
+              after the exchange
+              {risk.residual_rationale ? <> — {risk.residual_rationale}</> : null}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The advisory stance panel.
+ *
+ * The wording here is load-bearing. These do not size anything: position
+ * sizing is arithmetic on a frozen equity basis, no part of the trading guard
+ * chain reads them, and three unanimous WAITs still leave the order the risk
+ * model computed. A panel that implied otherwise would be claiming the system
+ * behaves in a way it does not.
+ */
+function Stances({ stances }: { stances?: ResearchStances | null }) {
+  if (!stances) return null
+  const rows: Array<[string, TradeStance | null | undefined]> = [
+    ['Aggressive', stances.aggressive],
+    ['Neutral', stances.neutral],
+    ['Conservative', stances.conservative],
+  ]
+  if (!rows.some(([, stance]) => stance)) return null
+
+  return (
+    <div>
+      <div className="label-micro">How three readers would size this</div>
+      <p className="mt-1 text-[10.5px] leading-snug text-[var(--color-fg-muted)]">
+        Advice, not sizing. The order quantity comes from the risk model and
+        your account — nothing here changes it. These readers are also not
+        shown how much of your account is already in this name.
+      </p>
+      <div className="mt-2 flex flex-col gap-2">
+        {rows.map(([label, stance]) =>
+          stance ? (
+            <div key={label} className="flex flex-col gap-0.5">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[11px] font-medium text-[var(--color-fg)]">
+                  {label}
+                </span>
+                <span
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                  style={stanceStyle(stance.stance)}
+                >
+                  {stanceLabel(stance.stance)}
+                </span>
+              </div>
+              {stance.rationale ? (
+                <p className="text-[11.5px] leading-relaxed text-[var(--color-fg)]">
+                  {stance.rationale}
+                </p>
+              ) : (
+                /* The stance is a closed enum and survives on its own; the
+                   reasoning was stripped for citing nothing. Saying so beats
+                   showing a recommendation with invisible support. */
+                <p className="text-[11px] italic leading-relaxed text-[var(--color-fg-muted)]">
+                  Its reasoning cited no evidence and was removed.
+                </p>
+              )}
+            </div>
+          ) : null,
+        )}
+      </div>
+    </div>
+  )
+}
+
+function stanceLabel(stance?: string | null): string {
+  switch (stance) {
+    case 'SIZE_UP': return 'lean in'
+    case 'SIZE_DOWN': return 'take less'
+    case 'HOLD_SIZE': return 'as sized'
+    case 'WAIT': return 'wait'
+    default: return 'no view'
+  }
+}
+
+function stanceStyle(stance?: string | null): React.CSSProperties {
+  switch (stance) {
+    case 'SIZE_UP':
+      return { background: 'var(--tint-buy)', color: 'var(--accent-buy)' }
+    case 'SIZE_DOWN':
+    case 'WAIT':
+      return { background: 'var(--tint-sell)', color: 'var(--accent-sell)' }
+    default:
+      return { background: 'var(--tint-hold)', color: 'var(--accent-hold)' }
+  }
+}
+
+/**
+ * Whether the agents were given this desk's own track record.
+ *
+ * Worth stating rather than assuming. Zero is the honest answer for any name
+ * being read for the first time and for every dossier written before outcome
+ * settlement existed — and a reader who assumes the agents know their history
+ * when they do not is drawing a conclusion the panel never supported.
+ */
+function PriorRecordNote({ coverage }: { coverage?: PriorRecordCoverage | null }) {
+  if (!coverage) return null
+  const { same_ticker: same, cross_ticker: cross } = coverage
+  return (
+    <p className="text-[10.5px] leading-relaxed text-[var(--color-fg-muted)]">
+      {same === 0 && cross === 0 ? (
+        <>
+          The analysts had no settled record to work from on this name — every
+          reading here comes from the current evidence alone.
+        </>
+      ) : (
+        <>
+          The analysts were shown {same} previous graded reading
+          {same === 1 ? '' : 's'} of this name
+          {cross > 0 ? <> and {cross} from other names</> : null}, each with what
+          the position went on to do. Those entries are cited like any other
+          evidence, and they can lower conviction but never raise it past the
+          arithmetic anchor.
+        </>
+      )}
+    </p>
+  )
+}
+
+/**
+ * How a past reading turned out.
+ *
+ * Absent on the dossier a ticker page normally shows, since that one was
+ * written today. Present when looking at a graded reading, and the number that
+ * matters is alpha rather than return: bullish on a name that rose 4% while
+ * the market rose 9% was not right.
+ */
+function OutcomeNote({ outcome }: { outcome?: ResearchOutcome | null }) {
+  if (!outcome || outcome.return == null) return null
+  const alpha = outcome.alpha
+  const correct = outcome.assessment_correct
+  const tone =
+    correct === true ? 'var(--accent-buy)'
+      : correct === false ? 'var(--accent-sell)'
+        : 'var(--color-fg-muted)'
+
+  return (
+    <div>
+      <div className="label-micro">How this reading turned out</div>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-[var(--color-fg)]">
+        Over the following {outcome.horizon_days} days the name returned{' '}
+        {formatPct(outcome.return)}
+        {alpha != null && outcome.benchmark_return != null ? (
+          <>
+            , against {formatPct(outcome.benchmark_return)} for{' '}
+            {outcome.benchmark_ticker ?? 'the benchmark'} — {formatPct(alpha)} of
+            alpha
+          </>
+        ) : (
+          <> (the benchmark could not be read for this window, so there is no
+            alpha to judge it on)</>
+        )}
+        .{' '}
+        <span style={{ color: tone }}>
+          {correct === true
+            ? 'The call was right on alpha.'
+            : correct === false
+              ? 'The call was wrong on alpha.'
+              : 'Not graded — the reading took no side, or the window could not be measured.'}
+        </span>
+      </p>
+      {outcome.reflection?.lesson ? (
+        <p className="mt-1.5 text-[11.5px] leading-relaxed text-[var(--color-fg)]">
+          <span className="text-[var(--color-fg-muted)]">Lesson recorded: </span>
+          {outcome.reflection.lesson}
+        </p>
+      ) : outcome.reflection?.uncited ? (
+        <p className="mt-1.5 text-[10.5px] italic leading-relaxed text-[var(--color-fg-muted)]">
+          A lesson was written but cited no evidence, so it was not kept. The
+          figures above stand on their own.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function formatPct(value: number): string {
+  return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 }
 
 function formatAge(dossier: ResearchDossier): string {

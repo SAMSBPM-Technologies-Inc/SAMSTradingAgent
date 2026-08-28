@@ -225,6 +225,62 @@ npm run web
    guard that halts buying when a cron job misfires is a worse failure than one
    that occasionally lets a trade through.
 
+   **The veto is reported before it is tripped.** The judgement is a pure
+   function in `services/research/veto.py` over a dossier and the settings, so
+   the same reading that refuses an order explains itself on the ticker page —
+   in the dossier panel and on the order ticket, via `GET /research/{ticker}/veto`.
+   It was previously discoverable only by placing an order and reading the
+   refusal afterwards on a SKIPPED trade row. `blocking` and `would_block` are
+   **separate fields and must stay separate**: `RESEARCH_VETO_ENABLED` is off by
+   default, so on most deployments the true statement is "research would refuse
+   this if you switched the veto on", which is exactly the fact needed to decide
+   whether to switch it on. Note the asymmetry the UI must state: the risk gate
+   restricts what the *agent* may pick and a human can override it, but the veto
+   is in the shared guard chain and **refuses a manual order too**.
+
+   **Two things were both called `conviction`; they are not the same number.**
+   The analyst's is `HIGH`/`MEDIUM`/`LOW` and gates unattended execution
+   (`may_auto_execute`); research's is 0–100 and feeds the veto. Research's is
+   `research_conviction` (anchor: `derived_research_conviction`) everywhere it
+   leaves `services/research/` — stored document, API model, both clients. The
+   model's own report JSON keeps the bare key, since that is what the prompt
+   asks for, and `ResearchReport` deliberately does not re-expose it: one
+   0–100 number at two depths of a response invites a client to read the
+   unclamped one. `latest_dossier` normalises documents written under the old
+   key; dossiers are a retained series, so those are still live. In UI copy,
+   the analyst's is labelled "analyst conviction" wherever the word would
+   otherwise stand alone.
+
+   **The desk's own record is evidence, not injected prose.** `outcomes.py`
+   grades every dossier ~20 days on (`RESEARCH_OUTCOME_HORIZON_DAYS`) against
+   forward **alpha**, then writes a short lesson that must cite ids from *that
+   dossier's own stored ledger* — uncited prose is deleted and a fabricated id
+   recorded, like any report. `prior_record.py` then feeds settled readings
+   back as `O`-prefixed ledger items, shown to all four specialists and the
+   synthesiser. Three properties are load-bearing: items are `meta=True` so a
+   track record cannot make a name researchable; only *resolved* readings are
+   shown, since an unsettled one is a prediction with no ground truth; and
+   **nothing here reaches `derived_research_conviction`**, which is arithmetic
+   over company data alone. Memory can temper a reading; the ±15 clamp means it
+   can never manufacture one. Correctness is judged on alpha — NEUTRAL and
+   unmeasurable windows score `None`, never a miss.
+
+   **The Risk agent is answered exactly once, after both sides have written.**
+   `RISK_REBUTTAL` and `DEFENCE_REBUTTAL` (`RESEARCH_DEBATE_ROUNDS`, default 1)
+   run after the fan-out, never before: a debate whose second speaker reacts to
+   the first inherits its framing, which is the anchoring the unanchored
+   fan-out exists to prevent. One exchange, because successive rounds converge
+   on agreement and that reads as resolution without being any. Both sides are
+   citation-filtered and argue over byte-identical material.
+
+   **The stance panel is advisory and must stay that way.** Three temperaments
+   read the *trade* rather than the company (`RESEARCH_STANCE_PANEL_ENABLED`,
+   off). Nothing in `_prepare_entry` reads them and no quantity moves because of
+   them — a test asserts no stance token reaches `trade_manager.py`. This is the
+   one idea from TradingAgents deliberately not adopted: its portfolio-manager
+   agent decides the position, and deterministic sizing on frozen equity is why
+   the same inputs produce the same order twice.
+
    **Earnings proximity is an additive catalyst bonus, not a fourth weighted
    component.** As a component its absence would cost coverage, and coverage is
    a penalty — so every ticker past the Alpha Vantage daily cap would score on
@@ -248,7 +304,7 @@ npm run web
 | `performance_stats` | Signal accuracy, win rates per ticker |
 | `financial_statements` | Accumulated filings per (ticker, period, timeframe) — append-only, the basis for every trend |
 | `earnings_history` | Reported vs estimated EPS, surprise record, next report date |
-| `research_dossiers` | Deep-research output, retained as a series |
+| `research_dossiers` | Deep-research output, retained as a series; `outcome` added on settlement |
 
 ### Authentication
 
@@ -343,12 +399,27 @@ constants restated in the UI. `explain_score` sets `attributable: false` on the
 XGBoost path, where the weights did not produce the score and a decomposition
 would be a fabrication.
 
+**Every realised return is measured against a benchmark.**
+`services/benchmark.py` (`BENCHMARK_TICKER`, default SPY) is the only source;
+settlement writes `benchmark_return_20d`/`alpha_20d` on signals and
+`benchmark_return`/`alpha` on closed trades. **An alpha that cannot be computed
+stays `None`, never `0.0`** — the `commission_paid` rule, for the same reason: a
+zero benchmark reports the whole return as skill, flatteringly, every time the
+market rose. Alpha carries its **own sample count** everywhere it is shown,
+because history settled before this existed has a return and no alpha.
+
 **Calibration reports; it does not tune.** `/calibration` renders
 `GET /performance/calibration`: whether the score ranks outcomes, what each
 candidate BUY cutoff would have returned, and whether stated confidence tracks
 being right. Every row carries `n` and a `significant` flag — under
 `MIN_SAMPLES_FOR_SIGNAL` (30) the UI marks it *thin* rather than showing a
 confident-looking percentage. Do not add auto-tuning here.
+
+`GET /performance/research-calibration` asks the same questions of the research
+module — does conviction rank forward alpha, were the verdicts right, and
+**would the veto have saved anything**. That last one is the number
+`RESEARCH_VETO_ENABLED` should be argued from and nothing produced it before.
+Same `n`/`significant` discipline, same refusal to tune.
 
 **Charts.** `GET /chart/{ticker}` (PNG, mplfinance) is for report export only.
 The web client draws from `GET /chart/{ticker}/series` with `lightweight-charts`,

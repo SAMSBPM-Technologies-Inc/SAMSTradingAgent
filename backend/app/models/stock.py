@@ -243,7 +243,10 @@ class ResearchReport(BaseModel):
     """The synthesised narrative. Every prose field has been citation-filtered."""
 
     assessment: Optional[str] = None          # BULLISH | NEUTRAL | BEARISH
-    conviction: Optional[float] = None        # 0-100
+    # Conviction is deliberately not repeated here. The model emits it inside
+    # its report and the orchestrator clamps it there, but exposing the same
+    # 0-100 number at two depths of one response invites a client to read the
+    # unclamped one. `ResearchDossier.research_conviction` is the value.
     thesis: Optional[str] = None
     bull_case: Optional[str] = None
     bear_case: Optional[str] = None
@@ -287,6 +290,168 @@ class CitationAudit(BaseModel):
         return not self.dropped and not self.invented
 
 
+class ResearchVetoStatus(BaseModel):
+    """
+    What a dossier does to a BUY on its ticker.
+
+    The veto was previously observable only by tripping it: attempt an entry,
+    have it refused, and read the sentence afterwards on a SKIPPED trade row.
+    A standing condition discoverable only by walking into it is one nobody can
+    plan around, which is why this is reported before an order rather than
+    after one.
+
+    `blocking` and `would_block` are separate on purpose. `RESEARCH_VETO_ENABLED`
+    is off by default, so on most deployments the honest statement is the
+    second: research reads this name badly and *would* refuse the entry if the
+    veto were switched on. Collapsing the two into one boolean would hide
+    exactly the fact a user needs in order to decide whether to switch it on.
+    """
+
+    #: RESEARCH_VETO_ENABLED. False means nothing here can stop an order.
+    enabled: bool = False
+    #: The dossier exists and is fresh enough to be capable of vetoing.
+    considered: bool = False
+    #: The dossier meets a blocking trigger, whether or not the veto is on.
+    would_block: bool = False
+    #: `enabled and would_block` — the only field the guard chain acts on.
+    blocking: bool = False
+    #: The refusal a user would see. Present whenever `would_block`.
+    reason: Optional[str] = None
+    #: "bearish" | "low_conviction" | None.
+    trigger: Optional[str] = None
+    assessment: Optional[str] = None
+    research_conviction: Optional[float] = None
+    #: The floor conviction must clear, so a client can show the distance to
+    #: the edge rather than a bare number with no scale.
+    min_conviction: float = 0.0
+    age_hours: Optional[float] = None
+    max_age_hours: int = 0
+    #: Why the dossier was not considered: "no_dossier" | "undated" | "stale".
+    #: Each of these allows the trade, and each for a different reason worth
+    #: telling apart — a missing dossier is a gap, a stale one is an outage.
+    not_considered_reason: Optional[str] = None
+
+
+class TradeStance(BaseModel):
+    """
+    One temperament's reading of the position, not of the company.
+
+    `rationale` is None when nothing the model wrote cited real evidence. The
+    stance still stands — it is a closed enum, not a claim — and the visible
+    gap where the reasoning should be is the intended outcome: a
+    recommendation nobody can check is worse than one with an obvious hole.
+    """
+
+    stance: Optional[str] = None       # SIZE_UP | HOLD_SIZE | SIZE_DOWN | WAIT
+    rationale: Optional[str] = None
+    what_would_change_it: Optional[str] = None
+
+
+class ResearchStances(BaseModel):
+    """
+    The advisory stance panel.
+
+    **Nothing here moves an order.** Position sizing is arithmetic on a frozen
+    equity basis, no part of the trading guard chain reads this, and three
+    unanimous WAITs still leave the order the risk model sized. A client
+    displaying these must not imply the quantity followed from them.
+
+    They also do not see account exposure: a dossier is shared across users, so
+    a per-user panel would multiply its cost by the user count. Each reads the
+    synthesised report and the ticker's own risk profile.
+    """
+
+    aggressive: Optional[TradeStance] = None
+    conservative: Optional[TradeStance] = None
+    neutral: Optional[TradeStance] = None
+
+
+class RebuttalSide(BaseModel):
+    """One side of the exchange, after citation filtering."""
+
+    #: Risks this side considers disposed of by the evidence.
+    answered: list[str] = []
+    #: Risk analyst only: risks that stand after seeing the evidence.
+    surviving: list[str] = []
+    #: Risk analyst only: risks the evidence makes *worse* than first judged.
+    sharpened: list[str] = []
+    #: Defence only: risks the evidence does not answer. The valuable half —
+    #: an answer that disposes of every risk is the strongest signal the step
+    #: was not done honestly.
+    conceded: list[str] = []
+    #: Defence only: real but smaller than argued.
+    overstated: list[str] = []
+    residual_severity: Optional[int] = None
+    residual_rationale: Optional[str] = None
+    strongest_surviving_risk: Optional[str] = None
+
+
+class ResearchDebate(BaseModel):
+    """
+    The rebuttal round.
+
+    Both sides wrote independently first and only then saw each other's work,
+    which is what separates this from a debate whose second speaker inherits
+    the first's framing. Either side may be `None` — its call failed — and that
+    is not the same as a side that argued and found nothing.
+    """
+
+    rounds: int = 1
+    risk_rebuttal: Optional[RebuttalSide] = None
+    defence_rebuttal: Optional[RebuttalSide] = None
+
+
+class ResearchReflection(BaseModel):
+    """The written half of an outcome. Citation-filtered like any report prose."""
+
+    #: None when nothing the model wrote cited a real evidence id. The numbers
+    #: beside it still stand — the prose is the optional part, and an
+    #: unattributable lesson must never be carried into a future prompt.
+    lesson: Optional[str] = None
+    what_held: list[str] = []
+    what_failed: list[str] = []
+    #: True when the whole lesson was dropped for citing nothing. Surfaced
+    #: rather than hidden: "we reflected and it was unusable" and "we never
+    #: reflected" are different facts about the loop's health.
+    uncited: bool = False
+    fabricated_citations: list[str] = []
+
+
+class ResearchOutcome(BaseModel):
+    """
+    What actually happened after a dossier was written.
+
+    `assessment_correct` is judged on **alpha**, not on the raw return: BULLISH
+    on a name that rose 4% while the market rose 9% was not right, and grading
+    it as a win is how a desk mistakes exposure for skill. It is `None` for a
+    NEUTRAL reading and for a window whose benchmark could not be read — both
+    are "cannot say", and a client must not render either as a miss.
+    """
+
+    settled_at: Optional[datetime] = None
+    horizon_days: Optional[int] = None
+    price_at_dossier: Optional[float] = None
+    price_at_settlement: Optional[float] = None
+    return_: Optional[float] = Field(default=None, alias="return")
+    benchmark_ticker: Optional[str] = None
+    benchmark_return: Optional[float] = None
+    alpha: Optional[float] = None
+    assessment: Optional[str] = None
+    research_conviction: Optional[float] = None
+    assessment_correct: Optional[bool] = None
+    reflection: Optional[ResearchReflection] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class PriorRecordCoverage(BaseModel):
+    """How much of this desk's own track record the agents were shown."""
+
+    same_ticker: int = 0
+    cross_ticker: int = 0
+    available: bool = False
+
+
 class ResearchDossier(BaseModel):
     """
     A deep-research dossier. Separate from the 5-minute signal on purpose.
@@ -300,11 +465,15 @@ class ResearchDossier(BaseModel):
     as_of: str
     stale: bool = False
     age_hours: Optional[float] = None
-    conviction: Optional[float] = None
+    #: 0-100, the research module's own conviction. Distinct from the analyst's
+    #: HIGH/MEDIUM/LOW `conviction` on a signal or a trade: different scale,
+    #: different producer, and a different gate — this one feeds the entry veto,
+    #: that one decides whether the agent may execute unattended.
+    research_conviction: Optional[float] = None
     #: The arithmetic anchor conviction was clamped to. Stored beside the final
     #: value so the two can be compared: a persistent gap means the numbers and
     #: the model's judgement disagree.
-    derived_conviction: Optional[float] = None
+    derived_research_conviction: Optional[float] = None
     report: Optional[ResearchReport] = None
     dimensions: list[DimensionScore] = []
     evidence: list[EvidenceItem] = []
@@ -331,6 +500,25 @@ class ResearchDossier(BaseModel):
     #: contains, which is a fact worth knowing even though the removal already
     #: happened.
     citation_audit: Optional[CitationAudit] = None
+    #: What this dossier does to a BUY on this ticker, right now. Always
+    #: present — a dossier that blocks nothing says so explicitly, because
+    #: "no veto field" and "veto found nothing" are not the same claim.
+    veto: Optional[ResearchVetoStatus] = None
+    #: How this reading turned out, once enough time has passed to know.
+    #: `None` on a dossier too recent to grade — which is the normal state for
+    #: the one being displayed, since it was written today.
+    outcome: Optional[ResearchOutcome] = None
+    #: How many settled prior readings were in this dossier's evidence when it
+    #: was built. Zero is the honest answer for every dossier written before
+    #: outcome settlement existed, and for any name being read for the first
+    #: time — both cases where the agents had no record to learn from.
+    prior_record: Optional[PriorRecordCoverage] = None
+    #: The rebuttal exchange, or None when the round did not run — off by
+    #: config, or the risk agent did not report and there was nothing to argue.
+    debate: Optional[ResearchDebate] = None
+    #: Advisory stance panel, or None when it did not run. Never binding on an
+    #: order — see `ResearchStances`.
+    stances: Optional[ResearchStances] = None
 
 
 class SignalListResponse(BaseModel):
@@ -414,6 +602,13 @@ class SignalPerformanceRecord(BaseModel):
     correct: int          # BUY that went up / SELL that went down
     win_rate: Optional[float] = None
     avg_return_20d: Optional[float] = None
+    #: Alpha carries its own count. Records settled before benchmark
+    #: measurement existed have a return and no alpha, so `settled` overstates
+    #: how much evidence sits behind the alpha figure — a client showing one
+    #: count against both numbers would present a handful of samples with the
+    #: authority of hundreds.
+    alpha_settled: int = 0
+    avg_alpha_20d: Optional[float] = None
 
 
 class PerformanceResponse(BaseModel):
@@ -421,6 +616,10 @@ class PerformanceResponse(BaseModel):
     settled_signals: int
     overall_win_rate: Optional[float] = None
     overall_avg_return_20d: Optional[float] = None
+    #: What alpha is measured against, so the client never has to name it.
+    benchmark_ticker: Optional[str] = None
+    alpha_settled_signals: int = 0
+    overall_avg_alpha_20d: Optional[float] = None
     by_signal: list[SignalPerformanceRecord]
     by_ticker: list[dict]
 
@@ -428,7 +627,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.11.1"
+    version: str = "1.13.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

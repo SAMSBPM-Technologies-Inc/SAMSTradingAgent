@@ -92,6 +92,14 @@ export const researchApi = {
     api.post<import('../types').ResearchDossier>(`/research/${ticker}`, undefined, {
       timeout: 300_000,
     }),
+  /**
+   * The veto reading alone — whether research currently blocks a BUY on this
+   * ticker. Cheap enough for an order ticket to call on every open, which the
+   * full dossier is not: that response carries the whole evidence ledger.
+   * Never 404s; a ticker with no dossier truthfully blocks nothing.
+   */
+  veto: (ticker: string) =>
+    api.get<import('../types').ResearchVetoStatus>(`/research/${ticker}/veto`),
 }
 
 export const performanceApi = {
@@ -103,6 +111,13 @@ export const performanceApi = {
     api.get<import('../types').CalibrationReport>('/performance/calibration', {
       params: { ticker, apply_risk_gate: applyRiskGate },
     }),
+  /** Does the deep-research reading predict anything? Unscoped by watchlist:
+   *  dossiers are a shared series, and slicing them per-user would thin every
+   *  bucket for no gain in relevance. */
+  researchCalibration: (ticker?: string) =>
+    api.get<import('../types').ResearchCalibrationReport>(
+      '/performance/research-calibration', { params: { ticker } },
+    ),
 }
 
 export const chartApi = {

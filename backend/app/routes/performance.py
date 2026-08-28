@@ -2,6 +2,7 @@
 GET /performance — historical signal accuracy scoped to the current user's watchlist.
 GET /performance/signals — last 100 individual signal history records for watchlist tickers.
 GET /performance/calibration — were the thresholds in the right place?
+GET /performance/research-calibration — is the deep-research reading worth its cost?
 """
 from collections import defaultdict
 from typing import Any, Optional
@@ -12,6 +13,8 @@ from app.db import COLL_SIGNAL_HISTORY, COLL_TRADES, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import PerformanceResponse, SignalPerformanceRecord
 from app.models.trade import TradeStatus
+from app.services.benchmark import benchmark_ticker
+from app.services.calibration import research_calibration_report
 from app.services.calibration import summarise as calibration_summary
 from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.utils.logger import get_logger
@@ -35,14 +38,15 @@ async def get_performance(current_user: dict = Depends(get_current_user)) -> Per
     total = len(all_records)
     settled = [r for r in all_records if r.get("return_20d") is not None]
 
+    def _empty_bucket() -> dict:
+        return {"total": 0, "settled": 0, "correct": 0, "returns": [], "alphas": []}
+
     signal_buckets: dict[str, dict] = {
-        "BUY":  {"total": 0, "settled": 0, "correct": 0, "returns": []},
-        "SELL": {"total": 0, "settled": 0, "correct": 0, "returns": []},
-        "HOLD": {"total": 0, "settled": 0, "correct": 0, "returns": []},
+        "BUY": _empty_bucket(), "SELL": _empty_bucket(), "HOLD": _empty_bucket(),
     }
     for rec in all_records:
         sig = rec.get("signal", "HOLD")
-        bucket = signal_buckets.setdefault(sig, {"total": 0, "settled": 0, "correct": 0, "returns": []})
+        bucket = signal_buckets.setdefault(sig, _empty_bucket())
         bucket["total"] += 1
         ret = rec.get("return_20d")
         if ret is not None:
@@ -50,19 +54,29 @@ async def get_performance(current_user: dict = Depends(get_current_user)) -> Per
             bucket["returns"].append(ret)
             if rec.get("was_correct"):
                 bucket["correct"] += 1
+        # Alpha is accumulated on its own, not alongside the return: records
+        # settled before benchmark measurement existed have one and not the
+        # other, and averaging a short alpha sample under the long sample's
+        # count would present it as better evidenced than it is.
+        alpha_val = rec.get("alpha_20d")
+        if isinstance(alpha_val, (int, float)):
+            bucket["alphas"].append(alpha_val)
 
     by_signal = []
     for sig, b in signal_buckets.items():
         win_rate = (b["correct"] / b["settled"]) if b["settled"] > 0 else None
         avg_ret  = (sum(b["returns"]) / len(b["returns"])) if b["returns"] else None
+        avg_alpha = (sum(b["alphas"]) / len(b["alphas"])) if b["alphas"] else None
         by_signal.append(SignalPerformanceRecord(
             signal=sig, total=b["total"], settled=b["settled"], correct=b["correct"],
             win_rate=round(win_rate, 4) if win_rate is not None else None,
             avg_return_20d=round(avg_ret, 4) if avg_ret is not None else None,
+            alpha_settled=len(b["alphas"]),
+            avg_alpha_20d=round(avg_alpha, 4) if avg_alpha is not None else None,
         ))
     by_signal.sort(key=lambda x: x.signal)
 
-    ticker_buckets: dict[str, dict] = defaultdict(lambda: {"total": 0, "settled": 0, "correct": 0, "returns": []})
+    ticker_buckets: dict[str, dict] = defaultdict(_empty_bucket)
     for rec in all_records:
         t = rec.get("ticker", "?")
         ticker_buckets[t]["total"] += 1
@@ -72,27 +86,42 @@ async def get_performance(current_user: dict = Depends(get_current_user)) -> Per
             ticker_buckets[t]["returns"].append(ret)
             if rec.get("was_correct"):
                 ticker_buckets[t]["correct"] += 1
+        alpha_val = rec.get("alpha_20d")
+        if isinstance(alpha_val, (int, float)):
+            ticker_buckets[t]["alphas"].append(alpha_val)
 
     by_ticker = []
     for ticker, b in sorted(ticker_buckets.items()):
         wr = (b["correct"] / b["settled"]) if b["settled"] > 0 else None
         ar = (sum(b["returns"]) / len(b["returns"])) if b["returns"] else None
+        aa = (sum(b["alphas"]) / len(b["alphas"])) if b["alphas"] else None
         by_ticker.append({
             "ticker": ticker, "total": b["total"], "settled": b["settled"],
             "win_rate": round(wr, 4) if wr is not None else None,
             "avg_return_20d": round(ar, 4) if ar is not None else None,
+            "alpha_settled": len(b["alphas"]),
+            "avg_alpha_20d": round(aa, 4) if aa is not None else None,
         })
 
     all_returns = [r.get("return_20d") for r in settled if r.get("return_20d") is not None]
+    all_alphas = [r["alpha_20d"] for r in all_records
+                  if isinstance(r.get("alpha_20d"), (int, float))]
     directional = [r for r in settled if r.get("was_correct") is not None]
     overall_wr  = (sum(1 for r in directional if r["was_correct"]) / len(directional)) if directional else None
     overall_avg = (sum(all_returns) / len(all_returns)) if all_returns else None
+    overall_alpha = (sum(all_alphas) / len(all_alphas)) if all_alphas else None
 
-    logger.info("performance_fetched", total=total, settled=len(settled), user_id=user_id)
+    logger.info(
+        "performance_fetched", total=total, settled=len(settled),
+        with_alpha=len(all_alphas), user_id=user_id,
+    )
     return PerformanceResponse(
         total_signals=total, settled_signals=len(settled),
         overall_win_rate=round(overall_wr, 4) if overall_wr is not None else None,
         overall_avg_return_20d=round(overall_avg, 4) if overall_avg is not None else None,
+        benchmark_ticker=benchmark_ticker(),
+        alpha_settled_signals=len(all_alphas),
+        overall_avg_alpha_20d=round(overall_alpha, 4) if overall_alpha is not None else None,
         by_signal=by_signal, by_ticker=by_ticker,
     )
 
@@ -149,7 +178,48 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
         # not after. This is the one that should drive the sizing thresholds.
         flipped = [t for t in netted if t["pnl"] > 0 >= t["pnl_net"]]
 
+        # ── Benchmark-relative ───────────────────────────────────────────────
+        # What the trade earned against what the market handed out over the
+        # same days. A win rate computed on raw P&L cannot separate a good
+        # entry from a rising tide, and the sizing and threshold arguments this
+        # endpoint feeds have been made on the raw number alone.
+        #
+        # Counted on its own denominator for the same reason `netted` is: only
+        # trades closed after benchmark measurement shipped carry an alpha, and
+        # a position whose benchmark could not be read stays None rather than
+        # zero, which would have credited the whole return as skill.
+        with_alpha = [t for t in priced if isinstance(t.get("alpha"), (int, float))]
+        alpha_wins = [t for t in with_alpha if t["alpha"] > 0]
+        avg_alpha = (
+            sum(t["alpha"] for t in with_alpha) / len(with_alpha)
+            if with_alpha else None
+        )
+        bench_rets = [
+            t["benchmark_return"] for t in with_alpha
+            if isinstance(t.get("benchmark_return"), (int, float))
+        ]
+
         return {
+            "benchmark_ticker": benchmark_ticker(),
+            "alpha_measured": len(with_alpha),
+            # Priced, but closed before benchmark measurement existed or with a
+            # benchmark series that could not be read. Never folded in at zero.
+            "alpha_unknown": len(priced) - len(with_alpha),
+            "avg_alpha": round(avg_alpha, 4) if avg_alpha is not None else None,
+            "alpha_win_rate": (
+                round(len(alpha_wins) / len(with_alpha), 4) if with_alpha else None
+            ),
+            # What simply holding the index over those same windows returned —
+            # the bar the trades had to clear.
+            "avg_benchmark_return": (
+                round(sum(bench_rets) / len(bench_rets), 4) if bench_rets else None
+            ),
+            # Trades that made money and still lost to the index. The
+            # benchmark-relative twin of `wins_lost_to_fees`, and the number
+            # that says whether the agent is adding anything at all.
+            "wins_lost_to_benchmark": sum(
+                1 for t in with_alpha if t["pnl"] > 0 and t["alpha"] < 0
+            ),
             "realised_pnl_net": round(net_total, 2) if netted else None,
             "commission_paid": round(fees, 2) if netted else None,
             # Fees as a share of the gross P&L they were charged against —
@@ -219,6 +289,9 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
                 "exit_price": t.get("exit_price"),
                 "pnl": t.get("pnl"),
                 "pnl_net": t.get("pnl_net"),
+                "return_pct": t.get("return_pct"),
+                "benchmark_return": t.get("benchmark_return"),
+                "alpha": t.get("alpha"),
                 "commission_paid": t.get("commission_paid"),
                 # False marks a fee total that is a floor, not a figure — at
                 # least one execution never reported. The row shows gross only.
@@ -317,7 +390,8 @@ async def get_calibration(
     records = await db[COLL_SIGNAL_HISTORY].find(
         query,
         {"ticker": 1, "score": 1, "signal": 1, "confidence": 1,
-         "risk_score": 1, "return_20d": 1, "generated_at": 1},
+         "risk_score": 1, "return_20d": 1, "generated_at": 1,
+         "alpha_20d": 1, "benchmark_return_20d": 1},
     ).to_list(length=100_000)
 
     report = calibration_summary(
@@ -331,5 +405,49 @@ async def get_calibration(
         ticker=ticker or "watchlist",
         settled=report["settled_records"],
         ranks=report["score_ranks_outcomes"],
+    )
+    return report
+
+
+@router.get(
+    "/performance/research-calibration",
+    summary="Does the deep-research reading actually predict anything?",
+)
+async def get_research_calibration(
+    ticker: Optional[str] = Query(None, description="Restrict to one ticker"),
+    current_user: dict = Depends(get_current_user),
+) -> dict[str, Any]:
+    """
+    The only evidence there is on whether the agent path earns its cost.
+
+    Every dossier written more than `RESEARCH_OUTCOME_HORIZON_DAYS` ago is
+    graded against what the name actually did, measured as alpha rather than
+    raw return — a BULLISH reading of a stock that rose 4% while the index rose
+    9% was not right, and counting it as a win is how a desk mistakes exposure
+    for skill.
+
+    Three readings come back. `conviction_buckets` asks whether a higher
+    research conviction earns a higher forward alpha; a flat curve means the
+    number separates nothing and no veto floor is the right floor.
+    `assessment_accuracy` scores each verdict, excluding NEUTRAL and
+    ungradeable windows from the denominator rather than counting them as
+    misses. And `veto_counterfactual` answers the question
+    `RESEARCH_VETO_ENABLED` has never had an answer to: did the names research
+    would have refused actually do worse? If they did not, the guard is
+    refusing trades for no return.
+
+    Reports; does not tune. Nothing here moves a threshold — the same standing
+    refusal as the signal calibration endpoint, and for the same reason.
+
+    Unscoped by watchlist deliberately: dossiers are a shared series, not
+    per-user, and slicing them by whose list a ticker happens to be on would
+    thin every bucket for no gain in relevance.
+    """
+    report = await research_calibration_report(ticker)
+    logger.info(
+        "research_calibration_fetched",
+        user_id=str(current_user["_id"]),
+        ticker=ticker or "ALL",
+        graded=report["graded_dossiers"],
     )
     return report

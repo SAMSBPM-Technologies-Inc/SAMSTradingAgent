@@ -2,9 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, CheckCircle2, HelpCircle, Minus, XCircle } from 'lucide-react'
 import { performanceApi } from '../lib/api'
 import type {
+  AssessmentAccuracyRow,
   CalibrationBucket,
   CalibrationReport,
   ConfidenceBucket,
+  ConvictionBucket,
+  ResearchCalibrationReport,
   ScoreBucket,
   ThresholdRow,
 } from '../types'
@@ -71,6 +74,27 @@ function SampleCell({ row }: { row: CalibrationBucket }) {
 }
 
 /** Horizontal bar centred on zero, so losses read as losses. */
+/**
+ * An alpha figure with its own sample count where that differs.
+ *
+ * Alpha and raw return sit on different denominators: history settled before
+ * benchmark measurement existed carries a return and no alpha. Showing the
+ * alpha under the row's `n` would give a handful of samples the authority of
+ * hundreds, so a thinner alpha sample says how thin it is.
+ */
+function AlphaCell({ row }: { row: CalibrationBucket }) {
+  return (
+    <span className="inline-flex items-baseline gap-1">
+      <span>{signedPct(row.avg_alpha)}</span>
+      {!row.alpha_significant && row.alpha_n !== row.n && (
+        <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+          n={row.alpha_n}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function ReturnBar({ value, max }: { value: number | null; max: number }) {
   if (value == null || max === 0) return null
   const width = Math.min(50, (Math.abs(value) / max) * 50)
@@ -170,6 +194,7 @@ function ScoreBucketsTable({ rows }: { rows: ScoreBucket[] }) {
           <th scope="col" className={`${TH} text-right`}>Signals</th>
           <th scope="col" className={`${TH} text-right`}>Win rate</th>
           <th scope="col" className={`${TH} text-right`}>Avg 20d</th>
+          <th scope="col" className={`${TH} text-right`}>Alpha</th>
           <th scope="col" className={`${TH} text-right`}>Median</th>
           {/* Decorative — the first column to drop when space is short. */}
           <th scope="col" className={`${TH} hidden w-32 text-left md:table-cell`}>&nbsp;</th>
@@ -185,6 +210,12 @@ function ScoreBucketsTable({ rows }: { rows: ScoreBucket[] }) {
             <td className={`${TD} text-right tabular-nums text-[var(--color-fg)]`}>{pct(r.win_rate, 1)}</td>
             <td className={`${TD} text-right tabular-nums ${returnTone(r.avg_return)}`}>
               {signedPct(r.avg_return)}
+            </td>
+            {/* Blank when no record in this band was benchmarked. A dash beside
+                a real return reads as zero alpha, which is a measurement this
+                band does not have. */}
+            <td className={`${TD} text-right tabular-nums ${returnTone(r.avg_alpha)}`}>
+              {r.alpha_n ? <AlphaCell row={r} /> : ''}
             </td>
             <td className={`${TD} text-right tabular-nums text-[var(--color-fg-muted)]`}>
               {signedPct(r.median_return)}
@@ -291,6 +322,206 @@ function ConfidenceTable({ rows }: { rows: ConfidenceBucket[] }) {
 
 // ── Section wrapper ───────────────────────────────────────────────────────────
 
+// ── The research arm ──────────────────────────────────────────────────────────
+// Whether the deep-research reading predicts anything. Graded on alpha rather
+// than raw return, because BULLISH on a name that rose 4% while the market rose
+// 9% was not right — and counting it as a win is how a desk mistakes exposure
+// for skill.
+
+function ResearchSection({ report }: { report: ResearchCalibrationReport }) {
+  if (report.graded_dossiers === 0) {
+    return (
+      <Block
+        title="Is the deep research worth what it costs?"
+        blurb="Nothing to say yet."
+      >
+        <p className="text-xs text-[var(--color-fg-muted)] leading-relaxed max-w-2xl">
+          No dossier is old enough to have been graded. A reading is settled
+          about twenty days after it is written, against what the name actually
+          did — so this page stays empty until the research job has been running
+          at least that long. There is no honest way to claim the agent path
+          adds anything before then.
+        </p>
+      </Block>
+    )
+  }
+
+  const veto = report.veto_counterfactual
+  return (
+    <>
+      <Block
+        title="Does a higher research conviction earn a higher alpha?"
+        blurb="The same question the score bands ask, put to the research module. A flat
+               curve means conviction separates nothing, and no veto floor is the right
+               floor — the answer would be to fix the reading, not to move the line."
+      >
+        <ConvictionTable rows={report.conviction_buckets} benchmark={report.benchmark_ticker} />
+      </Block>
+
+      <Block
+        title="Were the verdicts right?"
+        blurb="Graded on alpha. NEUTRAL readings and windows whose benchmark could not be
+               read are excluded from the denominator rather than counted as misses —
+               a reading that took no side cannot be scored by direction."
+      >
+        <AssessmentTable rows={report.assessment_accuracy} />
+      </Block>
+
+      <Block
+        title="Would the veto have saved anything?"
+        blurb="What the names research would have refused actually did. The veto earns its
+               place only if the blocked group's alpha is meaningfully worse — a blocked
+               group that performed in line with the rest is refusing trades for no return,
+               and costs opportunity on every one."
+      >
+        <div className="card flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+                Would block
+              </span>
+              <span className={`text-[20px] font-bold tabular-nums ${returnTone(veto.would_block.avg_alpha)}`}
+                    style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+                {signedPct(veto.would_block.avg_alpha)}
+              </span>
+              <span className="text-[11px] text-[var(--color-fg-muted)]">
+                {veto.would_block.alpha_n} graded, floor {veto.floor}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+                Would allow
+              </span>
+              <span className={`text-[20px] font-bold tabular-nums ${returnTone(veto.allowed.avg_alpha)}`}
+                    style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+                {signedPct(veto.allowed.avg_alpha)}
+              </span>
+              <span className="text-[11px] text-[var(--color-fg-muted)]">
+                {veto.allowed.alpha_n} graded
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+                Gap
+              </span>
+              <span className={`text-[20px] font-bold tabular-nums ${returnTone(veto.alpha_saved)}`}
+                    style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+                {veto.alpha_saved == null ? '—' : signedPct(veto.alpha_saved)}
+              </span>
+              <span className="text-[11px] text-[var(--color-fg-muted)]">
+                allowed minus blocked
+              </span>
+            </div>
+          </div>
+          <p className="text-xs leading-relaxed text-[var(--color-fg-muted)]">
+            {!veto.conclusive ? (
+              <>
+                Not enough graded dossiers on both sides to conclude anything. Under{' '}
+                {report.min_samples_for_signal} records a gap this size is noise, and
+                switching the veto on or off from it would be guessing with extra steps.
+              </>
+            ) : veto.alpha_saved != null && veto.alpha_saved > 0 ? (
+              <>
+                The names research would have refused did worse than the rest by{' '}
+                {signedPct(veto.alpha_saved)} of alpha. That is the result that argues
+                for turning <code>RESEARCH_VETO_ENABLED</code> on.
+              </>
+            ) : (
+              <>
+                The names research would have refused did no worse than the rest. On this
+                evidence the veto costs opportunity without buying protection — which
+                argues for leaving it off and reading the{' '}
+                <code>would_block</code> flag as information instead.
+              </>
+            )}
+          </p>
+        </div>
+      </Block>
+    </>
+  )
+}
+
+function ConvictionTable({ rows, benchmark }: {
+  rows: ConvictionBucket[]
+  benchmark: string
+}) {
+  return (
+    <TableShell>
+      <thead>
+        <tr className="border-b border-[var(--color-border)]">
+          <th scope="col" className={`${TH} text-left`}>Conviction</th>
+          <th scope="col" className={`${TH} text-right`}>Dossiers</th>
+          <th scope="col" className={`${TH} text-right`}>Avg return</th>
+          <th scope="col" className={`${TH} text-right`}>Alpha vs {benchmark}</th>
+          <th scope="col" className={`${TH} text-right`}>Beat market</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={`${r.lo}-${r.hi}`} className="border-b border-[var(--color-border)]/50 last:border-0">
+            <td className={`${TD} tabular-nums text-[var(--color-fg)]`}>
+              {r.lo.toFixed(0)} – {r.hi.toFixed(0)}
+            </td>
+            <td className={`${TD} text-right`}><SampleCell row={r} /></td>
+            <td className={`${TD} text-right tabular-nums ${returnTone(r.avg_return)}`}>
+              {signedPct(r.avg_return)}
+            </td>
+            <td className={`${TD} text-right tabular-nums ${returnTone(r.avg_alpha)}`}>
+              {r.alpha_n ? signedPct(r.avg_alpha) : ''}
+            </td>
+            <td className={`${TD} text-right tabular-nums text-[var(--color-fg)]`}>
+              {r.alpha_n ? pct(r.alpha_win_rate, 0) : ''}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </TableShell>
+  )
+}
+
+function AssessmentTable({ rows }: { rows: AssessmentAccuracyRow[] }) {
+  return (
+    <TableShell>
+      <thead>
+        <tr className="border-b border-[var(--color-border)]">
+          <th scope="col" className={`${TH} text-left`}>Verdict</th>
+          <th scope="col" className={`${TH} text-right`}>Dossiers</th>
+          <th scope="col" className={`${TH} text-right`}>Gradeable</th>
+          <th scope="col" className={`${TH} text-right`}>Right</th>
+          <th scope="col" className={`${TH} text-right`}>Avg alpha</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.assessment} className="border-b border-[var(--color-border)]/50 last:border-0">
+            <td className={`${TD} text-[var(--color-fg)]`}>{r.assessment}</td>
+            <td className={`${TD} text-right tabular-nums text-[var(--color-fg-muted)]`}>{r.n}</td>
+            <td className={`${TD} text-right tabular-nums text-[var(--color-fg-muted)]`}>
+              {r.graded}
+              {r.assessment === 'NEUTRAL' && (
+                <span className="ml-1 text-[10px] text-[var(--color-fg-muted)]">
+                  (took no side)
+                </span>
+              )}
+            </td>
+            <td className={`${TD} text-right tabular-nums text-[var(--color-fg)]`}>
+              {r.accuracy == null ? '' : pct(r.accuracy, 0)}
+              {r.accuracy != null && !r.significant && (
+                <span className="ml-1 text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                  thin
+                </span>
+              )}
+            </td>
+            <td className={`${TD} text-right tabular-nums ${returnTone(r.avg_alpha)}`}>
+              {r.alpha_n ? signedPct(r.avg_alpha) : ''}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </TableShell>
+  )
+}
+
 function Block({ title, blurb, children }: {
   title: string
   blurb: string
@@ -315,6 +546,10 @@ function Block({ title, blurb, children }: {
 
 export default function CalibrationPage() {
   const [report, setReport] = useState<CalibrationReport | null>(null)
+  // Loaded separately and allowed to fail on its own. The research arm is a
+  // newer, optional feature; a deployment with research off must still get the
+  // signal calibration this page was built for.
+  const [research, setResearch] = useState<ResearchCalibrationReport | null>(null)
   const [applyRiskGate, setApplyRiskGate] = useState(true)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -325,6 +560,12 @@ export default function CalibrationPage() {
     try {
       const res = await performanceApi.calibration(undefined, riskGate)
       setReport(res.data)
+      try {
+        const arm = await performanceApi.researchCalibration()
+        setResearch(arm.data)
+      } catch {
+        setResearch(null)
+      }
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })
         ?.response?.data?.detail
@@ -468,6 +709,25 @@ export default function CalibrationPage() {
           >
             <ConfidenceTable rows={report.confidence_buckets} />
           </Block>
+
+          {research && (
+            <>
+              <div className="border-t border-[var(--color-border)] pt-6">
+                <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+                  The deep research arm
+                </h2>
+                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-[var(--color-fg-muted)]">
+                  Everything above measures the composite score. This measures the
+                  agent path — five to seven model calls per dossier — against the
+                  same standard, because a reading that costs money and predicts
+                  nothing should be visible as such. {research.graded_dossiers}{' '}
+                  dossier{research.graded_dossiers === 1 ? '' : 's'} graded,{' '}
+                  {research.lessons_recorded} with a usable lesson recorded.
+                </p>
+              </div>
+              <ResearchSection report={research} />
+            </>
+          )}
 
           <p className="text-[0.65rem] text-[var(--color-fg-muted)] leading-relaxed max-w-2xl">
             This page reports; it does not tune. Fitting a threshold to its own history is how

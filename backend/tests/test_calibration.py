@@ -163,3 +163,202 @@ def test_win_rate_counts_only_positive_returns():
     """A flat 0.0 is not a win. Rates are reported rounded to 4dp."""
     recs = [{"score": 0.8, "return_20d": r} for r in (0.1, -0.1, 0.0)]
     assert summarise(recs)["base_rate"]["win_rate"] == pytest.approx(1 / 3, abs=5e-5)
+
+
+# ── Benchmark-relative measurement ────────────────────────────────────────────
+# Added with `services/benchmark.py`. The engine previously had no benchmark at
+# all, so a composite that ranked raw returns by preferring high-beta names in
+# a rising market would have read as perfectly calibrated.
+
+def _rec(score, ret, alpha=None):
+    row = {"score": score, "return_20d": ret, "signal": "BUY", "confidence": 0.6}
+    if alpha is not None:
+        row["alpha_20d"] = alpha
+    return row
+
+
+def test_alpha_carries_its_own_sample_count():
+    """
+    History settled before benchmark measurement existed has a return and no
+    alpha. Reporting one `n` for both would let a three-record alpha inherit a
+    three-hundred-record confidence.
+    """
+    rows = [_rec(0.8, 0.05) for _ in range(50)] + [_rec(0.8, 0.05, 0.01) for _ in range(3)]
+    stats = summarise(rows)["base_rate"]
+    assert stats["n"] == 53
+    assert stats["alpha_n"] == 3
+    assert stats["significant"] is True
+    assert stats["alpha_significant"] is False
+
+
+def test_alpha_is_absent_not_zero_when_no_record_carries_one():
+    rows = [_rec(0.8, 0.05) for _ in range(50)]
+    stats = summarise(rows)["base_rate"]
+    assert stats["avg_alpha"] is None
+    assert stats["alpha_win_rate"] is None
+    assert stats["alpha_n"] == 0
+
+
+def test_a_composite_that_ranks_returns_but_not_alpha_is_caught():
+    """
+    The case this whole column exists for: returns rise with score purely
+    because the high buckets hold more market exposure. Raw ranking says the
+    composite works; alpha says it picked beta.
+    """
+    rows = []
+    for i in range(MIN_SAMPLES_FOR_SIGNAL + 5):
+        # Low bucket: +1% return in a +1% market. High bucket: +9% in a +9%
+        # market. Raw return rises steeply; alpha is flat at zero throughout.
+        rows.append(_rec(0.35, 0.01, 0.0))
+        rows.append(_rec(0.75, 0.09, 0.0))
+
+    report = summarise(rows)
+    assert report["score_ranks_outcomes"] is True
+    # Flat alpha is still weakly monotonic, but the averages tell the story and
+    # both must be present for a reader to see it.
+    lows = [b for b in report["score_buckets"] if b["lo"] == 0.3][0]
+    highs = [b for b in report["score_buckets"] if b["lo"] == 0.7][0]
+    assert highs["avg_return"] > lows["avg_return"]
+    assert highs["avg_alpha"] == lows["avg_alpha"] == 0.0
+
+
+def test_summary_names_the_benchmark_so_the_client_does_not_have_to():
+    report = summarise([_rec(0.8, 0.05, 0.01)])
+    assert report["benchmark_ticker"]
+    assert report["alpha_records"] == 1
+
+
+# ── The research arm ──────────────────────────────────────────────────────────
+# Whether the agent path is worth its cost. The reference implementation this
+# system is measured against has no equivalent — it publishes backtest figures
+# its own README says are not replicable, and never asks whether its debate
+# improved anything.
+
+from app.services.calibration import (  # noqa: E402
+    assessment_accuracy, conviction_buckets, summarise_research,
+    veto_counterfactual,
+)
+
+
+def _dossier(conviction, alpha, assessment="BULLISH", ret=None, correct=None,
+             lesson=None):
+    if correct is None and alpha is not None and assessment in ("BULLISH", "BEARISH"):
+        correct = (alpha > 0) if assessment == "BULLISH" else (alpha < 0)
+    return {
+        "ticker": "EXMP",
+        "outcome": {
+            "research_conviction": conviction,
+            "assessment": assessment,
+            "return": ret if ret is not None else (alpha or 0.0) + 0.02,
+            "alpha": alpha,
+            "assessment_correct": correct,
+            "reflection": {"lesson": lesson} if lesson else None,
+        },
+    }
+
+
+def test_a_conviction_that_ranks_alpha_is_recognised():
+    rows = []
+    for _ in range(MIN_SAMPLES_FOR_SIGNAL + 5):
+        rows.append(_dossier(10, -0.06))
+        rows.append(_dossier(90, 0.06))
+    report = summarise_research(rows)
+    assert report["conviction_ranks_alpha"] is True
+    assert report["graded_dossiers"] == len(rows)
+
+
+def test_a_flat_conviction_curve_is_not_dressed_up():
+    """
+    If conviction separates nothing, no veto floor is the right floor and the
+    answer is to fix the reading rather than move the line.
+    """
+    rows = [_dossier(c, 0.01) for c in (10, 30, 50, 70, 90)] * 20
+    buckets = conviction_buckets(rows)
+    alphas = [b["avg_alpha"] for b in buckets if b["avg_alpha"] is not None]
+    assert len(set(alphas)) == 1
+
+
+def test_ungraded_readings_are_excluded_from_accuracy_not_counted_as_misses():
+    """
+    NEUTRAL declined to take a side; an unmeasurable window has no side to
+    take. Counting either as wrong makes the number describe the sample's
+    direction instead of the reading's quality.
+    """
+    rows = (
+        [_dossier(70, 0.05)] * 10                                   # right
+        + [_dossier(70, -0.05)] * 10                                # wrong
+        + [_dossier(50, None, correct=None)] * 40                   # unmeasurable
+        + [_dossier(50, 0.05, assessment="NEUTRAL", correct=None)] * 40
+    )
+    bullish = [r for r in assessment_accuracy(rows) if r["assessment"] == "BULLISH"][0]
+    neutral = [r for r in assessment_accuracy(rows) if r["assessment"] == "NEUTRAL"][0]
+
+    assert bullish["graded"] == 20
+    assert bullish["accuracy"] == pytest.approx(0.5)
+    assert neutral["graded"] == 0
+    assert neutral["accuracy"] is None
+
+
+def test_the_veto_counterfactual_separates_blocked_from_allowed():
+    """
+    The number `RESEARCH_VETO_ENABLED` should be argued from, and that nobody
+    has ever had. A blocked group that performed in line with the rest means
+    the guard is refusing trades for no return.
+    """
+    rows = (
+        [_dossier(20, -0.08)] * 40                              # under the floor
+        + [_dossier(80, 0.04)] * 40                             # well over it
+        + [_dossier(90, -0.03, assessment="BEARISH")] * 40      # bearish, blocked
+    )
+    got = veto_counterfactual(rows, floor=35.0)
+
+    assert got["would_block"]["n"] == 80
+    assert got["allowed"]["n"] == 40
+    assert got["alpha_saved"] > 0
+    assert got["conclusive"] is True
+
+
+def test_a_veto_that_saves_nothing_reports_a_negative_saving():
+    """The result that should stop the flag being switched on."""
+    rows = [_dossier(20, 0.06)] * 40 + [_dossier(80, 0.01)] * 40
+    got = veto_counterfactual(rows, floor=35.0)
+    assert got["alpha_saved"] < 0
+
+
+def test_thin_evidence_is_flagged_rather_than_shown_as_a_finding():
+    rows = [_dossier(80, 0.05)] * 3
+    got = veto_counterfactual(rows, floor=35.0)
+    assert got["conclusive"] is False
+    assert summarise_research(rows)["conviction_ranks_alpha"] is None
+
+
+def test_ungraded_dossiers_are_ignored_entirely():
+    rows = [_dossier(80, 0.05), {"ticker": "EXMP", "outcome": None},
+            {"ticker": "EXMP"}]
+    assert summarise_research(rows)["graded_dossiers"] == 1
+
+
+def test_lessons_recorded_separates_a_quiet_loop_from_a_filtered_one():
+    """
+    A high graded count with few lessons means reflection is running and being
+    citation-filtered away — a different problem from the loop not running.
+    """
+    rows = [_dossier(80, 0.05, lesson="Margins [F2] held.")] * 5 + [_dossier(80, 0.05)] * 15
+    report = summarise_research(rows)
+    assert report["graded_dossiers"] == 20
+    assert report["lessons_recorded"] == 5
+
+
+def test_the_research_arm_reports_and_does_not_tune():
+    """
+    Same standing refusal as the signal arm. Auto-fitting a floor to its own
+    history is how a system talks itself into whatever the last few months
+    happened to reward.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "app/services/calibration.py"
+    text = source.read_text()
+    for token in (r"update_one", r"\$set", r"settings\.\w+\s*="):
+        assert not re.search(token, text), f"{token} — calibration must not write"

@@ -52,7 +52,7 @@ mobile/node_modules
 mobile/.expo
 
 # Developer docs & planning — not needed for the live application
-docs/
+
 PLAN.md
 logo-assets/
 

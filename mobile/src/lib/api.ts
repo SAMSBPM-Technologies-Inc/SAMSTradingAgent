@@ -95,6 +95,14 @@ export const researchApi = {
     api.post<import('../types').ResearchDossier>(`/research/${ticker}`, undefined, {
       timeout: 300_000,
     }),
+  /**
+   * The veto reading alone — whether research currently blocks a BUY on this
+   * ticker. Cheap enough for an order ticket to call on every open, which the
+   * full dossier is not: that response carries the whole evidence ledger.
+   * Never 404s; a ticker with no dossier truthfully blocks nothing.
+   */
+  veto: (ticker: string) =>
+    api.get<import('../types').ResearchVetoStatus>(`/research/${ticker}/veto`),
 }
 
 export const performanceApi = {

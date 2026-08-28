@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ShoppingCart, WifiOff } from 'lucide-react'
-import { tradingApi } from '../lib/api'
+import { ShieldAlert, ShoppingCart, WifiOff } from 'lucide-react'
+import { researchApi, tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
 import { useTradingSettings } from '../lib/trading-context'
-import type { AnalyzeResponse } from '../types'
+import type { AnalyzeResponse, ResearchVetoStatus } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 
 /**
@@ -128,6 +128,28 @@ export default function OrderTicket({
   // response rather than re-deriving a second opinion here.
   const riskVetoed = data.gate ? !data.gate.risk_passes_buy : false
 
+  // The research veto, which is a different thing from the risk gate in the
+  // one way that matters here: the risk gate restricts what the *agent* may
+  // pick, while the veto sits inside `_prepare_entry` and refuses a manual
+  // order too. Someone reading only the risk-gate wording would reasonably
+  // conclude they can always override, and for this guard they cannot.
+  //
+  // Fetched separately from `/analyze` rather than folded into it: that
+  // response is cached for 30 minutes and a veto read from it could describe
+  // a dossier that has since been rebuilt.
+  const [veto, setVeto] = useState<ResearchVetoStatus | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setVeto(null)
+    researchApi.veto(data.ticker)
+      .then(({ data: status }) => { if (!cancelled) setVeto(status) })
+      // A veto that cannot be read is not a veto. The server runs the real
+      // guard on submit; this banner is a courtesy, and failing to fetch it
+      // must not block the ticket.
+      .catch(() => { if (!cancelled) setVeto(null) })
+    return () => { cancelled = true }
+  }, [data.ticker])
+
   const rr = data.stop_loss != null && data.price_target != null && price > 0
     && price > data.stop_loss && data.price_target > price
     ? (data.price_target - price) / (price - data.stop_loss)
@@ -212,6 +234,41 @@ export default function OrderTicket({
         >
           The risk gate vetoes a BUY on this name. You can still place an order — the
           gate restricts what the agent may pick, not what you may.
+        </p>
+      )}
+
+      {/* Unlike the risk gate above, this one does refuse a hand-placed order.
+          The button stays enabled anyway: the server runs the guard at submit
+          and is the only authority on it, exactly as it is for quantity. A
+          client that disabled the button would be asserting a verdict it read
+          seconds ago and cannot refresh. */}
+      {connected && veto?.blocking && (
+        <p
+          className="mt-2 flex items-start gap-2 rounded-md px-2.5 py-2 text-[11px] leading-snug"
+          style={{ background: 'var(--tint-sell)', color: 'var(--accent-sell)' }}
+        >
+          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+          <span>
+            {veto.reason} This guard applies to your orders as well as the
+            agent's, so this order will be refused. Closing a position is
+            unaffected.
+          </span>
+        </p>
+      )}
+
+      {/* The veto is off by default, so on most deployments this is the state
+          that actually occurs — and it is worth showing, because it is the
+          only evidence available for deciding whether to switch the veto on. */}
+      {connected && veto?.would_block && !veto.blocking && (
+        <p
+          className="mt-2 flex items-start gap-2 rounded-md px-2.5 py-2 text-[11px] leading-snug"
+          style={{ background: 'var(--tint-hold)', color: 'var(--accent-hold)' }}
+        >
+          <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+          <span>
+            Deep research reads this name badly enough to refuse the entry, but
+            the research veto is switched off — nothing is stopping this order.
+          </span>
         </p>
       )}
 

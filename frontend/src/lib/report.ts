@@ -45,7 +45,7 @@ export function buildExportText(data: AnalyzeResponse): string {
     'VERDICT',
     `  Signal: ${data.signal}   Score: ${Math.round(data.score * 100)}/100   Confidence: ${pct(data.confidence)}`,
   )
-  if (data.conviction) lines.push(`  Conviction: ${data.conviction}`)
+  if (data.conviction) lines.push(`  Analyst conviction: ${data.conviction}`)
   if (data.current_price != null) {
     const chg = data.day_change_pct != null
       ? `  (${data.day_change_pct >= 0 ? '+' : ''}${data.day_change_pct.toFixed(2)}% today)`
@@ -286,7 +286,7 @@ export async function downloadPdf(data: AnalyzeResponse) {
   const metrics = [
     ['Score', `${Math.round(data.score * 100)}/100`],
     ['Confidence', pct(data.confidence)],
-    data.conviction ? ['Conviction', data.conviction] : null,
+    data.conviction ? ['Analyst conviction', data.conviction] : null,
     data.risk ? ['Risk', `${data.risk.risk_level} ${data.risk.risk_score.toFixed(1)}/10`] : null,
     data.price_target != null ? ['Price Target', usd(data.price_target)] : null,
     data.stop_loss != null ? ['Stop Loss', usd(data.stop_loss)] : null,
