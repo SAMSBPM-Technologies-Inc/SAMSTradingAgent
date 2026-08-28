@@ -8,7 +8,7 @@ import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
 import SettingsPage from './pages/SettingsPage'
 import GuidePage from './pages/GuidePage'
-import PositionsPage from './pages/PositionsPage'
+import AnalysisPage from './pages/AnalysisPage'
 import SearchPage from './pages/SearchPage'
 import CalibrationPage from './pages/CalibrationPage'
 import { ToastProvider } from './lib/toast-context'
@@ -88,15 +88,12 @@ function AppRoutes() {
       {/* The three destinations of the 1.7 IA. `/holdings`, `/orders` and
           `/profile` still resolve — they redirect here, so bookmarks and the
           mobile app's older deep links keep working. */}
-      <Route
-        path="/positions"
-        element={
-          <ProtectedRoute>
-            <PositionsPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route path="/holdings" element={<Navigate to="/positions" replace />} />
+      {/* Positions merged into the Trade dashboard, which now renders the same
+          component as its centre column. The old paths still resolve so
+          bookmarks and the mobile app's deep links keep working — the same
+          courtesy `/holdings` and `/orders` were already given. */}
+      <Route path="/positions" element={<Navigate to="/" replace />} />
+      <Route path="/holdings" element={<Navigate to="/" replace />} />
       {/* Declared before /ticker/:symbol so the mobile "Analyze" tab resolves
           to the lookup screen rather than being read as a symbol named
           "search" — which is exactly what it used to do. */}
@@ -108,11 +105,24 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      {/* `/ticker/:symbol` is the dashboard with the analysis open over it, so
+          a selection stays deep-linkable and Back closes it. `/analysis/:symbol`
+          is the same report with no dashboard behind it — what the overlay's
+          "New window" control opens, and the only form worth having two of on
+          screen at once. */}
       <Route
         path="/ticker/:symbol"
         element={
           <ProtectedRoute>
             <TradePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/analysis/:symbol"
+        element={
+          <ProtectedRoute>
+            <AnalysisPage />
           </ProtectedRoute>
         }
       />
@@ -132,7 +142,7 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
-      <Route path="/orders" element={<Navigate to="/positions" replace />} />
+      <Route path="/orders" element={<Navigate to="/" replace />} />
       <Route
         path="/settings"
         element={

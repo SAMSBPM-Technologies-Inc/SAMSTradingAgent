@@ -26,7 +26,13 @@ import LoadingSpinner from './LoadingSpinner'
 /** Poll while a restart is in flight; IBC login takes ~2 minutes. */
 const RECOVERY_POLL_MS = 10_000
 
-export default function BrokerPanel() {
+/**
+ * `compact` is the dashboard's right-rail box: status, identity, and the two
+ * recovery buttons, without the card chrome or the explanatory paragraph. The
+ * full panel keeps those — on Settings there is room to explain why orders are
+ * being refused, and in a 296px rail there is not.
+ */
+export default function BrokerPanel({ compact = false }: { compact?: boolean } = {}) {
   const { toast } = useToast()
   const [status, setStatus] = useState<BrokerStatus | null>(null)
   const [busy, setBusy] = useState<'reconnect' | 'restart' | null>(null)
@@ -115,7 +121,7 @@ export default function BrokerPanel() {
 
   if (!status) {
     return (
-      <div className="card flex items-center justify-center h-24">
+      <div className={`flex items-center justify-center ${compact ? 'h-12' : 'card h-24'}`}>
         <LoadingSpinner size="sm" />
       </div>
     )
@@ -124,7 +130,7 @@ export default function BrokerPanel() {
   const connected = status.connected
 
   return (
-    <div className="card flex flex-col gap-4">
+    <div className={`flex flex-col ${compact ? 'gap-2.5' : 'card gap-4'}`}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2.5">
           {connected
@@ -151,7 +157,7 @@ export default function BrokerPanel() {
         </button>
       </div>
 
-      {!connected && (
+      {!connected && !compact && (
         <p className="text-xs text-[var(--color-fg-muted)] leading-relaxed">
           Orders are being refused while this is down — nothing is silently lost.
           Most Monday-morning outages are IBKR&rsquo;s weekend maintenance leaving the

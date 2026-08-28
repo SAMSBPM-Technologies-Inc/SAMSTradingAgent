@@ -31,6 +31,7 @@ const SECTIONS = [
   { href: '#capabilities', label: 'Capabilities' },
   { href: '#discipline', label: 'Discipline' },
   { href: '#proof', label: 'Proof' },
+  { href: '#faq', label: 'Questions' },
   { href: '#contact', label: 'Contact' },
 ]
 
@@ -462,6 +463,123 @@ function Proof() {
   )
 }
 
+// ── Questions ─────────────────────────────────────────────────────────────────
+
+/* The questions people actually ask before trusting software with a brokerage
+ * account, answered here rather than in a reply to the contact form.
+ *
+ * Two rules govern what may go in this list. Every answer has to be true of
+ * the shipped system today — where the honest answer is "nothing yet", it says
+ * so, because a FAQ is the first place a reader checks whether the rest of the
+ * page was written carefully. And every answer names the limit alongside the
+ * capability: the position caps are listed with the two ways a loss can still
+ * exceed them, since a reader who finds that out later stops believing the
+ * first half too.
+ */
+const FAQS: [string, string][] = [
+  [
+    'Will it trade my money without asking me?',
+    'Only if you set it to. Autonomy is a three-position dial and a new account starts on manual, where the agent runs every guard, sizes the order and picks the bracket levels, then queues it as a proposal for you to accept or decline. Semi-auto acts alone only at or above a conviction line you choose. Fully unattended is opt-in, and a live-money order asks you to type the ticker back before it will send.',
+  ],
+  [
+    'What has it actually returned?',
+    'Nothing, in the sense that matters: no real money has ever been traded through it. Production has run against a paper brokerage session since August 2026, and that record tests plumbing — that orders route, brackets attach, fills reconcile, exits settle, commissions accrue — not whether the signals are any good. Paper fills are optimistic and the sample is weeks long. Any performance figure quoted from it would be misleading, so none is quoted.',
+  ],
+  [
+    'Do you hold my money?',
+    'No. The platform never takes custody of cash or securities. Orders route to your own Interactive Brokers account, under your own credentials, and your positions stay yours whatever happens to us.',
+  ],
+  [
+    'What happens to my positions if your servers go down?',
+    'They keep their protection. Stops and targets are placed at the broker, not held in our application, so they survive this service crashing, the gateway dropping or the host going offline. What stops is new orders and signal-driven exits — the agent does not sell on its own outside a sell signal, and a sell signal needs the service running. That asymmetry is why nothing is allowed to open without a bracket already on it.',
+  ],
+  [
+    'Do you have my brokerage password?',
+    'Encrypted, yes — it has to be, for the agent to hold a session with your broker. It is stored encrypted at rest with a key that lives only in the server environment, decrypted in memory to authenticate, and never sent to any model or third party. It is a real credential in our custody and worth weighing as one.',
+  ],
+  [
+    'Can it lose more than I told it to risk?',
+    'The limits are hard: a cap per position measured on cost basis against equity frozen at entry, a cap on open positions, a daily realised-loss kill switch, a cash reserve held back from sizing, and margin off, so it cannot buy what the account cannot pay for. Three honest caveats. The kill switch counts realised losses, so an unrealised drawdown does not trip it. A stop fills at the next available price, not at the stop price, so an overnight gap can exceed the intended loss. And there are no sector or correlation limits yet, so several positions can turn out to be one bet.',
+  ],
+  [
+    'Why did it not buy something I expected it to?',
+    'Every refusal records its reason, and you can read the arithmetic: each factor’s sub-score, the weight it carried, the points it contributed, and which threshold the name failed. Verdicts are also deliberately slow to change — a new one publishes only after consecutive fresh evaluations agree and the standing call has served its minimum dwell — so a borderline name will not flip at you all afternoon.',
+  ],
+  [
+    'Why will it sell straight away but wait to buy?',
+    'Because delaying an exit costs money and delaying an entry costs an opportunity, and those are not the same price. Confirmation, dwell and the risk gate all sit on the entry path. Sells are exempt from every one of them, and no brake will be added to the exit path to make the two look symmetrical.',
+  ],
+  [
+    'What do I need to run it?',
+    'An Interactive Brokers account and IB Gateway; Alpaca is supported as an alternative venue. Automated order placement is limited to US-listed securities — Canadian-listed tickers are refused at the first guard, because API-based automated trading of them is not permitted under CIRO rules. You can watch and analyse any name the data providers cover without connecting a broker at all.',
+  ],
+  [
+    'Can I score names my own way?',
+    'Yes. The six factor weights are yours to set per account, and your weighting is applied with the same thresholds and the same hysteresis the engine uses, so your view and the stored verdict cannot quietly diverge. What you cannot do is turn off a risk guard from the interface.',
+  ],
+  [
+    'Is my data used to train models?',
+    'No. What reaches a model is market data — prices, indicators, filings figures, public headlines. Your identity, your positions, your account numbers and your credentials are not in any prompt. We reply to the address you give us and use it for nothing else.',
+  ],
+  [
+    'How do I get an account, and what does it cost?',
+    'By asking. There is no self-serve signup: accounts are provisioned by hand, because the product is early and we would rather know who is running it. Pricing is not set — if that matters to your decision, say so in your message and you will get a straight answer rather than a placeholder.',
+  ],
+]
+
+function Faq() {
+  return (
+    <Section
+      id="faq"
+      index="05"
+      kicker="Questions"
+      title="What people ask before connecting a broker."
+      lede="Answered as they would be in a reply, including where the answer is that something does not exist yet."
+    >
+      <div className="home-faq border-t home-hr">
+        {FAQS.map(([question, answer], i) => (
+          <details key={question} className="group border-b home-hr" open={i === 0}>
+            <summary
+              /* Flex on a phone so the question and the sign share a line; the
+                 twelve-column grid only applies where the gutter number exists. */
+              className="flex list-none items-baseline justify-between gap-4 py-6
+                         lg:grid lg:grid-cols-12 lg:gap-10
+                         rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/50"
+            >
+              <span className="num hidden text-[11px] font-semibold text-brand-500 lg:col-span-1 lg:block">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <h3 className="font-archivo text-[15px] font-semibold leading-snug lg:col-span-9">
+                {question}
+              </h3>
+              <span
+                aria-hidden="true"
+                className="faq-sign num justify-self-start text-[18px] font-normal leading-none
+                           text-[var(--color-fg-muted)] lg:col-span-2 lg:justify-self-end"
+              >
+                +
+              </span>
+            </summary>
+            <div className="grid gap-3 pb-7 lg:grid-cols-12 lg:gap-10">
+              <p className="max-w-2xl text-[13.5px] leading-relaxed text-[var(--color-fg-muted)] lg:col-span-9 lg:col-start-2">
+                {answer}
+              </p>
+            </div>
+          </details>
+        ))}
+      </div>
+
+      <p className="mt-10 border-t home-hr pt-6 text-[13.5px] leading-relaxed text-[var(--color-fg-muted)]">
+        Something not here?{' '}
+        <a href="#contact" className="text-brand-500 underline-offset-4 hover:underline">
+          Ask it directly
+        </a>
+        {' '}— the list grows from what gets asked.
+      </p>
+    </Section>
+  )
+}
+
 // ── Contact ───────────────────────────────────────────────────────────────────
 
 function ContactForm() {
@@ -580,7 +698,7 @@ function Contact() {
   return (
     <Section
       id="contact"
-      index="05"
+      index="06"
       kicker="Contact"
       title="Ask a question, or request an account."
       lede="There is no self-serve signup — accounts are provisioned by hand. Tell us what you trade and what you want the agent to do, and we will come back to you."
@@ -663,6 +781,8 @@ export default function HomePage() {
         <Capabilities />
         <Discipline />
         <Proof />
+        <div className="border-t home-hr" />
+        <Faq />
         <div className="border-t home-hr" />
         <Contact />
       </main>

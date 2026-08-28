@@ -19,6 +19,7 @@ import type {
 import { relativeTime } from '../../lib/format'
 import { useNow } from '../../lib/use-poll'
 import { downloadPdf, downloadTxt, emailReport } from '../../lib/report'
+import { useToast } from '../../lib/toast-context'
 import { SOURCE_DESCRIPTION, tradeSource } from '../../lib/trade-source'
 import { Disclaimer } from '../Layout'
 import ConvictionBadge from '../ConvictionBadge'
@@ -317,6 +318,24 @@ export function TickerHeader({
 }: Omit<TickerDetailProps, 'item'>) {
   const chg = data.day_change_pct
   const tone = whyTone(data.signal)
+  const { toast } = useToast()
+
+  /**
+   * Run an export and report a failure.
+   *
+   * These used to be bare calls in the menu handler, so the promise floated:
+   * if `import('jspdf')` never resolved — a stale chunk hash after a deploy is
+   * the usual way — the click did nothing at all and left no trace. A silent
+   * no-op on a button is indistinguishable from a broken app.
+   */
+  const runExport = async (fn: () => void | Promise<void>, what: string) => {
+    try {
+      await fn()
+    } catch (err) {
+      console.error(`${what} export failed`, err)
+      toast(`Could not produce the ${what} export.`, 'error')
+    }
+  }
 
   // Ticks so the age below stays true while the tab sits open. The threshold
   // is the server's own `_CACHE_TTL_MINUTES`: past it, `/analyze` would rebuild
@@ -407,8 +426,15 @@ export function TickerHeader({
           >
             {(close) => (
               <>
-                <MenuItem onClick={() => { close(); downloadPdf(data) }}>Download PDF</MenuItem>
-                <MenuItem onClick={() => { close(); downloadTxt(data) }}>Download .txt</MenuItem>
+                {/* Both are fallible — the PDF lazily imports jsPDF, so a
+                    chunk that fails to load surfaces here rather than as a
+                    click that silently does nothing. */}
+                <MenuItem onClick={() => { close(); void runExport(() => downloadPdf(data), 'PDF') }}>
+                  Download PDF
+                </MenuItem>
+                <MenuItem onClick={() => { close(); void runExport(() => downloadTxt(data), '.txt') }}>
+                  Download .txt
+                </MenuItem>
                 <MenuItem onClick={() => { close(); emailReport(data) }}>
                   <span className="flex items-center gap-2.5">
                     <Mail className="h-3.5 w-3.5 text-[var(--color-fg-muted)]" aria-hidden="true" />

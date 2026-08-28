@@ -388,6 +388,35 @@ html:has(.home-scroll) {
   to   { transform: scaleX(1); }
 }
 
+/* FAQ disclosures. Native <details>, so the open/close behaviour, the keyboard
+   handling and find-in-page all belong to the browser rather than to state we
+   would have to keep correct. Collapsed rows still show their question: a
+   reader scanning for theirs never has to open one to find it. */
+.home-faq summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.home-faq summary::-webkit-details-marker {
+  display: none;
+}
+
+/* One glyph for both states — a plus that becomes a cross — so the control
+   needs no second asset and no icon import. */
+.home-faq .faq-sign {
+  transform-origin: center;
+}
+
+.home-faq details[open] .faq-sign {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .home-faq .faq-sign {
+    transition: transform 220ms cubic-bezier(0.22, 0.8, 0.24, 1);
+  }
+}
+
 /* Decoration is never load-bearing: with motion off every element is already
    in its final state. */
 @media (prefers-reduced-motion: reduce) {

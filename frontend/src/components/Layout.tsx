@@ -3,7 +3,6 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   BarChart2,
   BookOpen,
-  Briefcase,
   LineChart,
   LogOut,
   MoreHorizontal,
@@ -34,7 +33,6 @@ import type { TradingMode } from '../types'
 /** The three destinations. */
 const primaryNav = [
   { to: '/', label: 'Trade', icon: LineChart, exact: true },
-  { to: '/positions', label: 'Positions', icon: Briefcase, exact: false },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, exact: false },
 ]
 

@@ -14,6 +14,179 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.11.0] — 2026-08-27
+
+The questions people ask before connecting a broker.
+
+**A questions section on the landing page**, between Proof and Contact. Twelve
+of them, drawn from what a prospective user, a reviewer and an engineer
+actually ask when told that software will place orders in their brokerage
+account: will it trade without asking me, what has it actually returned, do you
+hold my money, what happens to my positions if your servers go down, do you
+have my brokerage password, can it lose more than I set, why did it not buy
+what I expected, why does it sell straight away but wait to buy, what do I need
+to run it, can I score names my own way, is my data used to train models, and
+how do I get an account.
+
+Two rules govern what is allowed in that list, and they are written above it in
+the source so the next person to add a row inherits them. **Every answer has to
+be true of the shipped system today** — so "what has it actually returned?" says
+that no real money has ever been traded through it, that the paper record tests
+plumbing rather than signals, and that no performance figure will be quoted from
+it. A FAQ is the first place a reader checks whether the rest of the page was
+written carefully, and one confident answer that turns out to be aspirational
+costs the whole page. **And every answer names its limit next to its
+capability**: the position caps are listed together with the three ways a loss
+can still exceed them — a realised-only kill switch, a stop that fills at the
+gap rather than at the stop, and the absence of sector or correlation limits.
+A reader who discovers that later stops believing the first half too.
+
+Built as native `<details>` rows, so the open/close behaviour, the keyboard
+handling and find-in-page belong to the browser rather than to state we would
+have to keep correct. Questions stay visible when collapsed — a reader scanning
+for theirs never has to open one to find it — the first is open on arrival so
+the section reads as content rather than as a row of closed doors, and the one
+glyph is a plus that rotates into a cross, which needs no icon import and no
+second asset. It sits on the same numbered grid and hairlines as every other
+section; the Discipline band is still the only filled block on the page.
+
+**A due-diligence record, `docs/10-due-diligence.md`.** A twelve-section
+institutional questionnaire — company, methodology, backtesting, live
+performance, research architecture, data, risk, extreme events, security,
+operations, compliance, references — answered against the code rather than
+against intent, plus thirty-five questions it did not ask and a prioritised
+register of every gap. Answers carry one of three markers: verified against a
+named file, to-confirm as a business fact not recorded in this repository, or
+gap. There are forty-one gaps. The FAQ above is drawn from its customer
+section, which is why the two agree about what does not exist.
+
+### Changed
+
+**Trade and Positions are one screen, and the landing page no longer analyses
+a ticker nobody asked for.** `/` used to pick the first name in your watchlist
+and run `/analyze` on it. That made the slowest request on the screen depend on
+the fastest: the analysis could not start until the watchlist had returned a
+name, and on a cache miss `/analyze` runs the whole pipeline — yfinance,
+Finnhub, FRED, fundamentals, alternative data — before it answers. Two
+sequential round-trips, the second unbounded, for a verdict about a ticker
+chosen by sort order.
+
+The centre column is now the dashboard: account tiles, **agent positions**,
+open positions, closed trades and recent orders. Every panel on it is a cheap
+Mongo or broker read, and they all start in parallel at first paint. No
+analysis runs until you pick a name. The screen is busier and it arrives
+sooner — those were never in tension, the eager `/analyze` was the whole
+problem.
+
+**Picking a ticker opens the analysis over the dashboard rather than replacing
+it.** Selecting a name used to destroy the list you were working through and
+rebuild it on the way back. The overlay is still driven by the route, so
+`/ticker/AAPL` deep-links to it and Back closes it, and its ⧉ control opens
+`/analysis/AAPL` — the same report with no dashboard around it — in a new
+window, for reading two names side by side. The order ticket moved into the
+overlay with the analysis, because a ticket in the rail would sit behind the
+sheet covering the screen.
+
+**Agent positions are visible.** Entries the agent placed unattended now have
+their own table — ticker, quantity, entry, stop, target, signal score, when it
+opened. Until now three filled agent orders appeared nowhere on any screen
+except as the number `3` beside the word "Open", because the only table that
+listed individual trades listed closed ones.
+
+**IB Gateway status is a small box in the right rail**, not a full-width card
+above the positions. It is a standing status you glance at, not a result
+competing with the numbers.
+
+**The portfolio is fetched once per screen, not once per consumer.** The
+dashboard body, the watchlist rail's held-badges and the analysis overlay all
+need the same holdings and trade records, and each was reading them for itself
+— so `/trading/holdings`, `/trading/positions` and `/trading/orders` were every
+one requested twice on a screen whose complaint was that it took too long.
+`PortfolioProvider` owns them now. It is mounted on the Trade screen rather
+than at the app root on purpose: hoisted to the root it would fetch four broker
+endpoints behind Settings, Guide and Calibration, which need none of them,
+trading a duplicate for a wider waste. Balances stay in `trading-context`,
+because the header's account strip genuinely does need them everywhere.
+
+The poll stayed narrow with it. Proposals and the order log are re-read every
+minute, because a proposal appearing is the one thing on the screen waiting on
+you; holdings, trade records and realised performance are not polled, because
+they change when you act and every path that acts reloads them. Polling the
+whole provider would have tripled the screen's standing request rate while
+appearing to be a tidy-up.
+
+### Fixed
+
+**The exported report is the whole analysis.** It carried the AI narrative —
+thesis, bull, bear, catalysts — and none of the numbers the verdict was
+computed from, so a reader could not check the conclusion against anything.
+Text and PDF now both carry the current price, the risk assessment, the signal
+gate with its thresholds, and the six-factor score breakdown with each factor's
+sub-score, weight and points. Where the engine reports `attributable: false` —
+the XGBoost path, where the weights did not produce the score — the report says
+so instead of printing a decomposition, the same refusal `explain_score` makes
+on the backend.
+
+**Downloads that silently did nothing.** The save anchor was never attached to
+the document and the object URL was revoked on the next line, so Firefox
+ignored the click and other browsers could invalidate the URL before the
+download had read from it. Both exports now go through one helper that attaches
+the anchor and defers the revoke. A failed export raises a toast rather than
+leaving a button that appears to do nothing — the PDF path lazily imports
+jsPDF, and a chunk that fails to load after a deploy is exactly the case that
+used to vanish without trace. The emailed report is capped at 1,800 characters
+with the cut marked, because a `mailto:` body past roughly 2,000 is silently
+dropped rather than truncated.
+
+**Realised trading performance no longer vanishes when every trade is
+unreconciled.** The Performance page gated that entire section — the three
+source blocks and the closed-trades table — on holding a trade in `CLOSED`,
+`PENDING`, `FILLED` or `PARTIAL`. An `UNRECONCILED` trade is none of those, so
+an account whose orders had all settled there saw no realised performance at
+all, while `/performance/trades` was returning those very rows in
+`recent_closed` — where they are included on purpose, so that a trade the
+broker can no longer account for stays visible rather than quietly ceasing to
+exist. The per-source block already treated them as activity; only the outer
+gate had not. It now counts them too.
+
+Proposals remain excluded, and that is the point rather than an omission: a
+`PROPOSED` order commits no money and has no realised result to report. Its
+home is the queue on `/orders`.
+
+### Known gaps
+
+- The questions section makes the landing page substantially longer on a
+  phone, where twelve collapsed rows sit between the proof section and the
+  contact form. The nav anchor jumps past them; a reader scrolling does not.
+- Its answers are prose in the page source, not read from anywhere. Where one
+  restates a number the engine owns — position caps, confirmation counts — the
+  two can drift, and nothing fails if they do. The section deliberately
+  describes behaviour rather than quoting figures for this reason, but the
+  boundary is a matter of care rather than of enforcement.
+- `docs/10-due-diligence.md` has twelve **to-confirm** entries — legal name,
+  incorporation, licensing, jurisdictions, vendor commercial terms, pricing —
+  that only the founder can close. Until they are closed the document is not
+  ready to send.
+- Top of the gap register, and unchanged by this release: there are no database
+  backups, and the test suite does not run in CI. Together they are under two
+  days of work.
+- Realised performance is still empty for an account whose agent has only ever
+  *proposed*. That is the correct reading — nothing was realised — but a user
+  in `MANUAL` mode looking for evidence the agent is working has to know to
+  check `/orders`, and no text on the Performance page tells them so.
+- Mobile has no realised-trading section at all: the three source blocks and
+  the closed-trades table are web-only, so this fix has no mobile counterpart
+  and the two clients are not at parity on this screen.
+- The whole restructure is verified by `tsc -b`, `eslint`, a production build
+  and a served bundle. It has **not** been exercised in a browser: the Chrome
+  extension refuses every navigation on this machine, so the overlay's focus
+  trap, the scroll lock and the new-window control are unclicked.
+- Mobile still has the old two-screen shape. The Trade/Positions merge, the
+  analysis overlay and the agent-positions table are web-only, so the clients
+  are further apart than before rather than closer.
+
+---
+
 ## [1.10.1] — 2026-08-27
 
 A picture of the thing, and a floor under the sign-in page.

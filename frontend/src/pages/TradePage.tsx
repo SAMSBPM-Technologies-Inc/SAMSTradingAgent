@@ -1,21 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { AlertCircle, PanelLeft, X } from 'lucide-react'
-import { analyzeApi, tradingApi, watchlistApi } from '../lib/api'
+import { PanelLeft, X } from 'lucide-react'
+import { analyzeApi, watchlistApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
 import { usePoll } from '../lib/use-poll'
+import { PortfolioProvider, usePortfolio } from '../lib/portfolio-context'
 import type {
   AnalyzeResponse,
-  Holding,
-  Proposal,
-  TradeRecord,
   WatchlistItem,
   WatchlistSetupCounts,
 } from '../types'
 import Layout from '../components/Layout'
-import LoadingSpinner from '../components/LoadingSpinner'
 import WatchlistRail from '../components/trade/WatchlistRail'
-import { TickerAnalysis, TickerHeader } from '../components/trade/TickerDetail'
+import AnalysisOverlay from '../components/trade/AnalysisOverlay'
+import BrokerPanel from '../components/BrokerPanel'
+import PositionsDashboard from '../components/PositionsDashboard'
 import { ActivityPanel, ApprovalsPanel, OrderPanel } from '../components/trade/TradeSidebar'
 
 /**
@@ -35,26 +34,21 @@ import { ActivityPanel, ApprovalsPanel, OrderPanel } from '../components/trade/T
 
 const EMPTY_SETUPS: WatchlistSetupCounts = { entry: 0, exit_alert: 0, neutral: 0, pending: 0 }
 
-/** Broker positions are the truth about what is held; `trades` is our record of why. */
-function useHeld() {
-  const [holdings, setHoldings] = useState<Holding[]>([])
-  const [positions, setPositions] = useState<TradeRecord[]>([])
-
-  const load = useCallback(async () => {
-    const [h, p] = await Promise.all([
-      tradingApi.getHoldings().catch(() => null),
-      tradingApi.getPositions().catch(() => null),
-    ])
-    setHoldings(h?.data.connected ? h.data.holdings : [])
-    setPositions(p?.data ?? [])
-  }, [])
-
-  useEffect(() => { load() }, [load])
-
-  return { holdings, positions, reloadHeld: load }
+/**
+ * The provider is mounted here, not at the app root: it fetches four broker and
+ * trade endpoints, and every screen that is not this one needs none of them.
+ * Scoping it to Trade is what makes a single copy cheaper than two, rather than
+ * just moving the waste somewhere less visible.
+ */
+export default function TradePage() {
+  return (
+    <PortfolioProvider>
+      <TradeScreen />
+    </PortfolioProvider>
+  )
 }
 
-export default function TradePage() {
+function TradeScreen() {
   const { symbol } = useParams<{ symbol: string }>()
   const navigate = useNavigate()
   const { toast, toastWithUndo } = useToast()
@@ -65,20 +59,21 @@ export default function TradePage() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
   const [data, setData] = useState<AnalyzeResponse | null>(null)
-  // Starts true: on a deep link the fetch is already in flight by first paint,
-  // and rendering "Nothing selected" for one frame before it lands reads as a
-  // broken screen.
-  const [analysisLoading, setAnalysisLoading] = useState(true)
+  // True only when a deep link means the fetch is already in flight at first
+  // paint. On `/` there is nothing to load, and starting true would put a
+  // spinner inside an overlay that is not even open.
+  const [analysisLoading, setAnalysisLoading] = useState(!!symbol)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [proposals, setProposals] = useState<Proposal[]>([])
-  const [orders, setOrders] = useState<TradeRecord[]>([])
 
   // Below lg the three columns cannot coexist; the rail becomes a drawer.
   const [railOpen, setRailOpen] = useState(false)
 
-  const { holdings, positions, reloadHeld } = useHeld()
+  // Holdings, positions, orders and proposals come from the one provider the
+  // dashboard body also reads, so the rail's held-badges and the tables below
+  // can never be drawn from two different reads of the same account.
+  const { holdings, positions, orders, proposals, reload } = usePortfolio()
 
   // ── Watchlist ─────────────────────────────────────────────────────────────
   const loadWatchlist = useCallback(async (background = false) => {
@@ -105,28 +100,20 @@ export default function TradePage() {
   // deliberately excluded (see usePoll).
   usePoll(() => loadWatchlist(true), 60_000)
 
-  // ── Proposals + order history ─────────────────────────────────────────────
-  const loadAgent = useCallback(async () => {
-    const [p, o] = await Promise.all([
-      tradingApi.getProposals().catch(() => null),
-      tradingApi.getOrders().catch(() => null),
-    ])
-    setProposals(p?.data ?? [])
-    setOrders(o?.data ?? [])
-  }, [])
-
-  useEffect(() => { loadAgent() }, [loadAgent])
-
-  // A proposal that appears while the tab is open should not need a reload to
-  // be seen — it is the one thing on this screen that is waiting on the user.
-  usePoll(loadAgent, 60_000)
 
   // ── Selection ─────────────────────────────────────────────────────────────
   //
-  // A route symbol always wins. With no route symbol, fall back to the first
-  // watched ticker — but only to *display*, without rewriting the URL, so that
-  // "/" stays a stable address rather than bouncing to whatever sorted first.
-  const selected = symbol?.toUpperCase() ?? items[0]?.ticker ?? null
+  // The route, and nothing else. `/` used to fall back to `items[0].ticker`,
+  // which made the landing page's slowest request depend on its fastest one:
+  // `/analyze` could not start until `/watchlist` had returned a name, and on a
+  // cache miss `/analyze` runs the whole pipeline — yfinance, Finnhub, FRED,
+  // fundamentals — before it answers. Two sequential round-trips, the second
+  // unbounded, to analyse a ticker nobody asked for.
+  //
+  // Now `/` renders the dashboard, whose panels are all cheap lookups that
+  // start in parallel at first paint, and no analysis runs until a name is
+  // actually selected.
+  const selected = symbol?.toUpperCase() ?? null
 
   const loadAnalysis = useCallback(async (ticker: string, force: boolean) => {
     if (force) setRefreshing(true)
@@ -153,14 +140,16 @@ export default function TradePage() {
     loadAnalysis(selected, false)
   }, [selected, loadAnalysis])
 
-  // Nothing to select and the list has finished loading — an empty account,
-  // not a pending one. Resolved separately so it cannot retrigger the fetch.
+  // No selection is the resting state of `/` now, not an edge case: clear the
+  // previous name's analysis so reopening the overlay cannot flash stale data
+  // for the ticker you looked at before.
   useEffect(() => {
-    if (!selected && !listLoading) {
+    if (!selected) {
       setData(null)
+      setError(null)
       setAnalysisLoading(false)
     }
-  }, [selected, listLoading])
+  }, [selected])
 
   // ── Derived ───────────────────────────────────────────────────────────────
   const heldTickers = useMemo(
@@ -228,28 +217,32 @@ export default function TradePage() {
       .catch(() => toast(`Could not add ${selected} to your watchlist.`, 'error'))
   }
 
-  // The verdict and the evidence behind it are separate slots so the layout can
-  // put the order ticket between them on mobile. Neither is rendered twice.
-  const header = data && (
-    <TickerHeader
+  const onAgentChanged = () => { void reload() }
+
+  // ── Analysis overlay ──────────────────────────────────────────────────────
+  // Everything the dialog needs, assembled once. It is mounted only while a
+  // symbol is in the route, so nothing here runs on the dashboard.
+  const overlay = selected && (
+    <AnalysisOverlay
+      symbol={selected}
       data={data}
+      item={selectedItem}
       holding={selectedHolding}
       position={selectedPosition}
       watched={watched}
+      loading={analysisLoading}
       refreshing={refreshing}
-      onRefresh={() => selected && loadAnalysis(selected, true)}
+      error={error}
+      onRefresh={() => loadAnalysis(selected, true)}
       onWatch={watchSelected}
-      onUnwatch={() => selected && removeFromWatchlist(selected)}
+      onUnwatch={() => removeFromWatchlist(selected)}
+      onRetry={() => loadAnalysis(selected, false)}
+      // Back rather than a push, so opening and closing five names does not
+      // bury the dashboard under five history entries.
+      onClose={() => navigate('/')}
+      footer={<OrderPanel data={data} onOrderPlaced={onAgentChanged} />}
     />
   )
-
-  const pending = analysisLoading ? (
-    <div className="flex items-center justify-center py-24">
-      <LoadingSpinner size="lg" />
-    </div>
-  ) : error ? (
-    <ErrorState message={error} onRetry={() => selected && loadAnalysis(selected, false)} />
-  ) : !data ? <EmptyState /> : null
 
   const rail = (
     <WatchlistRail
@@ -265,7 +258,6 @@ export default function TradePage() {
     />
   )
 
-  const onAgentChanged = () => { loadAgent(); reloadHeld() }
 
   /**
    * One tree, two layouts.
@@ -353,17 +345,13 @@ export default function TradePage() {
           />
         )}
 
-        {/* ── Verdict, then evidence ───────────────────────────────────────
-            `contents` below lg dissolves this wrapper so the two halves become
-            flex items of the column and `order` can put the ticket between
-            them. At lg it is the centre grid column, scrolling as one. */}
-        <div className="contents lg:block lg:min-h-0 lg:overflow-y-auto">
-          <div className="order-2 lg:order-none">{pending ?? header}</div>
-          {data && (
-            <div className="order-4 lg:order-none">
-              <TickerAnalysis data={data} item={selectedItem} />
-            </div>
-          )}
+        {/* ── Dashboard ─────────────────────────────────────────────────────
+            The centre column is the dashboard now, not one ticker's analysis.
+            It is `PositionsPage` itself rather than a second rendering of the
+            same tables: two copies would have drifted, and the close-position
+            undo window is not worth maintaining twice. */}
+        <div className="order-2 min-w-0 px-3 py-3 lg:order-none lg:min-h-0 lg:overflow-y-auto lg:px-4">
+          <PositionsDashboard />
         </div>
 
         {/* ── Ticket, approvals, activity ────────────────────────────────────
@@ -377,7 +365,17 @@ export default function TradePage() {
         >
           <div className="order-3 border-b border-[var(--color-border)]
                           bg-[var(--color-surface)] lg:order-none lg:border-b-0">
-            <OrderPanel data={data} onOrderPlaced={onAgentChanged} />
+            {/* Broker session first: when it is down every action on this
+                screen is refused, so it is the first thing worth knowing. It
+                sits here rather than across the top of the dashboard because
+                it is a standing status, not a result — a small box you glance
+                at, not a banner competing with the positions. */}
+            <div className="border-b border-[var(--color-border)] px-3 py-2.5">
+              <BrokerPanel compact />
+            </div>
+            {/* The order ticket moved into the analysis overlay: it is about
+                the name being read, and a ticket in this rail would sit behind
+                the sheet that is covering the screen. */}
             <ApprovalsPanel proposals={proposals} onProposalsChanged={onAgentChanged} />
           </div>
 
@@ -387,33 +385,8 @@ export default function TradePage() {
           </div>
         </div>
       </div>
+
+      {overlay}
     </Layout>
-  )
-}
-
-function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="flex flex-col items-center gap-4 px-6 py-20 text-center">
-      <AlertCircle className="h-9 w-9 text-[var(--accent-sell)]" aria-hidden="true" />
-      <p className="text-sm text-[var(--color-fg-muted)]">{message}</p>
-      <button onClick={onRetry} className="btn-secondary">Try again</button>
-    </div>
-  )
-}
-
-function EmptyState() {
-  return (
-    <div className="flex flex-col items-center justify-center gap-2 px-6 py-24 text-center">
-      <h2
-        className="text-lg text-[var(--color-fg)]"
-        style={{ fontFamily: 'Fraunces, Georgia, serif' }}
-      >
-        Nothing selected
-      </h2>
-      <p className="max-w-xs text-sm text-[var(--color-fg-muted)]">
-        Add a ticker to your watchlist, or press <kbd className="num">⌘K</kbd> to look one up —
-        you don&rsquo;t have to watch it first.
-      </p>
-    </div>
   )
 }

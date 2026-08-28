@@ -1,27 +1,27 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertCircle, RefreshCw } from 'lucide-react'
-import { performanceApi, tradingApi } from '../lib/api'
+import { tradingApi } from '../lib/api'
 import { formatDate } from '../lib/format'
 import { useToast } from '../lib/toast-context'
 import { SOURCE_LABEL, tradeSource } from '../lib/trade-source'
 import { exitReasonLabel } from '../lib/exit-reason'
-import type {
-  ClosedTrade,
-  Holding,
-  TradePerformanceResponse,
-  TradeRecord,
-} from '../types'
-import Layout from '../components/Layout'
-import LoadingSpinner from '../components/LoadingSpinner'
-import BrokerPanel from '../components/BrokerPanel'
-import OrderHistory, { StatusPill } from '../components/positions/OrderHistory'
-import { CardList, RecordCard } from '../components/positions/RecordCard'
+import type { ClosedTrade } from '../types'
+import LoadingSpinner from './LoadingSpinner'
+import OrderHistory, { StatusPill } from './positions/OrderHistory'
+import { CardList, RecordCard } from './positions/RecordCard'
 import { useIsCompact } from '../lib/use-media-query'
 import { useTradingSettings } from '../lib/trading-context'
+import { usePortfolio } from '../lib/portfolio-context'
 
 /**
  * Positions — what is held, what is working, and what the closed trades did.
+ *
+ * The centre column of the Trade dashboard. It was a routed page of its own
+ * until Trade and Positions merged; `/positions` now redirects to `/`, so this
+ * is a component rather than a page and takes its data from `usePortfolio`
+ * instead of fetching its own — the rail and the analysis overlay read the
+ * same records, and fetching them here as well requested every one twice.
  *
  * Merges the old Holdings and Orders screens. They were split along a line that
  * did not mean anything to a reader: Holdings asked the broker what it holds,
@@ -35,6 +35,9 @@ import { useTradingSettings } from '../lib/trading-context'
  */
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+
+/** Mirrors `TradeStatus.OPEN` on the backend: a live commitment, not a proposal. */
+const OPEN_STATUSES = new Set(['PENDING', 'FILLED', 'PARTIAL'])
 
 function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
@@ -117,50 +120,21 @@ const thR = 'px-3 py-2.5 text-right font-semibold'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-export default function PositionsPage() {
+export default function PositionsDashboard() {
   const navigate = useNavigate()
   const { toast, toastWithUndo } = useToast()
 
-  const [holdings, setHoldings] = useState<Holding[]>([])
-  const [positions, setPositions] = useState<TradeRecord[]>([])
-  const [orders, setOrders] = useState<TradeRecord[]>([])
-  const [perf, setPerf] = useState<TradePerformanceResponse | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [closing, setClosing] = useState<string | null>(null)
   // Below md the record tables are 46-52rem wide in a 356px column, hiding
   // more than half of every row behind an invisible scroller. Cards instead —
   // and rendered *instead of*, not alongside, so no wide table exists there.
   const compact = useIsCompact()
   // One copy of the balances, shared with the account strip above.
-  const { account, refreshAccount } = useTradingSettings()
-
-  const load = useCallback(async (spinner = false) => {
-    if (spinner) setRefreshing(true)
-    setError(null)
-    try {
-      const [hold, pos, ord, tp] = await Promise.all([
-        tradingApi.getHoldings().catch(() => null),
-        tradingApi.getPositions().catch(() => null),
-        tradingApi.getOrders().catch(() => null),
-        performanceApi.trades().catch(() => null),
-        // Balances live in the shared context; this only asks it to re-read so
-        // Refresh updates the tiles and the account strip together.
-        refreshAccount().catch(() => null),
-      ])
-      setHoldings(hold?.data.connected ? hold.data.holdings : [])
-      setPositions(pos?.data ?? [])
-      setOrders(ord?.data ?? [])
-      setPerf(tp?.data ?? null)
-      if (!ord) setError('Could not load your orders.')
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
-  }, [refreshAccount])
-
-  useEffect(() => { load() }, [load])
+  const { account } = useTradingSettings()
+  // One copy of the portfolio, shared with the watchlist rail and the analysis
+  // overlay. Refresh re-reads for all three, so they cannot disagree about what
+  // is held — which is the failure a second local fetch invites.
+  const { holdings, positions, orders, perf, loading, refreshing, error, reload } = usePortfolio()
 
   const stats = perf?.all ?? null
 
@@ -180,6 +154,27 @@ export default function PositionsPage() {
       trade: positions.find((p) => p.ticker === h.ticker && p.closed_at == null) ?? null,
     })), [holdings, positions])
 
+  /**
+   * The agent's own open entries.
+   *
+   * Deliberately read from our trade records rather than from broker holdings:
+   * the question here is "what did the agent decide", and a holding carries no
+   * decision. A position the agent opened and a position you opened look
+   * identical at the broker.
+   *
+   * `PROPOSED` is not among these — it commits nothing and lives in the
+   * approvals queue — and neither is `SKIPPED`, which is a refusal, not a
+   * position.
+   */
+  const agentRows = useMemo(
+    () => positions.filter(
+      (p) => p.closed_at == null
+        && OPEN_STATUSES.has(p.status)
+        && tradeSource(p.signal_type) === 'agent',
+    ),
+    [positions],
+  )
+
   const closePosition = (ticker: string) => {
     // Closing sends a real order, so it gets an undo window rather than a
     // confirm dialog — the action is reversible right up until it is sent.
@@ -190,7 +185,7 @@ export default function PositionsPage() {
         try {
           await tradingApi.closePosition(ticker)
           toast(`Close order submitted for ${ticker}.`, 'success')
-          load()
+          void reload()
         } catch (err: unknown) {
           const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
           toast(detail ?? `Could not close ${ticker}.`, 'error')
@@ -205,21 +200,11 @@ export default function PositionsPage() {
   const closed: ClosedTrade[] = perf?.recent_closed ?? []
 
   return (
-    <Layout>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1
-            className="text-2xl font-light text-[var(--color-fg)]"
-            style={{ fontFamily: 'Fraunces, Georgia, serif' }}
-          >
-            Positions
-          </h1>
-          <p className="mt-0.5 text-sm text-[var(--color-fg-muted)]">
-            What is held, what is working, and what the closed trades actually returned.
-          </p>
-        </div>
+    <>
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
+        <h2 className="label-micro">Positions</h2>
         <button
-          onClick={() => load(true)}
+          onClick={() => reload(true)}
           disabled={refreshing || loading}
           className="btn-secondary flex-shrink-0"
         >
@@ -239,10 +224,9 @@ export default function PositionsPage() {
         </div>
       )}
 
-      {/* Broker session sits above everything: when it is down, every action on
-          this screen is refused, and that should be the first thing you see. */}
-      <BrokerPanel />
-
+      {/* Broker session is not repeated here: the dashboard's right rail carries
+          it as a small box, and stating "IB Gateway disconnected" twice on one
+          screen makes neither copy more believable. */}
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <LoadingSpinner size="lg" />
@@ -311,6 +295,100 @@ export default function PositionsPage() {
               Trades closed before 1.6.0 can never be netted: IB only serves the current session.
             </p>
           )}
+
+          {/* ── Agent positions ────────────────────────────────────────────
+              What the agent decided, as distinct from what is held. These are
+              our own trade records, so a row here is a decision with a reason
+              behind it; the Open positions table below is the broker's account
+              of the same money and is the authority on quantity. */}
+          <Section
+            title="Agent positions"
+            note={`${agentRows.length} open`}
+            footnote="Entries the agent placed unattended from its own signals. Proposals awaiting your approval are not here — nothing is committed until you accept one — and neither are skipped evaluations, which are refusals rather than positions."
+          >
+            {agentRows.length === 0 ? (
+              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]
+                              p-6 text-center text-sm text-[var(--color-fg-muted)]">
+                The agent holds nothing right now.
+              </div>
+            ) : compact ? (
+              <CardList>
+                {agentRows.map((t) => (
+                  <RecordCard
+                    key={t.id}
+                    title={t.ticker}
+                    onTitleClick={() => navigate(`/ticker/${t.ticker}`)}
+                    badges={<StatusPill status={t.status} />}
+                    fields={[
+                      { label: 'Qty', value: (t.filled_qty ?? t.qty).toLocaleString() },
+                      { label: 'Entry', value: money(t.entry_price ?? t.limit_price) },
+                      {
+                        label: 'Stop',
+                        value: <span style={{ color: 'var(--accent-sell)' }}>{money(t.stop_loss)}</span>,
+                      },
+                      {
+                        label: 'Target',
+                        value: <span style={{ color: 'var(--accent-buy)' }}>{money(t.take_profit)}</span>,
+                      },
+                      { label: 'Opened', value: formatDate(t.opened_at) },
+                      { label: 'Score', value: t.signal_score != null ? `${Math.round(t.signal_score * 100)}` : '—' },
+                    ]}
+                  />
+                ))}
+              </CardList>
+            ) : (
+              <TableShell>
+                <table className="w-full min-w-[42rem] text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--color-border)] text-[10.5px] uppercase
+                                   tracking-widest text-[var(--color-fg-muted)]">
+                      <th scope="col" className={th}>Ticker</th>
+                      <th scope="col" className={th}>Status</th>
+                      <th scope="col" className={thR}>Qty</th>
+                      <th scope="col" className={thR}>Entry</th>
+                      <th scope="col" className={thR}>Stop</th>
+                      <th scope="col" className={thR}>Target</th>
+                      <th scope="col" className={thR}>Score</th>
+                      <th scope="col" className={th}>Opened</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {agentRows.map((t) => (
+                      <tr key={t.id} className="border-b border-[var(--color-border)]/50 last:border-0">
+                        <td className="px-3 py-2.5">
+                          <button
+                            onClick={() => navigate(`/ticker/${t.ticker}`)}
+                            className="num font-semibold text-[var(--color-fg)] hover:text-brand-500"
+                          >
+                            {t.ticker}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2.5"><StatusPill status={t.status} /></td>
+                        <td className="num px-3 py-2.5 text-right">
+                          {(t.filled_qty ?? t.qty).toLocaleString()}
+                        </td>
+                        <td className="num px-3 py-2.5 text-right text-[var(--color-fg-muted)]">
+                          {money(t.entry_price ?? t.limit_price)}
+                        </td>
+                        <td className="num px-3 py-2.5 text-right" style={{ color: 'var(--accent-sell)' }}>
+                          {money(t.stop_loss)}
+                        </td>
+                        <td className="num px-3 py-2.5 text-right" style={{ color: 'var(--accent-buy)' }}>
+                          {money(t.take_profit)}
+                        </td>
+                        <td className="num px-3 py-2.5 text-right text-[var(--color-fg-muted)]">
+                          {t.signal_score != null ? Math.round(t.signal_score * 100) : '—'}
+                        </td>
+                        <td className="px-3 py-2.5 text-[11px] text-[var(--color-fg-muted)]">
+                          {formatDate(t.opened_at)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </TableShell>
+            )}
+          </Section>
 
           {/* ── Open positions ─────────────────────────────────────────── */}
           <Section
@@ -563,6 +641,6 @@ export default function PositionsPage() {
           </Section>
         </>
       )}
-    </Layout>
+    </>
   )
 }

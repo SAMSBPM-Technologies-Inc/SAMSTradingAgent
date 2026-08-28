@@ -233,6 +233,24 @@ function closedReason(t: ClosedTrade): string {
   return recorded ?? 'closed'
 }
 
+/**
+ * Is there trading activity worth reporting at all?
+ *
+ * An UNRECONCILED trade is terminal and *unknowable*, not absent — the broker
+ * has no record and the execution log no longer reaches back far enough to say
+ * what happened. The API ships those rows in `recent_closed` alongside CLOSED
+ * precisely so they stay visible, so gating this section on closed/open alone
+ * hid a table that had rows to draw. `TradeStatsBlock` already counts them as
+ * activity; only this gate had forgotten to.
+ *
+ * PROPOSED and DECLINED are excluded on purpose, and that is not an oversight:
+ * a proposal commits nothing, has no realised result, and belongs to the queue
+ * on /orders. Realised performance is about money that moved.
+ */
+function hasRealisedActivity(t: TradePerformanceResponse): boolean {
+  return t.all.closed > 0 || t.all.open > 0 || t.all.unreconciled > 0
+}
+
 function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
   const compact = useIsCompact()
 
@@ -681,7 +699,7 @@ export default function PerformancePage() {
         </div>
       ) : (
         <>
-        {trades && trades.approved && (trades.all.closed > 0 || trades.all.open > 0) && (
+        {trades && trades.approved && hasRealisedActivity(trades) && (
           <div className="flex flex-col gap-3 mb-6">
             <div>
               <h2 className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)] mb-1">
