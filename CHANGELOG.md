@@ -14,6 +14,43 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.11.1] — 2026-08-27
+
+**A loading ticker says what it is doing.** `/analyze` can run for several
+seconds on a cache miss, and it showed a bare spinner — attention spent for
+nothing in return. It now lists the work: prices and volume, headlines and
+sentiment, fundamentals, the macro backdrop, options flow and short interest,
+technical indicators, weighted scoring, and the AI analyst.
+
+It does not pretend to know which step is running. `/analyze` is one
+synchronous request that reports nothing until it returns, so a stepper ticking
+through those in order would be animation rather than information — and wrong
+in the common case, where a recent analysis is served from cache and none of
+them run. All eight are shown at once, dimmed and pulsing, and the elapsed
+counter is the only live number on the screen. The caption says as much.
+
+The deep-research stages are deliberately absent. An orchestrator and a risk
+agent do exist, and they are the most impressive-sounding things this system
+runs, but they belong to `/research/{ticker}` and this path never calls them —
+listing them would credit the engine with work it did not do on the screen
+where a user is deciding whether to trust it. The analyst's model is not named
+either: it is `ANALYST_MODEL` in config and reaches the UI through
+`AnalyzeResponse.analyst_model`, which does not exist yet while the request is
+still in flight.
+
+### Known gaps
+
+- Because the screen cannot observe the request, a cache hit that returns in a
+  couple of hundred milliseconds still flashes all eight stages briefly. The
+  caption covers it — they are described as the steps a fresh analysis runs,
+  not a trace — but it is a cosmetic oddity rather than a thing anyone would
+  design. Real streamed progress is the fix, and the backend side of it is
+  small: an optional `on_stage` callback on `run_pipeline`, no behaviour change
+  when unused.
+- Mobile still shows a bare spinner while a ticker loads.
+
+---
+
 ## [1.11.0] — 2026-08-27
 
 The questions people ask before connecting a broker.

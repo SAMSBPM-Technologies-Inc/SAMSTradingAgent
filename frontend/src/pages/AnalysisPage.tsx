@@ -4,7 +4,7 @@ import { AlertCircle } from 'lucide-react'
 import { analyzeApi } from '../lib/api'
 import type { AnalyzeResponse } from '../types'
 import Layout from '../components/Layout'
-import LoadingSpinner from '../components/LoadingSpinner'
+import AnalysisProgress from '../components/trade/AnalysisProgress'
 import { TickerAnalysis, TickerHeader } from '../components/trade/TickerDetail'
 
 /**
@@ -56,9 +56,7 @@ export default function AnalysisPage() {
     <Layout variant="app">
       <div className="mx-auto w-full max-w-[980px]">
         {loading ? (
-          <div className="flex items-center justify-center py-24">
-            <LoadingSpinner size="lg" />
-          </div>
+          <AnalysisProgress ticker={ticker ?? ''} />
         ) : error ? (
           <div
             role="alert"

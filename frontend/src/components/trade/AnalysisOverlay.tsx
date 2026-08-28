@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { ExternalLink, X } from 'lucide-react'
 import type { AnalyzeResponse, Holding, TradeRecord, WatchlistItem } from '../../types'
-import LoadingSpinner from '../LoadingSpinner'
+import AnalysisProgress from './AnalysisProgress'
 import { TickerAnalysis, TickerHeader } from './TickerDetail'
 
 /**
@@ -137,9 +137,7 @@ export default function AnalysisOverlay({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
-            <div className="flex items-center justify-center py-24">
-              <LoadingSpinner size="lg" />
-            </div>
+            <AnalysisProgress ticker={symbol} />
           ) : error ? (
             <div className="flex flex-col items-center gap-4 px-6 py-20 text-center">
               <p className="text-sm text-[var(--color-fg-muted)]">{error}</p>
