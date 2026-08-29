@@ -371,7 +371,13 @@ async def _notify_fill(trade: dict, *, event_key: str | None = None, **kwargs) -
     price that was really paid, and on an exit, the realised P&L. Claimed before
     sending so a reconciler retry cannot repeat it. Never raises: the reconciler
     must finish reconciling whatever the notifier does.
+
+    `trade_id` is set here from the record itself rather than by each of the
+    five call sites, so the same reference number that `_notify_trade` sent on
+    submission is guaranteed to reach every fill message for that trade —
+    entry, scale-in adds, and the exit — without each site having to remember to.
     """
+    kwargs.setdefault("trade_id", str(trade["_id"]) if trade.get("_id") else None)
     key = event_key or ("close" if kwargs.get("kind") == "exit" else kwargs.get("kind", "fill"))
     try:
         if not await _claim_notification(trade.get("_id"), key):
@@ -1078,7 +1084,7 @@ async def _submit_entry(
         limit_price=plan.limit_price, order_id=order_id,
         stop_loss=plan.stop_price, take_profit=plan.target_price,
         is_paper=is_paper, account_id=plan.account_id, trigger=trigger,
-        signal_score=signal_score,
+        signal_score=signal_score, trade_id=trade_id,
     )
     return trade_id, TradeStatus.PENDING, order_id
 
@@ -1179,7 +1185,7 @@ async def _submit_add(
         stop_loss=plan.stop_price, take_profit=plan.target_price,
         is_paper=is_paper, account_id=plan.account_id,
         trigger=f"{trigger} (adding to {plan.held_qty:g} held)",
-        signal_score=signal_score,
+        signal_score=signal_score, trade_id=trade_id,
     )
     return trade_id, TradeStatus.PENDING, order_id
 
@@ -1561,6 +1567,7 @@ async def execute_exit(
             limit_price=limit_price, order_id=order_id,
             is_paper=not get_settings().is_live_trading,
             account_id=account_id, trigger=trigger,
+            trade_id=str(open_trade["_id"]),
         )
 
     except BrokerUnavailable:

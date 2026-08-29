@@ -153,7 +153,8 @@ export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
         // may have been cut to fit available funds.
         toast(
           `Order placed: ${r.qty} ${data.ticker} at ${usd.format(r.limit_price)}`
-          + (r.is_paper ? ' (paper)' : ''),
+          + (r.is_paper ? ' (paper)' : '')
+          + (r.trade_id ? ` — Ref ${r.trade_id.slice(-8).toUpperCase()}` : ''),
           'success',
         )
         if (r.reason) toast(r.reason, 'info')

@@ -370,6 +370,7 @@ async def send_trade_email(
     account_id: str = "",
     trigger: str = "",
     signal_score: float | None = None,
+    trade_id: str | None = None,
 ) -> None:
     """
     Notify the user that an order was **submitted** to the broker.
@@ -386,11 +387,17 @@ async def send_trade_email(
     notional = (qty or 0) * (limit_price or 0)
     subject = f"[{mode}] {side} order placed: {qty} {ticker} @ {_money(limit_price)} limit"
 
-    rows: list[tuple[str, str]] = [
+    rows: list[tuple[str, str]] = []
+    if trade_id:
+        # The same number that identifies this trade in the Orders table and
+        # in every later fill/exit message about it — put first so it reads
+        # as the record's name, not one detail among many.
+        rows.append(("Reference", trade_id))
+    rows.extend([
         ("Action", f"{action.upper()} {qty} {ticker}"),
         ("Limit price", _money(limit_price)),
         ("Notional", _money(notional)),
-    ]
+    ])
     if stop_loss is not None:
         rows.append(("Stop loss", _money(stop_loss)))
     if take_profit is not None:
@@ -456,6 +463,7 @@ async def send_trade_alert(
     account_id: str = "",
     trigger: str = "",
     signal_score: float | None = None,
+    trade_id: str | None = None,
 ) -> None:
     """
     Push the same order event as `send_trade_email` down the chat channels.
@@ -478,6 +486,8 @@ async def send_trade_alert(
         f"📤 [{mode}] {side} order placed: {qty} {ticker} @ {_money(limit_price)} limit",
         f"Notional: {_money(notional)}",
     ]
+    if trade_id:
+        lines.append(f"Ref: {trade_id}")
     lines.extend(_level_lines(limit_price, take_profit, stop_loss))
     if signal_score is not None:
         lines.append(f"Signal score: {signal_score:.2f}")
@@ -520,6 +530,7 @@ def _fill_message(
     take_profit: float | None = None,
     is_paper: bool = True,
     exit_reason: str = "",
+    trade_id: str | None = None,
 ) -> tuple[str, str, list[tuple[str, str]]]:
     """
     Build the fill notification once, for every channel.
@@ -534,6 +545,10 @@ def _fill_message(
     """
     mode = "PAPER" if is_paper else "LIVE"
     rows: list[tuple[str, str]] = []
+    if trade_id:
+        # Same reference the submission message carried, so a reader can tell
+        # this fill is the other half of that earlier "order placed" alert.
+        rows.append(("Reference", trade_id))
 
     if kind == "exit":
         emoji = "🏁"

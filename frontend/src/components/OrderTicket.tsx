@@ -173,10 +173,13 @@ export default function OrderTicket({
         toast('That order was already submitted.', 'info')
       } else if (r.placed) {
         // Report what the server actually did, not what was requested — the
-        // quantity may have been cut to fit available funds.
+        // quantity may have been cut to fit available funds. The ref, when
+        // present, is the same id the fill email/WhatsApp message for this
+        // order will carry, so the two are recognisably the same trade.
         toast(
           `Order placed: ${r.qty} ${data.ticker} at ${usd.format(r.limit_price)}`
-          + (r.is_paper ? ' (paper)' : ''),
+          + (r.is_paper ? ' (paper)' : '')
+          + (r.trade_id ? ` — Ref ${r.trade_id.slice(-8).toUpperCase()}` : ''),
           'success',
         )
         setConfirmText('')

@@ -38,6 +38,11 @@ function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
 }
 
+/** Same id carried by every email/Slack/WhatsApp message about this trade. */
+function shortRef(id: string): string {
+  return id.slice(-8).toUpperCase()
+}
+
 /** Broker-statement convention: gains green, losses red in parentheses. */
 function Pnl({ value }: { value: number | null | undefined }) {
   const C = usePalette()
@@ -128,6 +133,7 @@ function ProposalCard({ proposal, onResolved }: {
       toast(
         data.placed
           ? `Order placed: ${data.qty} ${data.ticker} at ${usd.format(data.limit_price)}`
+            + (data.trade_id ? ` — Ref ${data.trade_id.slice(-8).toUpperCase()}` : '')
           : data.reason ?? 'The order could not be placed.',
         data.placed ? 'success' : 'error',
       )
@@ -557,6 +563,9 @@ export default function PositionsScreen() {
                           {o.reason ?? exitReasonLabel(o.exit_reason)}
                         </Text>
                       )}
+                      <Text style={{ fontSize: 9, color: C.fgMuted, fontFamily: 'monospace' }}>
+                        Ref {shortRef(o.id)}
+                      </Text>
                     </View>
                   ))}
                 </View>

@@ -147,7 +147,7 @@ def create_app() -> FastAPI:
             "Ingests market data, computes technical indicators, generates "
             "risk scores, and produces BUY/SELL/HOLD signals."
         ),
-        version="1.14.1",
+        version="1.14.2",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,

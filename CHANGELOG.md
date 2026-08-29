@@ -14,6 +14,29 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.14.2] — 2026-08-29
+
+**Every trade now carries one reference number across every channel.** A
+trade record always had a stable id internally, but nothing surfaced it: the
+order-placed email named the broker's order id (which changes again on the
+exit), the WhatsApp/Slack alerts named nothing at all, and the Orders table
+used the id only as a React key. Someone who got a WhatsApp fill alert had no
+way to find the matching row without matching ticker, time and price by eye.
+
+The trade record's own id is now that reference, shown as "Reference"/"Ref"
+on the order-placed email, the order-placed Slack/WhatsApp message, both fill
+and exit emails, both fill and exit Slack/WhatsApp messages, the Orders table
+(new Ref column, full id on hover) and its mobile equivalent, and the
+order-confirmation toast on web and mobile. It is the same id from
+submission through every fill to the close, including scale-in adds — one
+number that identifies one trade everywhere it is mentioned.
+
+### Known gaps
+
+- The reference shown in the UI is the last 8 characters of the id, not the
+  full 24; it is unique enough to eyeball against a message but not
+  guaranteed unique in isolation. Full-text search on it is not implemented.
+
 ## [1.14.1] — 2026-08-29
 
 **Every trading record now says when it happened, not half of when.** The agent
