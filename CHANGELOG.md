@@ -14,6 +14,85 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.14.0] — 2026-08-28
+
+**You choose the model now, and you pay for it.** Every call this system made
+went through one credential and one hardcoded request shape, which was the
+right design when the tool had one user and one opinion about which model to
+use. It is the wrong shape for a trading tool: the trader should be able to put
+Opus on the risk agent, something cheaper on news, and see whether the dossier
+actually changes.
+
+Add your own Anthropic, OpenAI, or Google keys under **Settings → Models**, then
+assign a model to each role — judgement (risk, rebuttal, synthesis), description
+(fundamentals, technicals, news), and the fast-path analyst. Each role takes an
+ordered list, and the order is the priority: a rate-limited or rejected key
+falls through to the next one rather than costing you a section of the dossier.
+
+**A key is written once and never comes back.** It is stored encrypted, and the
+API response has no field capable of holding one — what you see afterwards is a
+fingerprint like `sk-ant-…4f2a` and a status. Keys are validated on the way in
+with one real schema-constrained call, so a key that does not work is refused
+at the point you paste it rather than skipped silently every night, which is
+close to undiagnosable from the outside.
+
+**The fallback stops on failures that retrying cannot fix.** A rate limit,
+an auth failure, an outage, or a refusal moves to the next key. A request this
+server built wrong does not: the next provider would reject it identically, at
+double the cost, with the real error buried under the second one.
+
+**Dossiers are now yours rather than the system's.** They are built with your
+keys and your models, so they are stored against you and read back the same
+way — and the entry veto refuses your order on *your* reading rather than
+somebody else's. Two things follow that are worth stating plainly. The graded
+prior record that feeds back into future dossiers as cited evidence is scoped
+to you as well; it describes how *this desk* read a name, and that sentence
+stops being true the moment the desk is a different person. And the daily
+research job now only reaches users who have switched it on — five to seven
+model calls per watched ticker per day is the one number here that multiplies,
+and it should multiply only where somebody asked for it.
+
+**Every dossier records which model wrote which section**, and the research
+calibration arm is segmented by producer. Bucketing conviction against forward
+alpha across a mixture of models measures the mixture: a strong model and a
+weak one average into a middling curve that describes neither, and the
+conclusion drawn from it would be wrong about both.
+
+### Known gaps
+
+- **Segmenting calibration makes it much slower to say anything.** One pooled
+  series at `MIN_SAMPLES_FOR_SIGNAL = 30` was already weeks away; per user per
+  model it may not be reachable on a small deployment at all. A pooled row is
+  returned alongside the per-model ones and explicitly flagged as mixing
+  producers — it is there so a reader has something to look at, never as the
+  finding.
+- **Only Anthropic gets hand-placed prompt caching.** The evidence-block
+  breakpoint is why one ledger across four agents is affordable, and neither
+  other provider exposes an equivalent we can place. The same dossier simply
+  costs more on OpenAI or Google; the dossier records which model answered so
+  the difference is visible somewhere other than a bill.
+- **Gemini's schema dialect is weaker.** `responseSchema` rejects
+  `additionalProperties`, which every agent schema carries, so it is stripped —
+  the object is no longer closed and could in principle come back with a key we
+  did not ask for. Every consumer reads named fields, so this degrades rather
+  than breaks, but it is a real weakening of the contract.
+- **Effort mapping is an approximation.** Our five levels do not exist on the
+  other two providers; `xhigh` and `max` clamp to their ceiling rather than
+  erroring, because a dossier that refuses to run over a missing effort name is
+  a worse outcome than one that runs slightly shallower.
+- **No arbitrary OpenAI-compatible endpoints.** Named providers only. A URL the
+  server will POST to, chosen by a user, is a server-side request forgery
+  vector, and schema enforcement on an arbitrary endpoint cannot be verified —
+  which matters more here than anywhere, since the whole research module
+  assumes the object it gets back has the shape it asked for.
+- **Model assignment is per role, not per agent.** Roles are the split the code
+  already makes; per-agent overrides would multiply the calibration
+  segmentation problem above by four.
+- Nothing about the trading guard chain changed. Research may still veto a BUY;
+  it may never create one, enlarge one, or reach an exit.
+
+---
+
 ## [1.13.0] — 2026-08-28
 
 **The engine now knows whether it was right, and measures that against the

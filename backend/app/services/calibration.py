@@ -451,23 +451,82 @@ def summarise_research(dossiers: Iterable[dict]) -> dict:
     }
 
 
-async def research_calibration_report(ticker: Optional[str] = None) -> dict:
-    """Load graded dossiers from MongoDB and summarise them."""
+def _model_label(doc: dict) -> str:
+    """
+    The producer of a dossier, as one label.
+
+    Falls back to `unknown` for documents written before provenance was
+    recorded rather than guessing Anthropic — they *were* all Anthropic, but a
+    bucket labelled with an assumption is exactly the kind of thing that gets
+    read as measured later.
+    """
+    used = doc.get("models_used") or []
+    if not used:
+        return "unknown"
+    return ", ".join(sorted(f"{u.get('provider')}/{u.get('model')}" for u in used))
+
+
+async def research_calibration_report(ticker: Optional[str] = None,
+                                      user_id: Optional[str] = None) -> dict:
+    """
+    Load this reader's graded dossiers and summarise them, per model.
+
+    Two scopings, and both are corrections rather than features.
+
+    **By user**, because dossiers are built on the trader's own key and their
+    own chosen models. Pooling readers pools opinions that were never meant to
+    be one opinion.
+
+    **By model**, because that is the question this arm exists to answer.
+    Bucketing conviction against forward alpha across a mixture of producers
+    measures the mixture — a strong model and a weak one average into a middling
+    curve that describes neither, and the conclusion drawn from it ("conviction
+    doesn't rank alpha") would be wrong about both.
+
+    The honest cost is stated in the payload rather than hidden: segmenting
+    makes every `n` smaller, and on a small deployment the per-model rows may
+    never reach `MIN_SAMPLES_FOR_SIGNAL`. `pooled` is returned alongside them
+    and explicitly labelled as mixing producers, so there is something to look
+    at while the segmented rows fill — never as the finding.
+    """
     db = await get_db()
-    query: dict[str, Any] = {"outcome": {"$ne": None}}
+    query: dict[str, Any] = {
+        "outcome": {"$ne": None},
+        "user_id": str(user_id) if user_id else None,
+    }
     if ticker:
         query["ticker"] = ticker.upper()
 
     dossiers = await db[COLL_DOSSIERS].find(
-        query, {"_id": 0, "ticker": 1, "as_of": 1, "outcome": 1},
+        query,
+        {"_id": 0, "ticker": 1, "as_of": 1, "outcome": 1, "models_used": 1},
     ).to_list(length=100_000)
 
-    report = summarise_research(dossiers)
-    report["ticker"] = ticker.upper() if ticker else None
+    by_model: dict[str, list[dict]] = {}
+    for doc in dossiers:
+        by_model.setdefault(_model_label(doc), []).append(doc)
+
+    report = {
+        "ticker": ticker.upper() if ticker else None,
+        "graded_dossiers": len(dossiers),
+        "min_samples_for_signal": MIN_SAMPLES_FOR_SIGNAL,
+        #: One arm per producer. This is the answer; `pooled` is context.
+        "by_model": [
+            {"model": label, **summarise_research(docs)}
+            for label, docs in sorted(by_model.items())
+        ],
+        #: Every graded dossier regardless of producer. Kept because a thin
+        #: segmented view is unreadable for weeks and a reader needs something
+        #: — and labelled, because a curve drawn across two models is not a
+        #: statement about either of them.
+        "pooled": {
+            **summarise_research(dossiers),
+            "mixes_producers": len(by_model) > 1,
+        },
+    }
     logger.info(
         "research_calibration_report",
-        ticker=ticker or "ALL",
-        graded=report["graded_dossiers"],
-        ranks=report["conviction_ranks_alpha"],
+        ticker=ticker or "ALL", user_id=user_id,
+        graded=len(dossiers), models=len(by_model),
     )
     return report

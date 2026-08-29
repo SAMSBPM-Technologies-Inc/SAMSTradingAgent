@@ -141,6 +141,13 @@ jobs:
               _set_key "$1" "$2"
             }
             inject_secret CLOUDFLARE_TUNNEL_TOKEN "$CLOUDFLARE_TUNNEL_TOKEN"
+            # Load-bearing as of 1.14.0: this is what makes users' stored
+            # provider keys readable. It has always been injected from a
+            # secret rather than generated on the box, which is the right
+            # way round — the operator needs a copy, because rotating it
+            # makes every stored key undecryptable. The chain then skips
+            # them and falls through to the server key, so the symptom is
+            # a silent loss of model choice rather than an outage.
             inject_secret ENCRYPTION_KEY          "$ENCRYPTION_KEY"
 
             # ── JWT signing key ───────────────────────────────────────────────
@@ -310,6 +317,7 @@ jobs:
             # engine had a benchmark before this; a +6% signal in a +8% market
             # was recorded as a win.
             inject_secret           BENCHMARK_TICKER               SPY
+
 
             # Everything below stays injected so it never freezes on whatever
             # the first deploy happened to write. Model ids especially: these

@@ -867,7 +867,7 @@ def _resolved_reading(alpha=-0.06, lesson=None, ticker="EXMP"):
 @pytest.fixture
 def with_history(monkeypatch):
     """A settled prior reading of this name, plus one of another."""
-    async def fake_resolved(_ticker):
+    async def fake_resolved(_ticker, _user_id=None):
         return [
             _resolved_reading(lesson="Margin durability [F2] rested on two periods."),
             _resolved_reading(ticker="OTHR", alpha=0.02),
@@ -930,10 +930,10 @@ def test_the_conviction_anchor_ignores_the_prior_record(wired, monkeypatch):
     """
     responses = _specialist_payloads() | {"synthesiser": _synthesis()}
 
-    async def no_history(_ticker):
+    async def no_history(_ticker, _user_id=None):
         return []
 
-    async def bad_history(_ticker):
+    async def bad_history(_ticker, _user_id=None):
         return [_resolved_reading(alpha=-0.30) for _ in range(5)]
 
     monkeypatch.setattr(D.prior_record, "load_resolved", no_history)

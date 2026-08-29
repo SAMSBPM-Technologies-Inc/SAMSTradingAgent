@@ -362,3 +362,86 @@ def test_the_research_arm_reports_and_does_not_tune():
     text = source.read_text()
     for token in (r"update_one", r"\$set", r"settings\.\w+\s*="):
         assert not re.search(token, text), f"{token} — calibration must not write"
+
+
+# ── Provenance segmentation ───────────────────────────────────────────────────
+# Dossiers are now built on the trader's own key and their own chosen models,
+# so the research arm can no longer assume one producer. Bucketing conviction
+# against alpha across a mixture measures the mixture: a strong model and a
+# weak one average into a middling curve that describes neither, and the
+# conclusion drawn from it would be wrong about both.
+
+from app.services.calibration import _model_label  # noqa: E402
+
+
+def _graded(model=None, conviction=80, alpha=0.05):
+    doc = {
+        "ticker": "EXMP",
+        "outcome": {
+            "research_conviction": conviction, "assessment": "BULLISH",
+            "return": alpha + 0.02, "alpha": alpha,
+            "assessment_correct": alpha > 0, "reflection": None,
+        },
+    }
+    if model is not None:
+        doc["models_used"] = [{"provider": model[0], "model": model[1],
+                               "agents": ["risk"]}]
+    return doc
+
+
+def test_a_dossier_is_labelled_by_the_model_that_wrote_it():
+    label = _model_label(_graded(model=("anthropic", "claude-opus-5")))
+    assert label == "anthropic/claude-opus-5"
+
+
+def test_a_pre_provenance_dossier_is_labelled_unknown_not_guessed():
+    """
+    Those documents were in fact all Anthropic, but a bucket labelled with an
+    assumption is exactly what gets read as measured a release later.
+    """
+    assert _model_label(_graded(model=None)) == "unknown"
+
+
+def test_a_multi_model_dossier_labels_every_producer():
+    doc = _graded()
+    doc["models_used"] = [
+        {"provider": "openai", "model": "gpt-5.5", "agents": ["news"]},
+        {"provider": "anthropic", "model": "claude-opus-5", "agents": ["risk"]},
+    ]
+    label = _model_label(doc)
+    assert "anthropic/claude-opus-5" in label and "openai/gpt-5.5" in label
+
+
+def test_the_label_is_order_independent():
+    """
+    Two dossiers with the same models must land in the same bucket regardless
+    of the order the agents happened to finish in.
+    """
+    a, b = _graded(), _graded()
+    a["models_used"] = [
+        {"provider": "openai", "model": "gpt-5.5", "agents": ["news"]},
+        {"provider": "anthropic", "model": "claude-opus-5", "agents": ["risk"]},
+    ]
+    b["models_used"] = list(reversed(a["models_used"]))
+    assert _model_label(a) == _model_label(b)
+
+
+def test_a_strong_and_a_weak_model_do_not_average_into_one_curve():
+    """
+    The failure this segmentation prevents. Pooled, these two producers cancel
+    into a flat curve and read as "conviction does not rank alpha" — which is
+    false about both of them.
+    """
+    strong = [_graded(("a", "good"), conviction=90, alpha=0.08)] * 40
+    strong += [_graded(("a", "good"), conviction=10, alpha=-0.08)] * 40
+    weak = [_graded(("b", "bad"), conviction=90, alpha=-0.08)] * 40
+    weak += [_graded(("b", "bad"), conviction=10, alpha=0.08)] * 40
+
+    good = summarise_research(strong)
+    bad = summarise_research(weak)
+    pooled = summarise_research(strong + weak)
+
+    assert good["conviction_ranks_alpha"] is True
+    assert bad["conviction_ranks_alpha"] is False
+    # Pooled, the signal is gone — which is why it is context and not the answer.
+    assert pooled["base_rate"]["avg_alpha"] == pytest.approx(0.0, abs=1e-9)

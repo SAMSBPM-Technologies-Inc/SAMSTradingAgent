@@ -145,7 +145,8 @@ def add_prior_record(ledger: Ledger, ticker: str, resolved: list[dict]) -> dict:
     }
 
 
-async def load_resolved(ticker: str) -> list[dict]:
+async def load_resolved(ticker: str,
+                        user_id: Optional[str] = None) -> list[dict]:
     """
     Recent settled readings: this name first, then a few from other names.
 
@@ -154,6 +155,17 @@ async def load_resolved(ticker: str) -> list[dict]:
     names, and a desk that only ever reviews the ticker in front of it never
     sees the pattern. They are labelled as another company in the rendered item
     so an agent cannot mistake one for history of the name it is working.
+
+    **Scoped to one reader.** Every item this returns is rendered into the
+    ledger as citable `O` evidence describing how "this desk" read a name and
+    what happened. The moment the desk is a different person that sentence is
+    false: the reading was made on someone else's models, graded against
+    someone else's positions, and injecting it would both misattribute a
+    judgement and leak one user's record into another's prompt. Unscoped, this
+    function is a privacy bug wearing a correctness bug's clothes.
+
+    A `user_id` of None reads the legacy shared series — the dossiers written
+    before this was per-user, which carry no owner — and nothing else.
 
     Never raises. A database hiccup here must degrade to "no prior record",
     which is the state every dossier written before this existed is in anyway.
@@ -168,7 +180,10 @@ async def load_resolved(ticker: str) -> list[dict]:
     projection = {"_id": 0, "ticker": 1, "as_of": 1, "outcome": 1}
     try:
         db = await get_db()
-        base = {"outcome": {"$ne": None}}
+        # `user_id: None` matches both an explicit null and a missing field,
+        # which is exactly what the pre-per-user documents have.
+        base = {"outcome": {"$ne": None},
+                "user_id": str(user_id) if user_id else None}
         same = await (
             db[COLL_DOSSIERS].find({**base, "ticker": ticker}, projection)
             .sort("generated_at", -1).limit(n_same).to_list(length=n_same)

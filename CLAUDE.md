@@ -251,6 +251,36 @@ npm run web
    the analyst's is labelled "analyst conviction" wherever the word would
    otherwise stand alone.
 
+   **Which model answers is the trader's choice.** `services/llm/` is the one
+   seam — `base.py` (the `LLMResult` contract and the `ErrorKind` enum),
+   `registry.py` (named providers, capability flags, per-provider
+   `normalise_schema`), one adapter each for Anthropic/OpenAI/Google, and
+   `resolver.py`. `run_agent` walks an ordered chain resolved from the user's
+   `llm_settings`; **the server's own key is appended last to every chain**, so
+   a user who configures nothing still gets dossiers and a single-key
+   deployment behaves exactly as it did before the seam existed.
+
+   **The fallback policy branches on `ErrorKind` and nothing else.** Auth,
+   rate-limit, overload, timeout and refusal spend the next key; a 400, an
+   unparseable body, or a truncation do not — the next provider would fail
+   identically, at double the cost, with the real error buried. **Structured
+   output is a gate, not a preference**: `analyst.py` had its fence-stripping
+   regexes deleted on purpose, and a provider that cannot enforce a schema
+   would put them back. Keys are validated with a real schema-constrained call
+   at save time and refused if they fail. Anthropic alone gets a hand-placed
+   cache breakpoint; elsewhere the same dossier costs more, which is why
+   `models_used` is recorded.
+
+   **Dossiers are per-user.** `latest_dossier(ticker, user_id)` reads that
+   reader's own, falling back only to the legacy shared series (documents with
+   no `user_id`) and never to another user's. `prior_record.load_resolved` is
+   scoped the same way and that one is load-bearing: it renders into the ledger
+   as citable `O` evidence about how *this desk* read a name, and unscoped it
+   leaks one trader's graded record into another's prompt. The daily jobs reach
+   only users with `llm_settings.research_enabled`, which defaults false —
+   research is five to seven calls per ticker per day and is the one cost here
+   that multiplies with users.
+
    **The desk's own record is evidence, not injected prose.** `outcomes.py`
    grades every dossier ~20 days on (`RESEARCH_OUTCOME_HORIZON_DAYS`) against
    forward **alpha**, then writes a short lesson that must cite ids from *that
@@ -294,7 +324,7 @@ npm run web
 
 | Collection | Purpose |
 |---|---|
-| `users` | Accounts, JWT, per-user scoring weights, IBKR creds (encrypted), alert settings |
+| `users` | Accounts, JWT, per-user scoring weights, alert settings, `llm_settings` (Fernet-encrypted provider keys + role chains) |
 | `stocks_raw` | Latest OHLCV + sentiment per ticker |
 | `stocks_features` | Technical/fundamental/sentiment/macro/catalyst scores |
 | `stocks_signals` | Latest BUY/SELL/HOLD per ticker (per-user aware) |
@@ -304,7 +334,7 @@ npm run web
 | `performance_stats` | Signal accuracy, win rates per ticker |
 | `financial_statements` | Accumulated filings per (ticker, period, timeframe) — append-only, the basis for every trend |
 | `earnings_history` | Reported vs estimated EPS, surprise record, next report date |
-| `research_dossiers` | Deep-research output, retained as a series; `outcome` added on settlement |
+| `research_dossiers` | Deep-research output **per user**, retained as a series; `outcome` added on settlement. Documents with no `user_id` are the pre-1.14 shared series |
 
 ### Authentication
 
@@ -415,8 +445,12 @@ being right. Every row carries `n` and a `significant` flag — under
 `MIN_SAMPLES_FOR_SIGNAL` (30) the UI marks it *thin* rather than showing a
 confident-looking percentage. Do not add auto-tuning here.
 
-`GET /performance/research-calibration` asks the same questions of the research
-module — does conviction rank forward alpha, were the verdicts right, and
+`GET /performance/research-calibration` is scoped to the caller and
+**segmented by `(provider, model)`** — pooling producers measures the mixture,
+and a strong model averaged with a weak one yields a curve describing neither.
+A `pooled` row is returned alongside, flagged `mixes_producers`, because the
+segmented rows take far longer to reach `n`. It asks the same questions of the
+research module — does conviction rank forward alpha, were the verdicts right, and
 **would the veto have saved anything**. That last one is the number
 `RESEARCH_VETO_ENABLED` should be argued from and nothing produced it before.
 Same `n`/`significant` discipline, same refusal to tune.

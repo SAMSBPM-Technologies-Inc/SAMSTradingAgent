@@ -249,7 +249,7 @@ def _evidence_block(doc: dict) -> tuple[str, set[str]]:
 
 
 async def reflect(client: Any, doc: dict, measured: dict,
-                  settings) -> Optional[dict]:
+                  settings, chain: Optional[list] = None) -> Optional[dict]:
     """
     The written half. Returns None when the call fails or nothing survives
     filtering — the numbers stand on their own and the caller stores them
@@ -269,6 +269,7 @@ async def reflect(client: Any, doc: dict, measured: dict,
         settings.research_specialist_model,
         settings.research_effort,
         settings.research_extended_thinking,
+        chain=chain,
     )
     if not result.ok:
         logger.warning("research_reflection_failed",
@@ -301,9 +302,19 @@ async def reflect(client: Any, doc: dict, measured: dict,
     }
 
 
-async def settle_dossiers(client: Any = None, limit: int = _MAX_PER_PASS) -> dict:
+async def settle_dossiers(client: Any = None, limit: int = _MAX_PER_PASS,
+                          user_id: Optional[str] = None) -> dict:
     """
     Resolve every dossier old enough to have an outcome and not yet settled.
+
+    Scoped to one owner. The reflection is a model call, and it must be made on
+    that user's key and their chosen model — grading someone's reading with
+    somebody else's credential would bill the wrong person, and grading it with
+    a different model than wrote it makes the lesson a comparison between two
+    models rather than a review of one reading.
+
+    A `user_id` of None settles the legacy shared series, which is what the
+    dossiers written before this was per-user are.
 
     Failures are per-dossier and swallowed, like the daily refresh job: one
     ticker whose price series cannot be read must not stop the rest, and an
@@ -325,6 +336,9 @@ async def settle_dossiers(client: Any = None, limit: int = _MAX_PER_PASS) -> dic
             "generated_at": {"$lte": cutoff},
             "outcome": None,
             "report": {"$ne": None},
+            # Matches a missing field as well as an explicit null, which is
+            # what the pre-per-user documents carry.
+            "user_id": str(user_id) if user_id else None,
         }).sort("generated_at", 1).limit(limit).to_list(length=limit)
     except Exception as exc:
         logger.warning("research_outcomes_read_failed", error=str(exc))
@@ -338,10 +352,16 @@ async def settle_dossiers(client: Any = None, limit: int = _MAX_PER_PASS) -> dic
     settled_at = datetime.now(tz=timezone.utc)
     bench_series = await benchmark_closes()
 
-    if client is None and settings.anthropic_api_key:
-        import anthropic
+    chain = None
+    if client is None:
+        # The reflection runs on the specialist role: it is a short, cheap
+        # review, not a judgement call, and putting it on the orchestrator
+        # would multiply the settlement pass's cost for no gain.
+        from app.services.research.dossier import _resolve_chains
 
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        chain = (await _resolve_chains(user_id)).get("specialist")
+        if not chain:
+            logger.info("research_outcomes_no_model", user_id=user_id)
 
     # One price series per ticker, reused across every dossier for that name.
     price_cache: dict[str, Any] = {}
@@ -368,8 +388,8 @@ async def settle_dossiers(client: Any = None, limit: int = _MAX_PER_PASS) -> dic
                 continue
 
             reflection = None
-            if client is not None:
-                reflection = await reflect(client, doc, measured, settings)
+            if client is not None or chain:
+                reflection = await reflect(client, doc, measured, settings, chain)
                 if reflection and reflection.get("lesson"):
                     summary["reflected"] += 1
 

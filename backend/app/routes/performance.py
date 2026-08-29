@@ -443,7 +443,7 @@ async def get_research_calibration(
     per-user, and slicing them by whose list a ticker happens to be on would
     thin every bucket for no gain in relevance.
     """
-    report = await research_calibration_report(ticker)
+    report = await research_calibration_report(ticker, str(current_user["_id"]))
     logger.info(
         "research_calibration_fetched",
         user_id=str(current_user["_id"]),

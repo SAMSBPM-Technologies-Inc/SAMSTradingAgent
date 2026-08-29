@@ -444,6 +444,14 @@ class ResearchOutcome(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class ModelUsed(BaseModel):
+    """One producer behind a dossier, and the agents it wrote."""
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    agents: list[str] = []
+
+
 class PriorRecordCoverage(BaseModel):
     """How much of this desk's own track record the agents were shown."""
 
@@ -519,6 +527,11 @@ class ResearchDossier(BaseModel):
     #: Advisory stance panel, or None when it did not run. Never binding on an
     #: order — see `ResearchStances`.
     stances: Optional[ResearchStances] = None
+    #: Which models produced this reading. A trader who can choose the model
+    #: needs to know which one wrote which section — comparing two dossiers is
+    #: the whole point of being able to choose, and it is not possible without
+    #: this. Empty on dossiers written before provenance was recorded.
+    models_used: list[ModelUsed] = []
 
 
 class SignalListResponse(BaseModel):
@@ -627,7 +640,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.13.0"
+    version: str = "1.14.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

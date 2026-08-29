@@ -596,7 +596,7 @@ class EntryPlan:
         return self.qty + self.held_qty
 
 
-async def _research_veto(ticker: str) -> str | None:
+async def _research_veto(ticker: str, user_id: str) -> str | None:
     """
     Whether the latest research dossier blocks a BUY on *ticker*.
 
@@ -626,7 +626,10 @@ async def _research_veto(ticker: str) -> str | None:
     try:
         from app.services.research.dossier import latest_dossier
 
-        dossier = await latest_dossier(ticker)
+        # This user's reading, not a shared one. An order is refused on the
+        # judgement its owner's models actually made — anything else refuses a
+        # trade on an opinion the trader never held.
+        dossier = await latest_dossier(ticker, user_id)
     except Exception as exc:
         logger.warning("research_veto_lookup_failed", ticker=ticker, error=str(exc))
         return None
@@ -689,7 +692,7 @@ async def _prepare_entry(
     #
     # Applied to adds as well as first entries, because an add increases
     # exposure and blocking one does not force anything to be sold.
-    veto = await _research_veto(ticker)
+    veto = await _research_veto(ticker, user_id)
     if veto:
         return None, veto
 

@@ -602,6 +602,70 @@ export interface ResearchStances {
   neutral?: TradeStance | null
 }
 
+// ── Model configuration ───────────────────────────────────────────────────────
+// A trader brings their own keys and assigns a model per role. Order within a
+// role is the priority: a rate-limited or dead key falls through to the next.
+
+export type LLMRole = 'orchestrator' | 'specialist' | 'analyst'
+
+/** A stored credential, as the client is allowed to see it.
+ *
+ *  There is no key field here and there must never be one — the server's
+ *  response type has no room for one either. To check a key works, call the
+ *  test endpoint, which returns a verdict rather than a secret. */
+export interface LLMKeyStatus {
+  id: string
+  provider: string
+  label: string
+  /** e.g. `sk-ant-…4f2a` — enough to tell two of your own keys apart. */
+  fingerprint: string
+  added_at?: string | null
+  last_ok_at?: string | null
+  last_error?: string | null
+  last_error_at?: string | null
+}
+
+export interface LLMRoleEntry {
+  key_id: string
+  model: string
+}
+
+export interface LLMRoleChains {
+  orchestrator: LLMRoleEntry[]
+  specialist: LLMRoleEntry[]
+  analyst: LLMRoleEntry[]
+}
+
+export interface LLMSettings {
+  keys: LLMKeyStatus[]
+  roles: LLMRoleChains
+  /** Gates the daily research job for this user. Off until asked: research is
+   *  five to seven model calls per ticker per day, on your own key. */
+  research_enabled: boolean
+  /** What the server falls back to when your chain is empty or exhausted. A
+   *  trader who configures nothing still gets dossiers, and should be able to
+   *  see what produced them. */
+  server_fallback?: string | null
+}
+
+export interface LLMKeyTestResult {
+  ok: boolean
+  provider: string
+  model?: string | null
+  error?: string | null
+  /** `auth` reads very differently from `rate_limit` when you are deciding
+   *  whether to re-paste a key. */
+  error_kind?: string | null
+}
+
+/** One producer behind a dossier, and the agents it wrote. */
+export interface ModelUsed {
+  provider?: string | null
+  model?: string | null
+  agents: string[]
+}
+
+
 export interface ResearchDossier {
   ticker: string
   as_of: string
@@ -643,4 +707,7 @@ export interface ResearchDossier {
   debate?: ResearchDebate | null
   /** Advisory stance panel. Never binding on an order — see `TradeStance`. */
   stances?: ResearchStances | null
+  /** Which models produced this reading. Empty on dossiers written
+   *  before provenance was recorded. */
+  models_used?: ModelUsed[]
 }

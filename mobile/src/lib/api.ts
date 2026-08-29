@@ -146,3 +146,29 @@ export const tradingApi = {
     ),
   declineProposal: (id: string) => api.post(`/trading/proposals/${id}/decline`),
 }
+
+/** Which models your agents run on. Keys are write-only: they go in through
+ *  `addKey` and never come back — the response type has no field for one. */
+export const llmApi = {
+  settings: () => api.get<import('../types').LLMSettings>('/settings/llm'),
+  save: (roles: import('../types').LLMRoleChains, researchEnabled: boolean) =>
+    api.put<import('../types').LLMSettings>('/settings/llm', {
+      roles,
+      research_enabled: researchEnabled,
+    }),
+  /** Validated with a real schema-constrained call before it is stored — a key
+   *  that does not work is refused here rather than skipped silently every
+   *  night. */
+  addKey: (provider: string, apiKey: string, label: string) =>
+    api.post<import('../types').LLMSettings>('/settings/llm/keys', {
+      provider,
+      api_key: apiKey,
+      label,
+    }),
+  deleteKey: (keyId: string) =>
+    api.delete<import('../types').LLMSettings>(`/settings/llm/keys/${keyId}`),
+  testKey: (keyId: string) =>
+    api.post<import('../types').LLMKeyTestResult>(
+      `/settings/llm/keys/${keyId}/test`,
+    ),
+}

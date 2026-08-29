@@ -47,7 +47,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.config import get_settings
-from app.db import COLL_DOSSIERS, COLL_FEATURES, COLL_RAW, get_db
+from app.db import COLL_DOSSIERS, COLL_FEATURES, COLL_RAW, COLL_USERS, get_db
 from app.services.fundamentals import fetch_earnings, fetch_fundamentals, fetch_statements
 from app.services.prediction_markets import fetch_macro_markets
 from app.services.social import fetch_social
@@ -97,9 +97,19 @@ async def build_dossier(ticker: str, user_id: Optional[str] = None,
     if not settings.research_agents_enabled:
         logger.info("research_disabled", ticker=ticker)
         return None
-    if client is None and not settings.anthropic_api_key:
-        logger.warning("research_no_api_key", ticker=ticker)
-        return None
+
+    # The chain is resolved once, here, and threaded down — rather than each
+    # agent resolving its own. Decrypting the same keys five to seven times per
+    # dossier is waste, and a chain that changed mid-build would produce a
+    # document whose sections came from different configurations without
+    # anything recording that they had.
+    chains: Optional[dict] = None
+    if client is None:
+        chains = await _resolve_chains(user_id)
+        if not any(chains.values()):
+            logger.warning("research_no_model_configured", ticker=ticker,
+                           user_id=user_id)
+            return None
 
     ticker = ticker.upper()
     context = await _load_context(ticker)
@@ -107,7 +117,7 @@ async def build_dossier(ticker: str, user_id: Optional[str] = None,
         logger.warning("research_insufficient_data", ticker=ticker)
         return None
 
-    resolved = await prior_record.load_resolved(ticker)
+    resolved = await prior_record.load_resolved(ticker, user_id)
     ledger, scores, summary = _assemble(ticker, context, watchlist, resolved)
     if ledger.substantive_count() < 5:
         # Counts facts about the company, not the "not available" lines. A
@@ -117,22 +127,62 @@ async def build_dossier(ticker: str, user_id: Optional[str] = None,
                        facts=ledger.substantive_count(), total=len(ledger))
         return None
 
-    if client is None:
-        import anthropic
-
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    results = await _fan_out(client, ledger, settings)
-    debate = await _rebut(client, ledger, results, settings)
+    results = await _fan_out(client, ledger, settings, chains)
+    debate = await _rebut(client, ledger, results, settings, chains)
     synthesis, synthesis_error = await _synthesise(
-        client, ledger, results, scores, settings, debate
+        client, ledger, results, scores, settings, debate, chains
     )
 
-    stances = await _stance_panel(client, ledger, synthesis, scores, settings)
+    stances = await _stance_panel(client, ledger, synthesis, scores, settings, chains)
 
     dossier = _compose(ticker, ledger, scores, summary, results, synthesis,
                        synthesis_error, debate, stances)
+    dossier["user_id"] = str(user_id) if user_id else None
     await _persist(dossier)
     return dossier
+
+
+async def _resolve_chains(user_id: Optional[str]) -> dict:
+    """
+    This user's ordered candidates per role, resolved once per dossier.
+
+    A user with nothing configured gets a chain of exactly one — the server's
+    own key — which is why a fresh account still produces dossiers and why a
+    single-trader deployment behaves exactly as it did before any of this
+    existed.
+    """
+    from app.services.llm.resolver import build_chain
+
+    llm_settings: Optional[dict] = None
+    if user_id:
+        try:
+            db = await get_db()
+            from bson import ObjectId
+
+            try:
+                key = ObjectId(str(user_id))
+            except Exception:
+                key = user_id
+            user = await db[COLL_USERS].find_one({"_id": key}, {"llm_settings": 1})
+            llm_settings = (user or {}).get("llm_settings")
+        except Exception as exc:
+            # Fall through to the server key rather than failing the build. A
+            # database hiccup should cost the user their model *choice*, not
+            # their dossier.
+            logger.warning("research_llm_settings_read_failed",
+                           user_id=user_id, error=str(exc))
+
+    return {
+        "orchestrator": build_chain(llm_settings, "orchestrator"),
+        "specialist": build_chain(llm_settings, "specialist"),
+    }
+
+
+def _chain_for(spec: AgentSpec, chains: Optional[dict]) -> Optional[list]:
+    """The candidate list for this agent's role, or None on the injected path."""
+    if chains is None:
+        return None
+    return chains.get(spec.model_role) or chains.get("specialist")
 
 
 # ── Evidence assembly ─────────────────────────────────────────────────────────
@@ -224,7 +274,8 @@ def _fcf_yield(fundamentals: dict, annual: list[dict]) -> Optional[float]:
 
 # ── Fan-out ───────────────────────────────────────────────────────────────────
 
-async def _fan_out(client: Any, ledger: Ledger, settings) -> dict[str, AgentResult]:
+async def _fan_out(client: Any, ledger: Ledger, settings,
+                   chains: Optional[dict] = None) -> dict[str, AgentResult]:
     """
     Run the four specialists concurrently.
 
@@ -263,6 +314,7 @@ async def _fan_out(client: Any, ledger: Ledger, settings) -> dict[str, AgentResu
             _model_for(spec, settings),
             settings.research_effort,
             settings.research_extended_thinking,
+            chain=_chain_for(spec, chains),
         )
         for spec in runnable
     ]
@@ -302,7 +354,7 @@ def _constructive(results: dict[str, AgentResult]) -> dict[str, dict]:
 
 
 async def _rebut(client: Any, ledger: Ledger, results: dict[str, AgentResult],
-                 settings) -> Optional[dict]:
+                 settings, chains: Optional[dict] = None) -> Optional[dict]:
     """
     One exchange between the risk agent and the evidence that answers it.
 
@@ -340,6 +392,7 @@ async def _rebut(client: Any, ledger: Ledger, results: dict[str, AgentResult],
             client, _rebuttal_spec(spec, brief), _evidence_block(ledger, spec),
             _model_for(spec, settings), settings.research_effort,
             settings.research_extended_thinking,
+            chain=_chain_for(spec, chains),
         )
         for spec in (specs.RISK_REBUTTAL, specs.DEFENCE_REBUTTAL)
     ]
@@ -399,7 +452,8 @@ def _rebuttal_brief(risk: dict, constructive: dict[str, dict]) -> str:
 # ── Stance panel ──────────────────────────────────────────────────────────────
 
 async def _stance_panel(client: Any, ledger: Ledger, synthesis: Optional[dict],
-                        scores: list[dim.Dimension], settings) -> Optional[dict]:
+                        scores: list[dim.Dimension], settings,
+                        chains: Optional[dict] = None) -> Optional[dict]:
     """
     Three temperaments asked the same question about the *trade*.
 
@@ -432,6 +486,7 @@ async def _stance_panel(client: Any, ledger: Ledger, synthesis: Optional[dict],
             client, _rebuttal_spec(spec, brief), _evidence_block(ledger, spec),
             _model_for(spec, settings), settings.research_effort,
             settings.research_extended_thinking,
+            chain=_chain_for(spec, chains),
         )
         for spec in specs.STANCES
     ]
@@ -489,7 +544,8 @@ def _stance_brief(synthesis: dict, scores: list[dim.Dimension]) -> str:
 
 async def _synthesise(client: Any, ledger: Ledger, results: dict[str, AgentResult],
                       scores: list[dim.Dimension], settings,
-                      debate: Optional[dict] = None
+                      debate: Optional[dict] = None,
+                      chains: Optional[dict] = None
                       ) -> tuple[Optional[dict], Optional[str]]:
     """
     Merge the specialists.
@@ -523,6 +579,7 @@ async def _synthesise(client: Any, ledger: Ledger, results: dict[str, AgentResul
         client, spec, _evidence_block(ledger, spec),
         settings.research_orchestrator_model,
         settings.research_effort, settings.research_extended_thinking,
+        chain=_chain_for(spec, chains),
     )
     if not result.ok:
         return None, result.error or "synthesis call failed"
@@ -690,9 +747,20 @@ def _compose(ticker: str, ledger: Ledger, scores: list[dim.Dimension],
                 "input_tokens": result.input_tokens,
                 "output_tokens": result.output_tokens,
                 "cache_read_tokens": result.cache_read_tokens,
+                #: Which model wrote this section, and every key the chain
+                #: tried on the way. Without it, two dossiers cannot be
+                #: compared and the research calibration arm is measuring a
+                #: blend of producers rather than one reading.
+                "provider": result.provider,
+                "model": result.model,
+                "attempts": result.attempts,
             }
             for name, result in results.items()
         },
+        #: The distinct models behind this dossier, for the reader. A trader
+        #: comparing two readings of the same company needs to know which model
+        #: wrote which — it is the whole point of being able to choose one.
+        "models_used": _models_used(results),
         "agents_failed": [name for name, r in results.items() if r.failed],
         "agents_skipped": [name for name, r in results.items() if r.skipped],
         #: Populated whenever `report` is null so a reader — and the API
@@ -711,6 +779,26 @@ def _compose(ticker: str, ledger: Ledger, scores: list[dim.Dimension],
         "stances": _filter_stances(stances, valid),
         "data_gaps": _collect_gaps(results),
     }
+
+
+def _models_used(results: dict[str, AgentResult]) -> list[dict]:
+    """
+    Distinct (provider, model) pairs that produced this dossier, with the
+    agents each one wrote.
+
+    Sorted so the same set of models always renders in the same order — a list
+    whose order changed between two otherwise identical dossiers would look
+    like a change when nothing changed.
+    """
+    seen: dict[tuple, list[str]] = {}
+    for name, result in results.items():
+        if not result.ok or not result.model:
+            continue
+        seen.setdefault((result.provider or "", result.model), []).append(name)
+    return [
+        {"provider": provider, "model": model, "agents": sorted(agents)}
+        for (provider, model), agents in sorted(seen.items())
+    ]
 
 
 def _filter_debate(debate: Optional[dict], valid: set[str]) -> Optional[dict]:
@@ -897,24 +985,49 @@ async def _persist(dossier: dict) -> None:
                        ticker=dossier.get("ticker"), error=str(exc))
 
 
-async def latest_dossier(ticker: str) -> Optional[dict]:
+async def latest_dossier(ticker: str,
+                         user_id: Optional[str] = None) -> Optional[dict]:
     """
-    The most recent dossier for *ticker*, with a staleness flag.
+    The most recent dossier for *ticker*, for *this reader*, with a staleness flag.
 
     Served past its TTL rather than withheld — a day-old business assessment is
     still a business assessment — but flagged, because the veto and the UI both
     need to treat "old" differently from "current".
+
+    Scoped to the user because dossiers are now built with the user's own keys
+    and their own chosen models. Two readers on different models genuinely have
+    different readings of the same company, and handing one person the other's
+    would misattribute a judgement they did not make — and, through the veto,
+    refuse their order on it.
+
+    The fallback is deliberately narrow: **the legacy shared series only**, the
+    documents written before dossiers were per-user, which carry no `user_id`
+    at all. It is never another user's reading. That keeps every dossier
+    already on disk readable and gives a user who has not built their own
+    something to look at, without inventing cross-user visibility.
     """
     ticker = ticker.upper()
     try:
         db = await get_db()
-        docs = await (
-            db[COLL_DOSSIERS]
-            .find({"ticker": ticker}, {"_id": 0})
-            .sort("as_of", -1)
-            .limit(1)
-            .to_list(length=1)
-        )
+        docs: list = []
+        if user_id:
+            docs = await (
+                db[COLL_DOSSIERS]
+                .find({"ticker": ticker, "user_id": str(user_id)}, {"_id": 0})
+                .sort("as_of", -1)
+                .limit(1)
+                .to_list(length=1)
+            )
+        if not docs:
+            # Pre-per-user documents. `user_id: None` matches both an explicit
+            # null and a missing field, which is what those documents have.
+            docs = await (
+                db[COLL_DOSSIERS]
+                .find({"ticker": ticker, "user_id": None}, {"_id": 0})
+                .sort("as_of", -1)
+                .limit(1)
+                .to_list(length=1)
+            )
     except Exception as exc:
         logger.warning("research_dossier_read_failed", ticker=ticker, error=str(exc))
         return None

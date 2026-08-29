@@ -5,6 +5,7 @@ import { researchApi } from '../../lib/api'
 import type {
   DimensionScore,
   EvidenceItem,
+  ModelUsed,
   PriorRecordCoverage,
   ResearchDebate,
   ResearchDossier,
@@ -275,6 +276,7 @@ function DossierBody({ dossier }: { dossier: ResearchDossier }) {
         </>
       )}
 
+      <ModelsLine models={dossier.models_used} />
       <PriorRecordNote coverage={dossier.prior_record} />
       <OutcomeNote outcome={dossier.outcome} />
 
@@ -835,6 +837,32 @@ function OutcomeNote({ outcome }: { outcome?: ResearchOutcome | null }) {
         </p>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Which models wrote this reading.
+ *
+ * Only interesting once a trader can choose — but then it is essential: two
+ * dossiers on the same company are not comparable without knowing which model
+ * produced each, and "try a different agent" is not a workflow you can follow
+ * if the answer is invisible. Absent on dossiers written before provenance was
+ * recorded, which is the honest rendering of "we did not keep this".
+ */
+function ModelsLine({ models }: { models?: ModelUsed[] }) {
+  if (!models || models.length === 0) return null
+  return (
+    <p className="text-[10.5px] leading-relaxed text-[var(--color-fg-muted)]">
+      {models.length === 1 ? 'Written by ' : 'Written by '}
+      {models.map((m, i) => (
+        <span key={`${m.provider}-${m.model}`}>
+          {i > 0 ? '; ' : ''}
+          <span className="text-[var(--color-fg)]">{m.model}</span>
+          {m.agents.length > 0 ? <> ({m.agents.join(', ')})</> : null}
+        </span>
+      ))}
+      .
+    </p>
   )
 }
 

@@ -56,7 +56,7 @@ def _patch_dossier(monkeypatch, value, raises=False):
     """
     import app.services.research.dossier as D
 
-    async def fake(_ticker):
+    async def fake(_ticker, _user_id=None):
         if raises:
             raise RuntimeError("mongo is down")
         return value
@@ -65,7 +65,7 @@ def _patch_dossier(monkeypatch, value, raises=False):
 
 
 def _veto(ticker="EXMP"):
-    return asyncio.run(TM._research_veto(ticker))
+    return asyncio.run(TM._research_veto(ticker, "user-1"))
 
 
 # ── Blocking ──────────────────────────────────────────────────────────────────

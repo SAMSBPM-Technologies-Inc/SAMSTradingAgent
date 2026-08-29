@@ -7,6 +7,7 @@ import { usePalette, type Palette } from '../lib/palette'
 import type {
   DimensionScore,
   EvidenceItem,
+  ModelUsed,
   PriorRecordCoverage,
   ResearchDebate,
   ResearchDossier,
@@ -295,6 +296,7 @@ function Body({ dossier, C }: { dossier: ResearchDossier; C: Palette }) {
         </>
       )}
 
+      <ModelsLine models={dossier.models_used} C={C} />
       <PriorRecordNote coverage={dossier.prior_record} C={C} />
       <OutcomeNote outcome={dossier.outcome} C={C} />
 
@@ -707,6 +709,19 @@ function OutcomeNote({ outcome, C }: { outcome?: ResearchOutcome | null; C: Pale
         </Text>
       ) : null}
     </View>
+  )
+}
+
+/** Which models wrote this reading — mirrors the web panel. */
+function ModelsLine({ models, C }: { models?: ModelUsed[]; C: Palette }) {
+  if (!models || models.length === 0) return null
+  const text = models
+    .map((m) => (m.agents.length ? `${m.model} (${m.agents.join(', ')})` : m.model))
+    .join('; ')
+  return (
+    <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+      Written by {text}.
+    </Text>
   )
 }
 

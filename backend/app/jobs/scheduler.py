@@ -93,6 +93,47 @@ async def _get_all_tickers() -> list[str]:
     return sorted(tickers)
 
 
+async def _research_users() -> list[tuple[str, list[str]]]:
+    """
+    Users who have opted into research, each with their own watchlist.
+
+    Two properties matter and both are cost controls. Research is five to seven
+    model calls per ticker per day; multiplied across users it is the one
+    number in this system that can run away, so the job reaches nobody who has
+    not asked for it — `research_enabled` defaults false and stays false until
+    a user turns it on, at which point they are spending their own key.
+
+    And each user gets *their* watchlist rather than the union: building a
+    dossier on a ticker somebody else watches spends one trader's key on
+    another trader's name.
+    """
+    try:
+        db = await get_db()
+        users = await db[COLL_USERS].find(
+            {"llm_settings.research_enabled": True}, {"_id": 1},
+        ).to_list(length=1000)
+    except Exception as exc:
+        logger.warning("research_users_fetch_failed", error=str(exc))
+        return []
+
+    out: list[tuple[str, list[str]]] = []
+    for user in users:
+        user_id = str(user["_id"])
+        try:
+            db = await get_db()
+            watched = await db[COLL_WATCHED].find(
+                {"user_id": user_id}, {"ticker": 1},
+            ).to_list(length=2000)
+        except Exception as exc:
+            logger.warning("research_user_watchlist_failed",
+                           user_id=user_id, error=str(exc))
+            continue
+        tickers = sorted({d["ticker"] for d in watched})
+        if tickers:
+            out.append((user_id, tickers))
+    return out
+
+
 # ── Job functions ─────────────────────────────────────────────────────────────
 
 async def _market_pipeline_job() -> None:
@@ -177,28 +218,31 @@ async def _research_refresh_job() -> None:
     try:
         from app.services.research.dossier import build_dossier
 
-        tickers = await _get_all_tickers()
-        if not tickers:
+        cohort = await _research_users()
+        if not cohort:
+            logger.info("research_refresh_no_opted_in_users")
             return
 
-        ordered = await _held_first(tickers)
-        watchlist = await _watchlist_sectors(ordered)
-
         built = failed = 0
-        for ticker in ordered:
-            try:
-                dossier = await build_dossier(ticker, watchlist=watchlist)
-                if dossier:
-                    built += 1
-                else:
+        for user_id, tickers in cohort:
+            ordered = await _held_first(tickers)
+            watchlist = await _watchlist_sectors(ordered)
+            for ticker in ordered:
+                try:
+                    dossier = await build_dossier(
+                        ticker, user_id=user_id, watchlist=watchlist,
+                    )
+                    if dossier:
+                        built += 1
+                    else:
+                        failed += 1
+                except Exception as exc:
                     failed += 1
-            except Exception as exc:
-                failed += 1
-                logger.warning("research_refresh_ticker_failed",
-                               ticker=ticker, error=str(exc))
+                    logger.warning("research_refresh_ticker_failed",
+                                   user_id=user_id, ticker=ticker, error=str(exc))
 
         logger.info("research_refresh_done", built=built, skipped=failed,
-                    tickers=len(ordered))
+                    users=len(cohort))
     except Exception as exc:
         logger.error("research_refresh_job_failed", error=str(exc))
 
@@ -227,7 +271,14 @@ async def _research_outcomes_job() -> None:
     try:
         from app.services.research.outcomes import settle_dossiers
 
-        await settle_dossiers()
+        # Per user, for the same reason the refresh is: the reflection is a
+        # model call on that user's key, grading that user's reading.
+        for user_id, _tickers in await _research_users():
+            try:
+                await settle_dossiers(user_id=user_id)
+            except Exception as exc:
+                logger.warning("research_outcomes_user_failed",
+                               user_id=user_id, error=str(exc))
     except Exception as exc:
         logger.error("research_outcomes_job_failed", error=str(exc))
 

@@ -20,7 +20,7 @@ from app.db import COLL_FUNDAMENTALS_CACHE, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
 from app.models.stock import (
     CitationAudit, PriorRecordCoverage, ResearchDebate, ResearchDossier,
-    ResearchOutcome, ResearchStances, ResearchVetoStatus,
+    ModelUsed, ResearchOutcome, ResearchStances, ResearchVetoStatus,
 )
 from app.services.research.dossier import build_dossier, latest_dossier
 from app.services.research.veto import evaluate_veto
@@ -35,7 +35,7 @@ logger = get_logger(__name__)
 async def get_research(ticker: str,
                        current_user: dict = Depends(get_current_user)) -> ResearchDossier:
     ticker = ticker.upper().strip()
-    doc = await latest_dossier(ticker)
+    doc = await latest_dossier(ticker, str(current_user.get("_id") or ""))
     if not doc:
         raise HTTPException(
             status_code=404,
@@ -101,7 +101,7 @@ async def get_research_veto(ticker: str,
     behaves.
     """
     ticker = ticker.upper().strip()
-    doc = await latest_dossier(ticker)
+    doc = await latest_dossier(ticker, str(current_user.get("_id") or ""))
     return ResearchVetoStatus(**evaluate_veto(doc).to_dict())
 
 
@@ -178,6 +178,7 @@ def _to_model(doc: dict) -> ResearchDossier:
         debate=(
             ResearchDebate.model_validate(doc["debate"]) if doc.get("debate") else None
         ),
+        models_used=[ModelUsed(**m) for m in (doc.get("models_used") or [])],
         stances=(
             ResearchStances.model_validate(doc["stances"]) if doc.get("stances") else None
         ),
