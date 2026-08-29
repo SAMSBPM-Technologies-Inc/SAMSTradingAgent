@@ -564,6 +564,8 @@ export interface OrderPlacementResponse {
   trade_id?: string | null
   /** Why it wasn't placed, or how the quantity was adjusted. */
   reason?: string | null
+  /** Why it was taken. Same words the order history will show. */
+  entry_reason?: string | null
   /** True when this matched an earlier request and no new order was sent. */
   duplicate: boolean
 }
@@ -601,6 +603,12 @@ export interface Proposal {
   signal_score?: number | null
   conviction?: Conviction | null
   reason?: string | null
+  /** Why the order was taken, in the few words a person reads: the score
+   *  against the bar it had to clear, the factors that actually moved it, and
+   *  the analyst's conviction. Written from the same arithmetic that produced
+   *  the score — never by a model, and never naming a factor on the ML path.
+   *  Distinct from `reason`, which says why an order was *not* placed. */
+  entry_reason?: string | null
   proposed_at: string
   is_paper: boolean
 }
@@ -649,6 +657,12 @@ export interface TradeRecord {
   reason?: string
   signal_score?: number
   signal_type?: string
+  /** Why the order was taken, in the few words a person reads: the score
+   *  against the bar it had to clear, the factors that actually moved it, and
+   *  the analyst's conviction. Written from the same arithmetic that produced
+   *  the score — never by a model, and never naming a factor on the ML path.
+   *  Distinct from `reason`, which says why an order was *not* placed. */
+  entry_reason?: string | null
   entry_price?: number
   exit_price?: number
   pnl?: number
@@ -758,6 +772,8 @@ export interface ClosedTrade {
   pnl_pct: number | null
   stop_loss: number | null
   take_profit: number | null
+  /** Why the position was opened. Both halves of the story on one row. */
+  entry_reason?: string | null
   exit_reason: string | null
   /** The stable code behind exit_reason; null when a stop or target fired. */
   exit_trigger?: string | null

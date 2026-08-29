@@ -28,9 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.trade import TradeStatus  # noqa: E402
 from app.services.brokers.base import Fill  # noqa: E402
-from app.services.trade_manager import (  # noqa: E402
-    _exit_reason_text, _settle_exit_update,
-)
+from app.services.trade_manager import _settle_exit_update  # noqa: E402
+from app.services.trade_rationale import exit_rationale  # noqa: E402
 
 ENTRY_AT = datetime(2026, 8, 20, 14, 30, tzinfo=timezone.utc)
 EXIT_AT = ENTRY_AT + timedelta(days=6)
@@ -179,18 +178,18 @@ def test_a_row_from_before_reasons_were_recorded_is_labelled_honestly():
 
 
 def test_the_sell_signal_reason_carries_the_score_it_acted_on():
-    text = _exit_reason_text("SELL_SIGNAL", 0.24)
+    text = exit_rationale("SELL_SIGNAL", 0.24)
     assert "24/100" in text
     assert "30" in text
 
 
 def test_every_trigger_produces_a_sentence_not_a_code():
     for trigger in ("SELL_SIGNAL", "EXIT_ALERT", "MANUAL_CLOSE"):
-        text = _exit_reason_text(trigger, None)
+        text = exit_rationale(trigger, None)
         assert text and text != trigger
         assert " " in text
 
 
 def test_an_unknown_trigger_still_says_something():
     """A new trigger must not produce an empty reason on a closed trade."""
-    assert _exit_reason_text("LIQUIDATION", None) == "Closed on LIQUIDATION"
+    assert exit_rationale("LIQUIDATION", None) == "Closed on LIQUIDATION"

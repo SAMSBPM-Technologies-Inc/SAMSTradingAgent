@@ -14,6 +14,69 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.15.0] — 2026-08-29
+
+**Every order now says why it was taken.** A trade row read `BUY 57 HXL @
+41.20` and nothing else: the six sub-scores, the threshold it had to clear and
+the analyst's conviction all existed at the moment the decision was made and
+none of them survived it. Closed positions had been given a reason in 1.6.0;
+the orders that opened them had not, so the record could say why the agent
+sold and never why it bought.
+
+Each entry now carries a one-line justification — the score against the bar it
+had to clear, the one or two factors that actually moved it, the strongest
+factor arguing the other way, and the analyst's conviction. For example:
+*"Scored 82/100 against the 70 a buy needs — strong technicals and positive
+news sentiment, despite elevated volatility. Analyst conviction HIGH."*
+
+Where it shows up:
+
+- **Order history**, web and mobile — a new *Why* column, and the full text on
+  the card view and on hover.
+- **The approval queue**, web and mobile. A proposal previously said only
+  "MANUAL mode — awaiting your approval", which explains the queue rather than
+  the trade you are being asked to fund.
+- **The agent activity feed**, which answered "why did that end" for closed
+  lines and nothing at all for open ones.
+- **Closed trades** on the Positions and Performance screens, where the entry
+  reason sits above the exit reason: a realised P&L is a test of a claim, and
+  the tables showed the result without the claim.
+- **Order emails and the Slack/WhatsApp alerts**, as a *Why* row — the alert on
+  a phone is where the question actually gets asked.
+
+Three things it deliberately will not do. It is **not written by a model** —
+these are pure functions over the same arithmetic that produced the score, so
+the sentence can be checked against the factor breakdown rather than trusted.
+It **names a factor only when that factor moved the score**, ranking on lift
+away from neutral rather than on weight, so the heaviest weight does not head
+every reason ever written. And on the XGBoost scoring path it says *"from the ML
+model, so no factor attribution"* rather than naming drivers — the same
+refusal `explain_score` already makes, because a weighted story told about a
+model's output is a fabrication however well it reads.
+
+An order you placed yourself reads simply *"Your order, placed from the
+ticket."* — no factors. You chose the ticker and the moment; listing what the
+engine happens to like right now would read as the engine endorsing an order
+it had no part in.
+
+Sell reasons gained the same treatment: an exit the score decided now names
+what broke down. An exit alert or a hand-placed close does not, because
+neither was decided by the score and attaching a decomposition to them would
+credit arithmetic that had no part in it.
+
+### Known gaps
+
+- Trades placed before this release have no entry reason and never will —
+  nothing recorded the inputs at the time, and reconstructing one from today's
+  features would be a guess presented as a record. Those rows show the exit
+  reason alone, as they did.
+- A scale-in overwrites the position's reason rather than keeping a list; the
+  superseded wording stays on the add itself, in `pending_add`, which the UI
+  does not surface.
+- The order ticket's confirmation toast still does not repeat the reason. It
+  is on the record and in the notification; the toast was already at the
+  length where another clause stops being read.
+
 ## [1.14.2] — 2026-08-29
 
 **Every trade now carries one reference number across every channel.** A

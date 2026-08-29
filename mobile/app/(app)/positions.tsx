@@ -179,6 +179,15 @@ function ProposalCard({ proposal, onResolved }: {
               </Text>
             )}
           </View>
+          {/* Why the agent wants this, above why it is asking. A card that
+              says only "MANUAL mode — awaiting your approval" explains the
+              queue, not the trade, and the queue is not what has to be
+              decided about here. */}
+          {proposal.entry_reason && (
+            <Text style={{ fontSize: 11, color: C.fg, marginTop: 4, lineHeight: 16 }}>
+              {proposal.entry_reason}
+            </Text>
+          )}
           {proposal.reason && (
             <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 4, lineHeight: 16 }}>
               {proposal.reason}
@@ -555,14 +564,25 @@ export default function PositionsScreen() {
                         )}
                       </View>
 
-                      {/* Why it closed, or why it was refused. `reason` carries
-                          a guard's refusal on an entry; `exit_reason` carries
-                          the cause of an exit. A row never has both. */}
-                      {(o.reason || exitReasonLabel(o.exit_reason)) && (
-                        <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 14 }}>
-                          {o.reason ?? exitReasonLabel(o.exit_reason)}
-                        </Text>
-                      )}
+                      {/* Three different sentences answering three different
+                          questions, so none of them substitutes for another:
+                          `reason` is a guard's refusal or a size adjustment,
+                          `entry_reason` is why the position was opened, and
+                          `exit_reason` is why it ended. Web shows the same
+                          three, in the same order. */}
+                      {[o.reason, o.entry_reason, exitReasonLabel(o.exit_reason)]
+                        .filter(Boolean)
+                        .map((line, n) => (
+                          <Text
+                            key={line as string}
+                            style={{
+                              fontSize: 10, lineHeight: 14,
+                              color: n === 0 ? C.fg : C.fgMuted,
+                            }}
+                          >
+                            {line}
+                          </Text>
+                        ))}
                       <Text style={{ fontSize: 9, color: C.fgMuted, fontFamily: 'monospace' }}>
                         Ref {shortRef(o.id)}
                       </Text>

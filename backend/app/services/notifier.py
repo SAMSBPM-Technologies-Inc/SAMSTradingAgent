@@ -371,6 +371,7 @@ async def send_trade_email(
     trigger: str = "",
     signal_score: float | None = None,
     trade_id: str | None = None,
+    rationale: str | None = None,
 ) -> None:
     """
     Notify the user that an order was **submitted** to the broker.
@@ -406,6 +407,11 @@ async def send_trade_email(
         rows.append(("Signal score", f"{signal_score:.2f}"))
     if trigger:
         rows.append(("Triggered by", trigger))
+    if rationale:
+        # The one row that answers the question a person actually has when an
+        # order lands on their phone: *why*. Placed after the trigger, which
+        # says which mechanism fired, because this says what the mechanism saw.
+        rows.append(("Why", rationale))
     if order_id:
         rows.append(("Broker order", str(order_id)))
     if account_id:
@@ -464,6 +470,7 @@ async def send_trade_alert(
     trigger: str = "",
     signal_score: float | None = None,
     trade_id: str | None = None,
+    rationale: str | None = None,
 ) -> None:
     """
     Push the same order event as `send_trade_email` down the chat channels.
@@ -493,6 +500,8 @@ async def send_trade_alert(
         lines.append(f"Signal score: {signal_score:.2f}")
     if trigger:
         lines.append(f"Triggered by: {trigger}")
+    if rationale:
+        lines.append(f"Why: {rationale}")
     if order_id:
         lines.append(f"Broker order: {order_id}")
     if not is_paper:

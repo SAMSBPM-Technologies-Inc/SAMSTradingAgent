@@ -21,7 +21,7 @@ from app.services import broker as ibkr
 from app.services.benchmark import (
     alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
 )
-from app.services.signal_generator import SELL_THRESHOLD
+from app.services.trade_rationale import entry_rationale, exit_rationale
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -204,6 +204,48 @@ async def _ticker_volatility(ticker: str) -> float | None:
         {"ticker": ticker.upper()}, {"volatility_20d": 1}
     )
     return (doc or {}).get("volatility_20d")
+
+
+async def _rationale_context(user_id, ticker: str) -> tuple[dict | None, dict | None]:
+    """
+    Everything `trade_rationale` needs to name the factors behind a decision:
+    the feature document the score was computed from, and the weights *this*
+    user's score was computed with.
+
+    Both are read here rather than passed down from the pipeline because the
+    manual and proposal-approval paths have neither in hand, and a justification
+    that only appears on agent orders would leave the two order types that most
+    need explaining — the ones a person authorised — as the bare rows they were.
+
+    Returns `(None, None)` on any failure. A record whose reason is a little
+    thinner is a cosmetic loss; an order that does not go out because the
+    sentence describing it could not be written is not.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    try:
+        db = await get_db()
+        feat = await db[COLL_FEATURES].find_one({"ticker": ticker.upper()})
+
+        candidates = [user_id]
+        if isinstance(user_id, str):
+            try:
+                candidates.append(ObjectId(user_id))
+            except (InvalidId, TypeError):
+                pass
+        else:
+            candidates.append(str(user_id))
+        user = await db[COLL_USERS].find_one(
+            {"_id": {"$in": candidates}}, {"scoring_weights": 1}
+        )
+        return feat, (user or {}).get("scoring_weights")
+    except Exception as exc:
+        logger.warning(
+            "rationale_context_failed",
+            user_id=str(user_id), ticker=ticker, error=str(exc),
+        )
+        return None, None
 
 
 async def _get_user_settings(user_id) -> AutoTradeSettings | None:
@@ -1022,7 +1064,7 @@ async def _submit_entry(
     signal_score: float | None,
     signal_type: str,
     trigger: str,
-    extra: dict | None = None,
+    conviction: str | None = None,
 ) -> tuple[str, str, object | None]:
     """
     Log the trade, send it to the broker, record the outcome.
@@ -1032,10 +1074,21 @@ async def _submit_entry(
     now = utcnow()
     is_paper = not get_settings().is_live_trading
 
+    # Built here, above the add/open fork, so that every order this system
+    # sends carries a justification written the same way. An add that arrived
+    # as an unexplained second buy on a name already held was the least legible
+    # row in the whole history.
+    feat, user_weights = await _rationale_context(user_id, plan.ticker)
+    reason = entry_rationale(
+        signal_score=signal_score, feat=feat, user_weights=user_weights,
+        conviction=conviction, source=signal_type, is_add=plan.is_add,
+    )
+
     if plan.is_add:
         return await _submit_add(
             user_id, plan,
             signal_score=signal_score, signal_type=signal_type, trigger=trigger,
+            entry_reason=reason,
         )
 
     record = {
@@ -1044,6 +1097,10 @@ async def _submit_entry(
         "stop_loss": plan.stop_price, "take_profit": plan.target_price,
         "status": TradeStatus.PENDING,
         "signal_score": signal_score, "signal_type": signal_type,
+        # The justification, stored on the record rather than only logged: a
+        # reason that lives in a log line is not available to the person
+        # reading their order history six weeks later.
+        "entry_reason": reason,
         # Reflects the gateway session actually in use, not the user's
         # preference — the server's TRADING_MODE decides which account is hit.
         "is_paper": is_paper,
@@ -1054,7 +1111,8 @@ async def _submit_entry(
     }
     if plan.adjustment:
         record["reason"] = plan.adjustment
-    record.update(extra or {})
+    if conviction:
+        record["conviction"] = conviction
 
     trade_id = await _log_trade(record)
 
@@ -1084,7 +1142,7 @@ async def _submit_entry(
         limit_price=plan.limit_price, order_id=order_id,
         stop_loss=plan.stop_price, take_profit=plan.target_price,
         is_paper=is_paper, account_id=plan.account_id, trigger=trigger,
-        signal_score=signal_score, trade_id=trade_id,
+        signal_score=signal_score, trade_id=trade_id, rationale=reason,
     )
     return trade_id, TradeStatus.PENDING, order_id
 
@@ -1096,6 +1154,7 @@ async def _submit_add(
     signal_score: float | None,
     signal_type: str,
     trigger: str,
+    entry_reason: str | None = None,
 ) -> tuple[str, str, object | None]:
     """
     Add to a holding, without ever taking down the protection it already has.
@@ -1157,8 +1216,16 @@ async def _submit_add(
     # levels early would make an exit size itself against a bracket that is not
     # there.
     await _update_trade(trade_id, {
+        # The position's justification becomes the *latest* reason to hold it.
+        # Overwriting rather than appending is deliberate: the record is one
+        # position, and a reason that grows a paragraph per add stops being the
+        # few words a person actually reads. The superseded wording stays with
+        # the add in `pending_add`, which is where an audit of that one order
+        # looks.
+        **({"entry_reason": entry_reason} if entry_reason else {}),
         "pending_add": {
             "qty": plan.qty,
+            "entry_reason": entry_reason,
             "limit_price": plan.limit_price,
             "order_id": order_id,
             "total_qty": total_qty,
@@ -1185,7 +1252,7 @@ async def _submit_add(
         stop_loss=plan.stop_price, take_profit=plan.target_price,
         is_paper=is_paper, account_id=plan.account_id,
         trigger=f"{trigger} (adding to {plan.held_qty:g} held)",
-        signal_score=signal_score, trade_id=trade_id,
+        signal_score=signal_score, trade_id=trade_id, rationale=entry_reason,
     )
     return trade_id, TradeStatus.PENDING, order_id
 
@@ -1255,6 +1322,7 @@ async def execute_entry(
         # Every risk guard has passed and the order is fully specified. The only
         # remaining question is whether this user lets the agent send it alone.
         if not settings.may_auto_execute(conviction):
+            feat, user_weights = await _rationale_context(user_id, plan.ticker)
             await _log_trade({
                 "user_id": user_id, "ticker": plan.ticker, "action": "BUY",
                 "qty": plan.qty, "limit_price": plan.limit_price,
@@ -1262,6 +1330,15 @@ async def execute_entry(
                 "status": TradeStatus.PROPOSED,
                 "signal_score": signal_score, "signal_type": "BUY",
                 "conviction": conviction,
+                # A proposal asks a person to commit money on the agent's
+                # reading. It carries the same justification the order would
+                # have carried, written before the decision rather than after
+                # it — which is the only order in which it is any use.
+                "entry_reason": entry_rationale(
+                    signal_score=signal_score, feat=feat,
+                    user_weights=user_weights, conviction=conviction,
+                    source="BUY",
+                ),
                 "reason": (
                     f"{settings.mode.value} mode — awaiting your approval"
                     + (f" (conviction {conviction} below "
@@ -1281,7 +1358,7 @@ async def execute_entry(
         await _submit_entry(
             user_id, plan,
             signal_score=signal_score, signal_type="BUY", trigger="BUY signal",
-            extra={"conviction": conviction} if conviction else None,
+            conviction=conviction,
         )
 
     except Exception as exc:
@@ -1354,11 +1431,32 @@ async def execute_manual_entry(
         "take_profit": plan.target_price,
         "is_paper": not get_settings().is_live_trading,
         "trade_id": trade_id,
+        # Read back off the record rather than recomputed, so the sentence in
+        # the confirmation and the sentence in the order history cannot differ.
+        "entry_reason": await _stored_entry_reason(trade_id),
         "reason": plan.adjustment or (
             None if order_id is not None
             else "Broker rejected or did not return an order ID"
         ),
     }
+
+
+async def _stored_entry_reason(trade_id: str | None) -> str | None:
+    """The justification actually written to *trade_id*, or None."""
+    if not trade_id:
+        return None
+    from bson import ObjectId
+
+    try:
+        db = await get_db()
+        doc = await db[COLL_TRADES].find_one(
+            {"_id": ObjectId(str(trade_id))}, {"entry_reason": 1}
+        )
+    except Exception:
+        # A malformed id or an unreachable database costs the confirmation its
+        # sentence, never the order its result.
+        return None
+    return (doc or {}).get("entry_reason")
 
 
 async def _last_known_price(ticker: str) -> float | None:
@@ -1368,32 +1466,6 @@ async def _last_known_price(ticker: str) -> float | None:
         {"ticker": ticker.upper()}, {"current_price": 1}
     )
     return (doc or {}).get("current_price")
-
-
-#: Why a position was closed, in the words the record should carry.
-#:
-#: `execute_exit` has always known this and always threw it away: the trigger
-#: reached a log line and a push notification, and the trade document kept
-#: nothing. Reconciliation would later stamp `bracket_or_manual` on anything it
-#: found flat, so a stop firing and the agent acting on its own SELL signal
-#: were indistinguishable in the one place a reader actually looks. A closed
-#: trade has to be able to say what closed it.
-_EXIT_REASON: dict[str, str] = {
-    "SELL_SIGNAL": "Score fell below the sell threshold",
-    "EXIT_ALERT": "Exit alert — the setup scan flagged the position overbought",
-    "MANUAL_CLOSE": "Closed by you from the Positions screen",
-}
-
-
-def _exit_reason_text(trigger: str, signal_score: float | None) -> str:
-    """One sentence saying why this position is being sold."""
-    base = _EXIT_REASON.get(trigger, f"Closed on {trigger}")
-    if trigger == "SELL_SIGNAL" and signal_score is not None:
-        return (
-            f"{base} — scored {round(signal_score * 100)}/100 against the "
-            f"{round(SELL_THRESHOLD * 100)} that triggers a sell"
-        )
-    return base
 
 
 async def execute_exit(
@@ -1522,6 +1594,19 @@ async def execute_exit(
             )
         qty = int(min(qty, held))
 
+        # Only a SELL_SIGNAL exit was decided by the score, so only that one
+        # is worth the two reads it takes to name the factors behind it. An
+        # exit alert and a manual close were decided elsewhere, and dressing
+        # either in a factor decomposition would credit arithmetic that had no
+        # part in the decision.
+        exit_feat, exit_weights = (
+            await _rationale_context(user_id, ticker)
+            if trigger == "SELL_SIGNAL" else (None, None)
+        )
+        exit_reason = exit_rationale(
+            trigger, signal_score, feat=exit_feat, user_weights=exit_weights,
+        )
+
         # Plain limit order: the protective legs are gone, so this must not
         # carry a bracket of its own.
         order_id = await ibkr.place_limit_order(ticker, "SELL", qty, limit_price, account_id=account_id)
@@ -1537,7 +1622,7 @@ async def execute_exit(
             # place that knows — reconciliation can see that a position went
             # flat but never why, and used to guess.
             "exit_trigger": trigger,
-            "exit_reason": _exit_reason_text(trigger, signal_score),
+            "exit_reason": exit_reason,
             "exit_qty_submitted": qty,
         }
         if order_id:
@@ -1567,7 +1652,7 @@ async def execute_exit(
             limit_price=limit_price, order_id=order_id,
             is_paper=not get_settings().is_live_trading,
             account_id=account_id, trigger=trigger,
-            trade_id=str(open_trade["_id"]),
+            trade_id=str(open_trade["_id"]), rationale=exit_reason,
         )
 
     except BrokerUnavailable:

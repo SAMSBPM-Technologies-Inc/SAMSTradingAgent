@@ -100,6 +100,15 @@ function ProposalCard({
         </span>
       </div>
 
+      {/* Why the agent wants this, above why it is asking. A card that says
+          only "MANUAL mode — awaiting your approval" explains the queue, not
+          the trade, and the queue is not what the reader has to decide about. */}
+      {proposal.entry_reason && (
+        <p className="mt-1.5 text-[11px] leading-snug text-[var(--color-fg)]">
+          {proposal.entry_reason}
+        </p>
+      )}
+
       {proposal.reason && (
         <p className="mt-1.5 text-[11px] leading-snug text-[var(--color-fg-muted)]">{proposal.reason}</p>
       )}
@@ -162,11 +171,12 @@ function ProposalCard({
  * would be worse than showing fewer of them. Every line here corresponds to a
  * row in `trades`.
  *
- * A closed line states the action *and the reason*: how many shares, at what
- * result, and what closed it. "AVGO closed 12 — −$1,234.00" says a position
- * ended and leaves the only interesting question unanswered; the record now
- * carries `exit_reason`, so the feed says which of a stop, a fallen score, or
- * the user's own Close button did it.
+ * Every line states the action *and the reason*: how many shares, at what
+ * result, and why. "AVGO closed 12 — −$1,234.00" says a position ended and
+ * leaves the only interesting question unanswered; the record carries
+ * `exit_reason`, so a closed line says which of a stop, a fallen score, or the
+ * user's own Close button did it, and `entry_reason`, so an open one says what
+ * the agent saw when it bought.
  */
 function ActivityLog({ orders }: { orders: TradeRecord[] }) {
   const recent = [...orders]
@@ -188,7 +198,12 @@ function ActivityLog({ orders }: { orders: TradeRecord[] }) {
         const closed = o.closed_at != null
         const pnl = o.pnl
         const qty = o.filled_qty ?? o.qty
-        const reason = exitReasonLabel(o.exit_reason)
+        // A closed line answers "why did that end"; an open one answers "why
+        // is this on". Both questions are the same question at different
+        // times, and the feed used to answer only the first.
+        const reason = closed
+          ? exitReasonLabel(o.exit_reason)
+          : o.entry_reason ?? null
         // An estimate from the limit we asked for is not a result. Settlement
         // clears the flag when the real fill lands; until then the line says
         // the sale is still working rather than showing a P&L that may not be
@@ -224,7 +239,7 @@ function ActivityLog({ orders }: { orders: TradeRecord[] }) {
               </span>
               {/* The why. Its own line: it is the part worth reading, and
                   trailing it after four dot-separated fragments buries it. */}
-              {closed && reason && (
+              {reason && (
                 <span className="mt-0.5 block text-[10.5px] leading-snug text-[var(--color-fg-muted)]">
                   {reason}
                 </span>

@@ -460,6 +460,22 @@ The web client draws from `GET /chart/{ticker}/series` with `lightweight-charts`
 lazy-loaded so the library stays off pages that have no chart. SMA-20/50 are
 computed server-side so the PNG and the interactive chart cannot disagree.
 
+**Every order says why it was taken, and nothing says it that cannot be
+checked.** `services/trade_rationale.py` writes the one line a trade record
+carries to justify itself — entries, adds, proposals and score-driven exits
+alike — and it is pure functions over the feature document and the effective
+weights, never a model call. Three rules hold it honest, and all three are the
+same rule `explain_score` follows: a factor is named on its **lift away from
+neutral** (`weight × (score − 0.5)`), not its weight, or the heaviest weight
+heads every reason ever written; the XGBoost path names no factor at all and
+says so, because a weighted story about a model's output is a fabrication; and
+the sentence **concedes the strongest factor arguing the other way**, since a
+reason that only lists agreement reads as marketing. `entry_reason` and
+`exit_reason` are separate fields answering separate questions, and both are
+separate from `reason`, which says why an order was *not* placed. Only
+`SELL_SIGNAL` exits get a drivers clause — an exit alert and a manual close
+were not decided by the score.
+
 **Gross is what the position did; net is what reached the account.** Every
 trade accrues `commission_paid` from the venue's own execution reports — entry,
 each scale-in add, and the exit — and `/performance/trades` reports net

@@ -262,6 +262,8 @@ export interface OrderPlacementResponse {
   trade_id?: string | null
   /** Why it wasn't placed, or how the quantity was adjusted. */
   reason?: string | null
+  /** Why it was taken. Same words the order history will show. */
+  entry_reason?: string | null
   /** True when this matched an earlier request and no new order was sent. */
   duplicate: boolean
 }
@@ -352,6 +354,11 @@ export interface Proposal {
   signal_score?: number | null
   conviction?: Conviction | null
   reason?: string | null
+  /** Why the order was taken, in the few words a person reads: the score
+   *  against the bar it had to clear, the factors that actually moved it, and
+   *  the analyst's conviction. Distinct from `reason`, which says why an order
+   *  was *not* placed or how its size was adjusted. */
+  entry_reason?: string | null
   proposed_at: string
   is_paper: boolean
 }
@@ -383,6 +390,11 @@ export interface TradeRecord {
   reason?: string
   signal_score?: number
   signal_type?: string
+  /** Why the order was taken, in the few words a person reads: the score
+   *  against the bar it had to clear, the factors that actually moved it, and
+   *  the analyst's conviction. Distinct from `reason`, which says why an order
+   *  was *not* placed or how its size was adjusted. */
+  entry_reason?: string | null
   entry_price?: number
   exit_price?: number
   pnl?: number

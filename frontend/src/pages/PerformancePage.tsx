@@ -297,7 +297,14 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
                 value: t.commission_paid == null ? '—' : usd.format(t.commission_paid),
               },
             ]}
-            note={closedReason(t)}
+            note={
+              <>
+                {t.entry_reason && (
+                  <span className="block text-[var(--color-fg)]">{t.entry_reason}</span>
+                )}
+                <span className="block">{closedReason(t)}</span>
+              </>
+            }
           />
         ))}
       </CardList>
@@ -320,9 +327,10 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
                   read as two unrelated numbers, and the point is the gap. */}
               <th scope="col" className="text-right font-semibold px-3 py-2.5">Fees</th>
               <th scope="col" className="text-right font-semibold px-3 py-2.5">%</th>
-              {/* Was a second column also labelled "Exit" — this one is why the
-                  position closed, not the price it closed at. */}
-              <th scope="col" className="text-left font-semibold px-4 py-2.5">Reason</th>
+              {/* Was a second column also labelled "Exit", then "Reason" — it
+                  is why the position was taken and why it ended, not the price
+                  it closed at. */}
+              <th scope="col" className="text-left font-semibold px-4 py-2.5">Why</th>
             </tr>
           </thead>
           <tbody>
@@ -384,8 +392,16 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
                     </span>
                   )}
                 </td>
-                <td className="px-4 py-2.5 text-[var(--color-fg-muted)] text-[13px]">
-                  {closedReason(t)}
+                <td className="px-4 py-2.5 text-[13px] max-w-[20rem]">
+                  {/* The thesis above the outcome. A realised P&L is a test of
+                      a claim, and this table showed the result without ever
+                      showing the claim it tested. */}
+                  {t.entry_reason && (
+                    <div className="text-[11px] leading-snug text-[var(--color-fg)]">
+                      {t.entry_reason}
+                    </div>
+                  )}
+                  <div className="text-[var(--color-fg-muted)]">{closedReason(t)}</div>
                 </td>
               </tr>
             ))}

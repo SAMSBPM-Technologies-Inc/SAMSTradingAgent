@@ -43,6 +43,32 @@ function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
 }
 
+/**
+ * The two sentences a closed trade can tell, one under the other.
+ *
+ * A realised result read without the thesis behind it teaches nothing about
+ * the thesis: −$1,234 on AVGO is a number until you can see that it was bought
+ * on strong technicals and sold when the score fell. The entry reason leads
+ * because it came first and because it is the claim the result actually tests.
+ *
+ * Machine codes in `exit_reason` are translated; a sentence the exit path
+ * recorded passes through as written.
+ */
+function ClosedWhy({ trade }: { trade: ClosedTrade }) {
+  const exit = exitReasonLabel(trade.exit_reason)
+  if (!trade.entry_reason && !exit) return null
+  return (
+    <span className="block text-[11px] leading-snug">
+      {trade.entry_reason && (
+        <span className="block text-[var(--color-fg)]">{trade.entry_reason}</span>
+      )}
+      {exit && (
+        <span className="mt-0.5 block text-[var(--color-fg-muted)]">{exit}</span>
+      )}
+    </span>
+  )
+}
+
 /** Broker-statement convention: gains green, losses red in parentheses. */
 function Pnl({ value, className = '' }: { value: number | null | undefined; className?: string }) {
   if (value == null) return <span className={`text-[var(--color-fg-muted)] ${className}`}>—</span>
@@ -550,7 +576,7 @@ export default function PositionsDashboard() {
                           : <span className="text-[var(--color-fg-muted)]">—</span>,
                       },
                     ]}
-                    note={exitReasonLabel(c.exit_reason)}
+                    note={<ClosedWhy trade={c} />}
                   />
                 ))}
               </CardList>
@@ -569,7 +595,10 @@ export default function PositionsDashboard() {
                       <th scope="col" className={thR}>Gross</th>
                       <th scope="col" className={thR}>Fees</th>
                       <th scope="col" className={thR}>Net</th>
-                      <th scope="col" className={th}>Exit reason</th>
+                      {/* Was "Exit reason". It now carries both halves —
+                          why the position was opened and why it ended — and a
+                          header naming only the second would hide the first. */}
+                      <th scope="col" className={th}>Why</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -614,13 +643,9 @@ export default function PositionsDashboard() {
                             : <span className="text-[var(--color-fg-muted)]" title="No complete fee total from the venue">—</span>}
                         </td>
                         <td className="px-3 py-2.5 text-[11px] text-[var(--color-fg-muted)]">
-                          <div className="flex flex-col gap-0.5">
+                          <div className="flex flex-col gap-0.5 max-w-[18rem]">
                             <StatusPill status={c.status} />
-                            {/* Machine codes are translated; a sentence the
-                                exit path recorded passes through as written. */}
-                            {exitReasonLabel(c.exit_reason) && (
-                              <span className="max-w-[16rem]">{exitReasonLabel(c.exit_reason)}</span>
-                            )}
+                            <ClosedWhy trade={c} />
                           </div>
                         </td>
                       </tr>

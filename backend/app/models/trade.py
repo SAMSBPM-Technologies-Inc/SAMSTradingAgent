@@ -118,6 +118,14 @@ class TradeRecord(BaseModel):
     reason: Optional[str] = None        # skip/reject reason
     signal_score: Optional[float] = None
     signal_type: Optional[str] = None   # "BUY" | "SELL" | "EXIT_ALERT"
+    #: Why this position was opened, in the few words a person reads: the score
+    #: against the threshold it had to clear, the factors that actually moved
+    #: it, and the analyst's conviction. Written by `trade_rationale` from the
+    #: same arithmetic that produced the score — never by a model, and never
+    #: naming a factor on the XGBoost path, where the weights did not produce
+    #: the number. Distinct from `reason`, which says why an order was *not*
+    #: placed or how its size was adjusted.
+    entry_reason: Optional[str] = None
     entry_price: Optional[float] = None
     exit_price: Optional[float] = None
     pnl: Optional[float] = None
@@ -157,6 +165,7 @@ class TradeResponse(BaseModel):
     reason: Optional[str] = None
     signal_score: Optional[float] = None
     signal_type: Optional[str] = None
+    entry_reason: Optional[str] = None
     entry_price: Optional[float] = None
     exit_price: Optional[float] = None
     pnl: Optional[float] = None
@@ -213,6 +222,9 @@ class OrderPlacementResponse(BaseModel):
     trade_id: Optional[str] = None
     #: Why an order was not placed, or how the quantity was adjusted.
     reason: Optional[str] = None
+    #: Why the order was taken — returned so the confirmation the user sees
+    #: says what the record will say.
+    entry_reason: Optional[str] = None
     #: True when this request matched an earlier one by idempotency key and no
     #: new order was sent.
     duplicate: bool = False
@@ -230,6 +242,10 @@ class ProposalResponse(BaseModel):
     signal_score: Optional[float] = None
     conviction: Optional[str] = None
     reason: Optional[str] = None
+    #: Why the agent wanted this entry — the same justification the trade would
+    #: carry had it placed the order itself. A proposal asks a person to commit
+    #: money; it has to say what for.
+    entry_reason: Optional[str] = None
     proposed_at: datetime
     is_paper: bool = True
 
