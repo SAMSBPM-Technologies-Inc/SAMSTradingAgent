@@ -32,6 +32,16 @@ function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
 }
 
+/**
+ * The same id that identifies this trade in every email, Slack and WhatsApp
+ * message about it — see notifier.py's "Reference" row. Shown short here
+ * because a table row has no room for the full 24-character id; the full
+ * value is still one hover (desktop) or the record itself away via `title`.
+ */
+function shortRef(id: string): string {
+  return id.slice(-8).toUpperCase()
+}
+
 /** Broker-statement convention, matching AccountBar and the position table. */
 function Pnl({ value }: { value: number | null | undefined }) {
   if (value == null) return <span className="text-[var(--color-fg-muted)]">—</span>
@@ -378,6 +388,10 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                   { label: 'Qty', value: o.qty || '—' },
                   { label: 'Price', value: money(o.entry_price ?? o.limit_price ?? null) },
                   { label: 'P&L', value: <Pnl value={o.pnl} /> },
+                  {
+                    label: 'Ref',
+                    value: <span className="font-mono" title={o.id}>{shortRef(o.id)}</span>,
+                  },
                 ]}
                 note={o.reason ?? exitReasonLabel(o.exit_reason)}
               />
@@ -397,6 +411,9 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
               {/* Status has no funnel of its own — the tab above already is that filter. */}
               <tr className="border-b border-[var(--color-border)] text-[10.5px]
                              uppercase tracking-widest text-[var(--color-fg-muted)]">
+                <th scope="col" className="text-left font-semibold px-3 py-2.5" title="Same id as in email/Slack/WhatsApp for this trade">
+                  Ref
+                </th>
                 <th scope="col" className="text-left font-semibold px-4 py-2.5">
                   <div className="flex items-center gap-1">
                     <span>Date (ET)</span>
@@ -590,7 +607,7 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
             <tbody>
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
                     {hasActiveFilters
                       ? 'No orders match these filters.'
                       : `No ${activeTabLabel.toLowerCase()} orders.`}
@@ -599,6 +616,12 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
               ) : (
                 filteredOrders.map((o) => (
                   <tr key={o.id} className="border-b border-[var(--color-border)]/50 last:border-0">
+                    <td
+                      className="px-3 py-3 text-[10px] font-mono text-[var(--color-fg-muted)] whitespace-nowrap"
+                      title={o.id}
+                    >
+                      {shortRef(o.id)}
+                    </td>
                     <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] whitespace-nowrap">
                       {/* Several orders can land in one session, so the
                           clock time is what tells them apart. */}

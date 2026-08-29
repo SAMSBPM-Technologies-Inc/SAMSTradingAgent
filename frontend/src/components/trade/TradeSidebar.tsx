@@ -43,7 +43,8 @@ function ProposalCard({
       if (data.placed) {
         toast(
           `Order placed: ${data.qty} ${data.ticker} at ${usd.format(data.limit_price)}`
-          + (data.is_paper ? ' (paper)' : ''),
+          + (data.is_paper ? ' (paper)' : '')
+          + (data.trade_id ? ` — Ref ${data.trade_id.slice(-8).toUpperCase()}` : ''),
           'success',
         )
       } else {
