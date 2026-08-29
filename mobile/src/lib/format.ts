@@ -58,3 +58,22 @@ export function formatTime(value: string | Date | null | undefined): string {
   const d = parseTimestamp(value)
   return d ? TIME_FMT.format(d) : '—'
 }
+
+const DATETIME_FMT = new Intl.DateTimeFormat('en-US', {
+  month: 'short', day: 'numeric', year: 'numeric',
+  hour: 'numeric', minute: '2-digit', timeZone: DISPLAY_TZ,
+})
+
+/**
+ * A precise moment: "Aug 29, 2026, 2:04 PM". Mirrors the web helper.
+ *
+ * Use this wherever a record is a *thing that happened* rather than a day it
+ * happened on. A closed trade dated only "Aug 29" cannot be told apart from
+ * another closed forty minutes earlier, and a fill stamped only "2:04 PM"
+ * could be from yesterday — either half alone is ambiguous exactly when the
+ * reader is checking something recent, which is when they usually are.
+ */
+export function formatDateTime(value: string | Date | null | undefined): string {
+  const d = parseTimestamp(value)
+  return d ? DATETIME_FMT.format(d) : '—'
+}

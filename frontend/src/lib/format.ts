@@ -70,6 +70,47 @@ const DATE_KEY_FMT = new Intl.DateTimeFormat('en-CA', {
   year: 'numeric', month: '2-digit', day: '2-digit', timeZone: DISPLAY_TZ,
 })
 
+const DATETIME_FMT = new Intl.DateTimeFormat('en-US', {
+  month: 'short', day: 'numeric', year: 'numeric',
+  hour: 'numeric', minute: '2-digit', timeZone: DISPLAY_TZ,
+})
+const DATETIME_NO_YEAR_FMT = new Intl.DateTimeFormat('en-US', {
+  month: 'short', day: 'numeric',
+  hour: 'numeric', minute: '2-digit', timeZone: DISPLAY_TZ,
+})
+
+/**
+ * A precise moment: "Aug 29, 2026, 2:04 PM".
+ *
+ * Use this wherever a record is a *thing that happened* rather than a day it
+ * happened on. A closed trade dated only "Aug 29" cannot be told apart from
+ * another closed forty minutes earlier, and a fill stamped only "2:04 PM"
+ * could be from yesterday — either half alone is ambiguous exactly when the
+ * reader is checking something recent, which is when they usually are.
+ */
+export function formatDateTime(value: string | Date | null | undefined): string {
+  const d = parseTimestamp(value)
+  return d ? DATETIME_FMT.format(d) : '—'
+}
+
+/**
+ * The same moment, dropping the year when it is the current one:
+ * "Aug 29, 2:04 PM", but "Aug 29, 2025, 2:04 PM" for anything older.
+ *
+ * For dense surfaces — the activity log's left column — where the full form
+ * does not fit. The year is only omitted when it cannot be misread: a record
+ * from a previous year keeps it, so shortening never costs correctness. The
+ * comparison is made in Toronto's calendar, not the browser's, for the same
+ * reason every other timestamp here is.
+ */
+export function formatDateTimeShort(value: string | Date | null | undefined): string {
+  const d = parseTimestamp(value)
+  if (!d) return '—'
+  const thisYear = DATE_KEY_FMT.format(new Date()).slice(0, 4)
+  const thatYear = DATE_KEY_FMT.format(d).slice(0, 4)
+  return (thatYear === thisYear ? DATETIME_NO_YEAR_FMT : DATETIME_FMT).format(d)
+}
+
 /** Toronto calendar day as "yyyy-mm-dd", for range comparisons. Null if unparseable. */
 export function dateKey(value: string | Date | null | undefined): string | null {
   const d = parseTimestamp(value)

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertCircle, BarChart2, Clock, Target, TrendingUp } from 'lucide-react'
 import { performanceApi } from '../lib/api'
-import { formatDate } from '../lib/format'
+import { formatDateTime } from '../lib/format'
 import type {
   ClosedTrade,
   PerformanceResponse,
@@ -276,6 +276,11 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
               ) : null
             }
             fields={[
+              // When it happened, not just that it did. Without this a list of
+              // recent closes is unorderable by eye — every row looks equally
+              // recent, which is exactly wrong when you are checking whether
+              // the one from ten minutes ago settled.
+              { label: 'Closed', value: formatDateTime(t.closed_at) },
               { label: 'Qty', value: t.qty?.toLocaleString() ?? '—' },
               { label: '%', value: t.pnl_pct == null ? '—' : `${(t.pnl_pct * 100).toFixed(2)}%` },
               { label: 'Entry', value: fmtPrice(t.entry_price) },
@@ -305,6 +310,7 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
         <table className="w-full text-sm min-w-[46rem]">
           <thead>
             <tr className="border-b border-[var(--color-border)] text-[11px] uppercase tracking-widest text-[var(--color-fg-muted)]">
+              <th scope="col" className="text-left font-semibold px-4 py-2.5">Closed (ET)</th>
               <th scope="col" className="text-left font-semibold px-4 py-2.5">Ticker</th>
               <th scope="col" className="text-right font-semibold px-3 py-2.5">Qty</th>
               <th scope="col" className="text-right font-semibold px-3 py-2.5">Entry</th>
@@ -325,6 +331,9 @@ function ClosedTradesTable({ trades }: { trades: ClosedTrade[] }) {
                 key={`${t.ticker}-${t.closed_at ?? i}`}
                 className="border-b border-[var(--color-border)] last:border-b-0"
               >
+                <td className="px-4 py-2.5 whitespace-nowrap text-[11px] text-[var(--color-fg-muted)]">
+                  {formatDateTime(t.closed_at)}
+                </td>
                 <td className="px-4 py-2.5">
                   <span className="font-semibold text-[var(--color-fg)]">{t.ticker}</span>
                   {t.signal_type && t.signal_type !== 'BUY' && t.signal_type !== 'SELL' && (
@@ -509,7 +518,7 @@ function SignalHistoryTable({ records }: { records: SignalRecord[] }) {
                 className="border-b border-[var(--color-border)]/50 last:border-0"
               >
                 <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] tabular-nums whitespace-nowrap">
-                  {formatDate(rec.generated_at)}
+                  {formatDateTime(rec.generated_at)}
                 </td>
                 <td className="px-4 py-3">
                   <span

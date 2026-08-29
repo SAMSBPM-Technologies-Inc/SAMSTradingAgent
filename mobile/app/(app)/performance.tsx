@@ -4,7 +4,7 @@ import { AlertCircle, BarChart2, Clock, Target, TrendingUp } from 'lucide-react-
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
 import { performanceApi } from '../../src/lib/api'
-import { formatDate } from '../../src/lib/format'
+import { formatDateTime } from '../../src/lib/format'
 import type { PerformanceResponse, Signal, SignalRecord, Conviction } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
@@ -123,7 +123,7 @@ function SignalHistoryRow({ rec }: { rec: SignalRecord }) {
       gap: 8,
     }}>
       <Text style={{ fontSize: 10, color: C.fgMuted, width: 68 }} numberOfLines={1}>
-        {formatDate(rec.generated_at)}
+        {formatDateTime(rec.generated_at)}
       </Text>
       <Text style={{ fontSize: 12, fontWeight: '700', color: C.fg, width: 40 }}>{rec.ticker}</Text>
       <View style={{ width: 38 }}>

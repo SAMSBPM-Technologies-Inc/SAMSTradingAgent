@@ -14,6 +14,34 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.14.1] — 2026-08-29
+
+**Every trading record now says when it happened, not half of when.** The agent
+activity log showed a clock time and no date, so it became unreadable the
+moment it spanned midnight — which it does by the second trading day. Closed
+trades showed the opposite: a date and no time, so two positions closed forty
+minutes apart were indistinguishable. And the closed-trade table on the
+performance page showed neither; the timestamp was in the data and used only as
+a list key.
+
+All three now show both, in Toronto time as everything else here does. The
+activity log uses a short form that drops the year only when it is the current
+one, so a record from a previous year still carries it — shortening never costs
+correctness. Open positions and the signal history got the same treatment for
+the same reason.
+
+The order history and the mobile positions screen already did this correctly
+and are unchanged.
+
+### Known gaps
+
+- The order-history table still anchors on `opened_at` for every row, including
+  closed ones. That is the right anchor for an order — it is when the order was
+  placed — but it means a closed position's exit time is only visible on the
+  positions dashboard and the performance page.
+
+---
+
 ## [1.14.0] — 2026-08-28
 
 **You choose the model now, and you pay for it.** Every call this system made

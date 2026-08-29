@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { tradingApi } from '../../lib/api'
-import { formatTime, relativeTime } from '../../lib/format'
+import { formatDateTimeShort, relativeTime } from '../../lib/format'
 import { useToast } from '../../lib/toast-context'
 import { useTradingSettings } from '../../lib/trading-context'
 import { SOURCE_LABEL, tradeSource } from '../../lib/trade-source'
@@ -198,8 +198,12 @@ function ActivityLog({ orders }: { orders: TradeRecord[] }) {
             key={o.id}
             className="flex gap-2 border-b border-[var(--color-border)] py-1.5 last:border-b-0"
           >
-            <span className="num w-[52px] flex-shrink-0 text-[10.5px] text-[var(--color-fg-muted)]">
-              {formatTime(closed ? o.closed_at : o.opened_at)}
+            {/* Date and time both. A log showing only "2:04 PM" is unreadable
+                the moment it spans midnight — which it does by the second
+                trading day — and the reader checking it is usually checking
+                something recent, where "was that today?" is the question. */}
+            <span className="num w-[104px] flex-shrink-0 text-[10.5px] text-[var(--color-fg-muted)]">
+              {formatDateTimeShort(closed ? o.closed_at : o.opened_at)}
             </span>
             <span className="min-w-0 text-[11px] leading-snug text-[var(--color-fg)]">
               <span className="num font-semibold">{o.ticker}</span>{' '}

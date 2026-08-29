@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import { tradingApi } from '../lib/api'
-import { formatDate } from '../lib/format'
+import { formatDateTime } from '../lib/format'
 import { useToast } from '../lib/toast-context'
 import { SOURCE_LABEL, tradeSource } from '../lib/trade-source'
 import { exitReasonLabel } from '../lib/exit-reason'
@@ -330,7 +330,7 @@ export default function PositionsDashboard() {
                         label: 'Target',
                         value: <span style={{ color: 'var(--accent-buy)' }}>{money(t.take_profit)}</span>,
                       },
-                      { label: 'Opened', value: formatDate(t.opened_at) },
+                      { label: 'Opened', value: formatDateTime(t.opened_at) },
                       { label: 'Score', value: t.signal_score != null ? `${Math.round(t.signal_score * 100)}` : '—' },
                     ]}
                   />
@@ -380,7 +380,7 @@ export default function PositionsDashboard() {
                           {t.signal_score != null ? Math.round(t.signal_score * 100) : '—'}
                         </td>
                         <td className="px-3 py-2.5 text-[11px] text-[var(--color-fg-muted)]">
-                          {formatDate(t.opened_at)}
+                          {formatDateTime(t.opened_at)}
                         </td>
                       </tr>
                     ))}
@@ -533,7 +533,7 @@ export default function PositionsDashboard() {
                       </>
                     }
                     fields={[
-                      { label: 'Closed', value: formatDate(c.closed_at) },
+                      { label: 'Closed', value: formatDateTime(c.closed_at) },
                       { label: 'Qty', value: c.qty ?? '—' },
                       { label: 'Entry', value: money(c.entry_price) },
                       { label: 'Exit', value: money(c.exit_price) },
@@ -577,7 +577,7 @@ export default function PositionsDashboard() {
                       <tr key={`${c.ticker}-${c.closed_at}-${i}`}
                           className="border-b border-[var(--color-border)]/50 last:border-0">
                         <td className="px-3 py-2.5 text-[11px] whitespace-nowrap text-[var(--color-fg-muted)]">
-                          {formatDate(c.closed_at)}
+                          {formatDateTime(c.closed_at)}
                         </td>
                         <td className="px-3 py-2.5">
                           <button
