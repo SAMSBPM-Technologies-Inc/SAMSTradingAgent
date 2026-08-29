@@ -7,7 +7,7 @@ import {
   Pencil,
   X,
 } from 'lucide-react'
-import { alertsApi, authApi, watchlistApi } from '../lib/api'
+import { alertsApi, authApi, llmApi, watchlistApi } from '../lib/api'
 import { useAuth } from '../lib/auth-context'
 import { useToast } from '../lib/toast-context'
 import { useTradingSettings } from '../lib/trading-context'
@@ -15,6 +15,8 @@ import type {
   AlertSettings,
   AutoTradeSettings,
   Conviction,
+  LLMRole,
+  LLMSettings,
   ScoringWeights,
   TradingMode,
 } from '../types'
@@ -294,11 +296,11 @@ function AutonomyCard({ equity, aboveScore, watched }: {
                 worse experience for a screen reader than either alone. */}
             <div
               role="group"
-              aria-label="Act unattended only at conviction"
+              aria-label="Act unattended only at analyst conviction"
               className="flex flex-wrap items-center gap-2.5"
             >
               <span className="text-[11.5px] text-[var(--color-fg-muted)]">
-                Act unattended only at conviction
+                Act unattended only at analyst conviction
               </span>
               <span className="flex gap-1">
                 {(['HIGH', 'MEDIUM', 'LOW'] as Conviction[]).map((c) => (
@@ -314,7 +316,7 @@ function AutonomyCard({ equity, aboveScore, watched }: {
               </span>
             </div>
             <p className="w-full text-[10.5px] text-[var(--color-fg-muted)]">
-              Anything weaker queues for your approval on Trade. An entry with no conviction
+              Anything weaker queues for your approval on Trade. An entry with no analyst conviction
               attached — the analyst may not have run — always queues.
             </p>
           </div>
@@ -748,7 +750,7 @@ function AlertsCard() {
           checked={settings.notify_on_high_conviction}
           onChange={(v) => set('notify_on_high_conviction', v)}
           label="High conviction"
-          note="Only when conviction becomes HIGH — not every cycle it stays there."
+          note="Only when analyst conviction becomes HIGH — not every cycle it stays there."
         />
         <Toggle
           checked={settings.notify_on_trade ?? false}
@@ -786,6 +788,360 @@ function AlertsCard() {
 }
 
 // ── Account ───────────────────────────────────────────────────────────────────
+
+// ── Models ────────────────────────────────────────────────────────────────────
+// A trader brings their own keys and decides which model reads which part of a
+// company. Two rules shape this card and both are visible in the copy:
+//
+// A key goes in and never comes back. The server has no response field capable
+// of holding one, so there is nothing here that could render a key even by
+// mistake — what is shown is a fingerprint and a status.
+//
+// Order is priority. There is no rank control because the list order *is* the
+// rank; two representations of one fact drift.
+
+const ROLE_BLURBS: { role: LLMRole; label: string; blurb: string }[] = [
+  {
+    role: 'orchestrator',
+    label: 'Judgement',
+    blurb: 'The risk agent, the rebuttal, and the synthesis — the calls that decide the verdict.',
+  },
+  {
+    role: 'specialist',
+    label: 'Description',
+    blurb: 'Fundamentals, technicals, and news. More reading than judgement, so a cheaper model often holds up.',
+  },
+  {
+    role: 'analyst',
+    label: 'Fast path',
+    blurb: 'The per-signal analyst. Runs far more often than research does, so this is where model cost adds up.',
+  },
+]
+
+function ModelsCard() {
+  const [state, setState] = useState<LLMSettings | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [provider, setProvider] = useState('anthropic')
+  const [apiKey, setApiKey] = useState('')
+  const [label, setLabel] = useState('')
+  const [adding, setAdding] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+  const { saving, saved, error, run } = useSaveState()
+  const { toast } = useToast()
+
+  useEffect(() => {
+    llmApi.settings()
+      .then(({ data }) => setState(data))
+      .catch(() => setState(null))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const addKey = async () => {
+    setAdding(true)
+    setAddError(null)
+    try {
+      const { data } = await llmApi.addKey(provider, apiKey.trim(), label.trim())
+      setState(data)
+      setApiKey('')
+      setLabel('')
+      toast('Key added and verified')
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })
+        ?.response?.data?.detail
+      setAddError(detail ?? 'That key could not be added.')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const removeKey = async (keyId: string) => {
+    try {
+      const { data } = await llmApi.deleteKey(keyId)
+      setState(data)
+      toast('Key removed')
+    } catch {
+      toast('Could not remove that key')
+    }
+  }
+
+  const testKey = async (keyId: string) => {
+    try {
+      const { data } = await llmApi.testKey(keyId)
+      toast(data.ok ? 'Key works' : `Key failed (${data.error_kind}): ${data.error}`)
+      const refreshed = await llmApi.settings()
+      setState(refreshed.data)
+    } catch {
+      toast('Could not reach that provider')
+    }
+  }
+
+  const move = (role: LLMRole, index: number, delta: number) => {
+    if (!state) return
+    const entries = [...state.roles[role]]
+    const target = index + delta
+    if (target < 0 || target >= entries.length) return
+    ;[entries[index], entries[target]] = [entries[target], entries[index]]
+    setState({ ...state, roles: { ...state.roles, [role]: entries } })
+  }
+
+  const removeEntry = (role: LLMRole, index: number) => {
+    if (!state) return
+    const entries = state.roles[role].filter((_, i) => i !== index)
+    setState({ ...state, roles: { ...state.roles, [role]: entries } })
+  }
+
+  const addEntry = (role: LLMRole, keyId: string) => {
+    if (!state || !keyId) return
+    const entries = [...state.roles[role], { key_id: keyId, model: '' }]
+    setState({ ...state, roles: { ...state.roles, [role]: entries } })
+  }
+
+  const setModel = (role: LLMRole, index: number, model: string) => {
+    if (!state) return
+    const entries = state.roles[role].map((e, i) => (i === index ? { ...e, model } : e))
+    setState({ ...state, roles: { ...state.roles, [role]: entries } })
+  }
+
+  const save = () => {
+    if (!state) return
+    run(async () => {
+      const { data } = await llmApi.save(state.roles, state.research_enabled)
+      setState(data)
+    }, 'Could not save your model settings.')
+  }
+
+  if (loading) {
+    return (
+      <Card title="Models" blurb="Which model reads which part of a company.">
+        <LoadingSpinner size="sm" />
+      </Card>
+    )
+  }
+  if (!state) {
+    return (
+      <Card title="Models" blurb="Which model reads which part of a company.">
+        <p className="text-[11.5px] text-[var(--color-fg-muted)]">
+          Model settings could not be loaded.
+        </p>
+      </Card>
+    )
+  }
+
+  const keyLabel = (keyId: string) => {
+    const key = state.keys.find((k) => k.id === keyId)
+    return key ? `${key.provider} · ${key.fingerprint}` : keyId
+  }
+
+  return (
+    <Card
+      span
+      title="Models"
+      blurb="Your own provider keys, and which model reads which part of a company. Keys are stored encrypted, never shown again, and never leave this server."
+    >
+      {/* ── Keys ── */}
+      <div className="label-micro">Your keys</div>
+      {state.keys.length === 0 ? (
+        <p className="mt-1 text-[11.5px] leading-snug text-[var(--color-fg-muted)]">
+          No keys yet. Everything runs on this deployment&rsquo;s own key
+          {state.server_fallback ? <> ({state.server_fallback})</> : null} until you add one.
+        </p>
+      ) : (
+        <ul className="mt-1.5 flex flex-col gap-1.5">
+          {state.keys.map((key) => (
+            <li
+              key={key.id}
+              className="flex flex-wrap items-center gap-2 rounded border border-[var(--color-border)] px-2 py-1.5"
+            >
+              <span className="text-[12px] font-medium text-[var(--color-fg)]">
+                {key.label || key.provider}
+              </span>
+              <span className="font-mono text-[11px] text-[var(--color-fg-muted)]">
+                {key.fingerprint}
+              </span>
+              {key.last_error ? (
+                <span className="text-[10.5px]" style={{ color: 'var(--accent-sell)' }}>
+                  last call failed
+                </span>
+              ) : key.last_ok_at ? (
+                <span className="text-[10.5px]" style={{ color: 'var(--accent-buy)' }}>
+                  working
+                </span>
+              ) : null}
+              <span className="ml-auto flex gap-1.5">
+                <button
+                  onClick={() => testKey(key.id)}
+                  className="text-[11px] text-[var(--color-fg-muted)] underline"
+                >
+                  Test
+                </button>
+                <button
+                  onClick={() => removeKey(key.id)}
+                  className="text-[11px] underline"
+                  style={{ color: 'var(--accent-sell)' }}
+                >
+                  Remove
+                </button>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* ── Add a key ── */}
+      <div className="mt-3 flex flex-wrap items-end gap-2">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="llm-provider" className="label-micro">Provider</label>
+          <select
+            id="llm-provider"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            className="input-base"
+          >
+            <option value="anthropic">Anthropic</option>
+            <option value="openai">OpenAI</option>
+            <option value="google">Google</option>
+          </select>
+        </div>
+        <div className="flex flex-1 flex-col gap-1">
+          <label htmlFor="llm-key" className="label-micro">API key</label>
+          <input
+            id="llm-key"
+            type="password"
+            autoComplete="off"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder="Pasted once, never shown again"
+            className="input-base"
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label htmlFor="llm-label" className="label-micro">Label</label>
+          <input
+            id="llm-label"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="optional"
+            className="input-base"
+          />
+        </div>
+        <button
+          onClick={addKey}
+          disabled={adding || apiKey.trim().length < 8}
+          className="btn-secondary"
+        >
+          {adding ? 'Checking…' : 'Add key'}
+        </button>
+      </div>
+      <p className="mt-1 text-[10.5px] leading-snug text-[var(--color-fg-muted)]">
+        A key is checked with one real call before it is stored. A key that
+        does not work is refused here rather than skipped silently every night.
+      </p>
+      {addError && (
+        <p className="mt-1 text-[11px]" style={{ color: 'var(--accent-sell)' }}>
+          {addError}
+        </p>
+      )}
+
+      {/* ── Role assignment ── */}
+      <div className="mt-4 flex flex-col gap-3">
+        {ROLE_BLURBS.map(({ role, label: roleLabel, blurb }) => (
+          <div key={role}>
+            <div className="label-micro">{roleLabel}</div>
+            <p className="mt-0.5 text-[10.5px] leading-snug text-[var(--color-fg-muted)]">
+              {blurb}
+            </p>
+            {state.roles[role].length === 0 ? (
+              <p className="mt-1 text-[11px] text-[var(--color-fg-muted)]">
+                Falls back to {state.server_fallback ?? 'this deployment\u2019s key'}.
+              </p>
+            ) : (
+              <ol className="mt-1.5 flex flex-col gap-1.5">
+                {state.roles[role].map((entry, index) => (
+                  <li
+                    key={`${role}-${index}`}
+                    className="flex flex-wrap items-center gap-2 rounded border border-[var(--color-border)] px-2 py-1.5"
+                  >
+                    <span className="text-[10.5px] text-[var(--color-fg-muted)]">
+                      {index + 1}
+                    </span>
+                    <span className="text-[11.5px] text-[var(--color-fg)]">
+                      {keyLabel(entry.key_id)}
+                    </span>
+                    <input
+                      aria-label={`${roleLabel} model, priority ${index + 1}`}
+                      value={entry.model}
+                      onChange={(e) => setModel(role, index, e.target.value)}
+                      placeholder="model id"
+                      className="input-base flex-1 min-w-[10rem]"
+                    />
+                    <span className="ml-auto flex gap-1">
+                      <button
+                        aria-label={`Move up, priority ${index + 1}`}
+                        onClick={() => move(role, index, -1)}
+                        disabled={index === 0}
+                        className="text-[11px] text-[var(--color-fg-muted)] disabled:opacity-40"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        aria-label={`Move down, priority ${index + 1}`}
+                        onClick={() => move(role, index, 1)}
+                        disabled={index === state.roles[role].length - 1}
+                        className="text-[11px] text-[var(--color-fg-muted)] disabled:opacity-40"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        aria-label={`Remove priority ${index + 1}`}
+                        onClick={() => removeEntry(role, index)}
+                        className="text-[11px] underline"
+                        style={{ color: 'var(--accent-sell)' }}
+                      >
+                        Remove
+                      </button>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {state.keys.length > 0 && (
+              <select
+                aria-label={`Add a key to ${roleLabel}`}
+                value=""
+                onChange={(e) => addEntry(role, e.target.value)}
+                className="input-base mt-1.5 text-[11.5px]"
+              >
+                <option value="">Add a key…</option>
+                {state.keys.map((key) => (
+                  <option key={key.id} value={key.id}>
+                    {key.label || key.provider} · {key.fingerprint}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-2 text-[10.5px] leading-snug text-[var(--color-fg-muted)]">
+        Order is priority. If the first key is rate-limited or rejected, the
+        next one runs; a request this server rejected as malformed does not
+        fall through, because the next provider would reject it identically.
+      </p>
+
+      <div className="mt-3">
+        <Toggle
+          checked={state.research_enabled}
+          onChange={(v) => setState({ ...state, research_enabled: v })}
+          label="Build deep research daily"
+          note="Five to seven model calls per watched ticker per day, on your own key. Off until you ask for it."
+        />
+      </div>
+
+      <SaveRow onSave={save} saving={saving} saved={saved} error={error} />
+    </Card>
+  )
+}
 
 function AccountCard() {
   const { user, logout, fetchUser } = useAuth()
@@ -920,6 +1276,7 @@ export default function SettingsPage() {
         <WeightsCard />
         <BrokerCard />
         <AlertsCard />
+        <ModelsCard />
         <AccountCard />
       </div>
     </Layout>

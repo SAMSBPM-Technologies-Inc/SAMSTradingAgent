@@ -108,6 +108,15 @@ class Settings(BaseSettings):
         description="OHLCV source: 'yahoo' (dev only, unlicensed) or 'polygon' (licensed)",
     )
     alphavantage_api_key: str = Field(default="", description="Alpha Vantage API key for fundamentals")
+    #: What every realised return is measured against. Without this the engine
+    #: had no way to distinguish a +6% signal in a +8% market from skill, and
+    #: every threshold argued from that record was argued from the wrong
+    #: number. Read through `services/benchmark.py`, which fails to `None`
+    #: rather than to zero when the series cannot be fetched.
+    benchmark_ticker: str = Field(
+        default="SPY",
+        description="Ticker realised returns are measured against for alpha",
+    )
     # Fundamentals move quarterly; a day-old figure is not meaningfully staler
     # than a fresh one, and the rate limits make anything shorter unworkable.
     fundamentals_cache_hours: int = Field(default=24, description="Hours a cached fundamentals doc stays valid")
@@ -441,6 +450,64 @@ class Settings(BaseSettings):
     # Research may block a BUY. It may never create one, enlarge one, or touch
     # an exit — see `_prepare_entry`. Off by default: a guard that can stop
     # trades has to be switched on deliberately, having been measured first.
+    # ── Rebuttal ──────────────────────────────────────────────────────────────
+    # One exchange between the risk agent and the evidence, after both sides
+    # have already written independently. Costs two orchestrator calls per
+    # dossier — roughly +40% on the deep path — and is on by default because it
+    # is the step that changes the verdict: a risk nobody ever replies to is
+    # carried into the synthesis at full strength whether or not the evidence
+    # answers it.
+    #
+    # Capped at one in practice. Successive rounds converge on agreement, each
+    # side softening toward the other, which reads as resolution and is not.
+    research_debate_rounds: int = Field(
+        default=1,
+        description="Rebuttal exchanges between the risk agent and the evidence (0 disables)",
+    )
+
+    # ── Sentiment breadth ─────────────────────────────────────────────────────
+    # Retail chatter and funded probabilities, as research *evidence* only.
+    # Deliberately not wired into the composite score: adding a factor would
+    # change every published signal and invalidate the settled history the
+    # calibration work reads. Both sources are development-grade — undocumented
+    # endpoints, no licence, no SLA — and both fail to absent rather than to a
+    # neutral reading.
+    social_sentiment_enabled: bool = Field(
+        default=False,
+        description="Collect StockTwits and Reddit chatter as research evidence",
+    )
+    prediction_markets_enabled: bool = Field(
+        default=False,
+        description="Collect Polymarket macro probabilities as research evidence",
+    )
+
+    # ── Risk stance panel ─────────────────────────────────────────────────────
+    # Three temperaments reading the *trade* rather than the company. Purely
+    # advisory: nothing in the trading guard chain reads the output, and no
+    # order quantity moves because of it. Off by default — three more calls per
+    # dossier for a reading that currently informs a human and nothing else.
+    research_stance_panel_enabled: bool = Field(
+        default=False,
+        description="Run the advisory aggressive/conservative/neutral stance panel",
+    )
+
+    # ── Outcome memory ────────────────────────────────────────────────────────
+    # How long after a dossier is written before it is graded, and how much of
+    # that record is shown to the next reading of the same name. Nothing here
+    # can raise a conviction: the derived anchor is computed from company data
+    # alone and the synthesiser is still clamped to +/-15 of it, so a lesson can
+    # temper a reading and can never manufacture one.
+    research_outcome_horizon_days: int = Field(
+        default=20,
+        description="Days after a dossier is written before its outcome is settled",
+    )
+    research_memory_same_ticker: int = Field(
+        default=5, description="Resolved prior readings of this ticker shown to agents"
+    )
+    research_memory_cross_ticker: int = Field(
+        default=3, description="Resolved readings of other tickers shown to agents"
+    )
+
     research_veto_enabled: bool = Field(
         default=False, description="Allow a research dossier to block a BUY"
     )

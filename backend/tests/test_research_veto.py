@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings  # noqa: E402
 from app.services import trade_manager as TM  # noqa: E402
+from app.services.research import veto as V  # noqa: E402
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def veto_on(monkeypatch):
 def _dossier(conviction=70.0, assessment="BULLISH", age_hours=2.0):
     return {
         "ticker": "EXMP",
-        "conviction": conviction,
+        "research_conviction": conviction,
         "age_hours": age_hours,
         "report": {"assessment": assessment},
     }
@@ -55,7 +56,7 @@ def _patch_dossier(monkeypatch, value, raises=False):
     """
     import app.services.research.dossier as D
 
-    async def fake(_ticker):
+    async def fake(_ticker, _user_id=None):
         if raises:
             raise RuntimeError("mongo is down")
         return value
@@ -64,7 +65,7 @@ def _patch_dossier(monkeypatch, value, raises=False):
 
 
 def _veto(ticker="EXMP"):
-    return asyncio.run(TM._research_veto(ticker))
+    return asyncio.run(TM._research_veto(ticker, "user-1"))
 
 
 # ── Blocking ──────────────────────────────────────────────────────────────────
@@ -198,3 +199,89 @@ def test_the_veto_can_only_return_a_reason_or_none(veto_on, monkeypatch):
         _patch_dossier(monkeypatch, dossier)
         result = _veto()
         assert result is None or isinstance(result, str)
+
+
+# ── Reporting: the veto must be observable before it is tripped ───────────────
+#
+# The guard returning a bare string was enough to refuse an order and nothing
+# else. These pin the reading a client shows on the ticker page, where the
+# distinction that matters is between "this is blocked" and "this would be
+# blocked if you switched the veto on" — which is most deployments, since
+# RESEARCH_VETO_ENABLED defaults to false.
+
+def test_a_disabled_veto_still_reports_what_it_would_do(monkeypatch):
+    """
+    The whole point of separating `would_block` from `blocking`.
+
+    With the flag off the trade proceeds, but a user deciding whether to turn
+    the veto on needs to see what it would have caught. A single boolean here
+    would answer "no" and hide the reason.
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings, "research_veto_enabled", False, raising=False)
+    monkeypatch.setattr(settings, "research_veto_min_conviction", 35.0, raising=False)
+    monkeypatch.setattr(settings, "research_veto_max_age_hours", 48, raising=False)
+
+    status = V.evaluate_veto(_dossier(conviction=10.0), settings)
+    assert status.would_block is True
+    assert status.blocking is False
+    assert status.enabled is False
+    assert status.reason and "10" in status.reason
+    assert status.trigger == "low_conviction"
+
+
+def test_an_enabled_veto_blocks_what_it_would_block(veto_on):
+    status = V.evaluate_veto(_dossier(conviction=10.0), veto_on)
+    assert status.would_block is True
+    assert status.blocking is True
+
+
+def test_the_status_carries_the_floor_so_distance_to_it_can_be_shown(veto_on):
+    """A conviction with no scale beside it cannot be judged as close or far."""
+    status = V.evaluate_veto(_dossier(conviction=38.0), veto_on)
+    assert status.blocking is False
+    assert status.research_conviction == 38.0
+    assert status.min_conviction == 35.0
+
+
+@pytest.mark.parametrize("dossier,expected", [
+    (None, "no_dossier"),
+    ({"ticker": "EXMP", "research_conviction": 5.0, "age_hours": None}, "undated"),
+    ({"ticker": "EXMP", "research_conviction": 5.0, "age_hours": 500.0}, "stale"),
+])
+def test_every_unconsidered_dossier_says_why_and_allows(veto_on, dossier, expected):
+    status = V.evaluate_veto(dossier, veto_on)
+    assert status.blocking is False
+    assert status.considered is False
+    assert status.not_considered_reason == expected
+
+
+def test_a_clean_dossier_reports_considered_and_not_blocking(veto_on):
+    status = V.evaluate_veto(_dossier(conviction=80.0), veto_on)
+    assert status.considered is True
+    assert status.would_block is False
+    assert status.not_considered_reason is None
+    assert status.assessment == "BULLISH"
+
+
+# ── The rename: old dossiers are still the newest one for cold tickers ────────
+
+def test_a_dossier_stored_under_the_old_key_is_still_read(veto_on):
+    """
+    `conviction` became `research_conviction` when the analyst's own
+    HIGH/MEDIUM/LOW conviction took the bare name. Dossiers are a retained
+    series and the daily job reaches one ticker at a time, so documents under
+    the old key are still live. A veto that quietly stopped reading them would
+    be indistinguishable from a veto that found nothing wrong.
+    """
+    legacy = {"ticker": "EXMP", "conviction": 12.0, "age_hours": 3.0,
+              "report": {"assessment": "NEUTRAL"}}
+    status = V.evaluate_veto(legacy, veto_on)
+    assert status.research_conviction == 12.0
+    assert status.blocking is True
+
+
+def test_the_new_key_wins_when_both_are_present(veto_on):
+    both = {"ticker": "EXMP", "conviction": 12.0, "research_conviction": 80.0,
+            "age_hours": 3.0, "report": {"assessment": "NEUTRAL"}}
+    assert V.evaluate_veto(both, veto_on).research_conviction == 80.0

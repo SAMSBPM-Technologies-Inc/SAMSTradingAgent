@@ -105,7 +105,7 @@ function ProposalCard({
 
       <p className="mt-1 text-[10px] text-[var(--color-fg-muted)]">
         Proposed {relativeTime(proposal.proposed_at)}
-        {proposal.conviction ? ` · ${proposal.conviction} conviction` : ''}
+        {proposal.conviction ? ` · ${proposal.conviction} analyst conviction` : ''}
         {proposal.stop_loss != null ? ` · stop ${usd.format(proposal.stop_loss)}` : ''}
       </p>
 
@@ -278,7 +278,7 @@ export function ApprovalsPanel({
   const approvalsNote = settings?.mode === 'AUTO'
     ? 'In AUTO the agent places its own entries, so this queue is usually empty. Anything here was held back by a guard.'
     : settings?.mode === 'SEMI_AUTO'
-      ? `In SEMI_AUTO the agent acts alone only at ${settings.auto_execute_conviction} conviction. Everything below that waits for you.`
+      ? `In SEMI_AUTO the agent acts alone only at ${settings.auto_execute_conviction} analyst conviction. Everything below that waits for you.`
       : 'In MANUAL the agent proposes and you place every order.'
 
   return (

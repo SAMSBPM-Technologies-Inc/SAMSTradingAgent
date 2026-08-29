@@ -187,8 +187,12 @@ async def _ensure_indexes() -> None:
     # unique — dossiers are a retained series and two runs on the same day are
     # a thing that should be allowed to happen, not an error that takes the API
     # down at startup.
+    # Dossiers are per-user now, and every read is "the newest one this reader
+    # has for this ticker". The legacy shared series carries no `user_id`, so
+    # those documents index under a null and are still found by the fallback
+    # query in `latest_dossier`.
     await db[COLL_DOSSIERS].create_index(
-        [("ticker", 1), ("as_of", -1)], background=True
+        [("user_id", 1), ("ticker", 1), ("as_of", -1)], background=True
     )
     logger.info("mongodb_indexes_ensured")
 

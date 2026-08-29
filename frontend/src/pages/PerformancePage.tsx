@@ -437,7 +437,7 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
         </div>
       )}
 
-      {/* Counts & avg return */}
+      {/* Counts, average return, and what the market did over the same days */}
       <div className="flex flex-col gap-0.5">
         <span className="text-xs text-[var(--color-fg-muted)] tabular-nums">
           {row.settled} of {row.total} settled
@@ -445,6 +445,21 @@ function SignalAccuracyCard({ row }: { row: PerformanceResponse['by_signal'][num
         <span className={`text-sm font-medium tabular-nums ${returnColor(row.avg_return_20d)}`}>
           Avg 20d: {fmtReturn(row.avg_return_20d)}
         </span>
+        {/* Alpha has its own denominator: records settled before benchmark
+            measurement existed carry a return and no alpha. Rendering a dash
+            under the settled count would present a handful of samples with the
+            authority of hundreds, so the count is stated whenever it differs
+            and the line is absent entirely when there is nothing to show. */}
+        {row.alpha_settled ? (
+          <span className={`text-sm font-medium tabular-nums ${returnColor(row.avg_alpha_20d)}`}>
+            Alpha: {fmtReturn(row.avg_alpha_20d)}
+            {row.alpha_settled !== row.settled && (
+              <span className="text-[var(--color-fg-muted)] font-normal">
+                {' '}(of {row.alpha_settled})
+              </span>
+            )}
+          </span>
+        ) : null}
       </div>
     </div>
   )
@@ -556,6 +571,7 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
               <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Settled</th>
               <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Win Rate</th>
               <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Avg 20d</th>
+              <th scope="col" className="px-2 py-2.5 sm:px-4 text-right text-[10.5px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">Alpha</th>
             </tr>
           </thead>
           <tbody>
@@ -584,6 +600,12 @@ function ByTickerTable({ rows }: { rows: PerformanceResponse['by_ticker'] }) {
                 </td>
                 <td className={`px-2 py-3 sm:px-4 text-right tabular-nums ${returnColor(row.avg_return_20d)}`}>
                   {fmtReturn(row.avg_return_20d)}
+                </td>
+                {/* Blank rather than a dash when no record for this ticker has
+                    been benchmarked. A dash beside a real return reads as zero
+                    alpha, which is a measurement this row does not have. */}
+                <td className={`px-2 py-3 sm:px-4 text-right tabular-nums ${returnColor(row.avg_alpha_20d)}`}>
+                  {row.alpha_settled ? fmtReturn(row.avg_alpha_20d) : ''}
                 </td>
               </tr>
             ))}

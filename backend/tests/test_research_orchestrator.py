@@ -105,6 +105,19 @@ class FakeClient:
             return "news"
         if "risk_severity" in required:
             return "risk"
+        if "residual_severity" in required:
+            return "risk_rebuttal"
+        if "conceded" in required:
+            return "defence_rebuttal"
+        if "stance" in required:
+            # All three stances share one schema, so they are told apart by the
+            # temperament named in their system prompt rather than by shape.
+            system = kwargs["system"][1]["text"]
+            if "argue for conviction" in system:
+                return "stance_aggressive"
+            if "capital preservation" in system:
+                return "stance_conservative"
+            return "stance_neutral"
         if "assessment" in required:
             return "synthesiser"
         raise AssertionError(f"unrecognised schema: {sorted(required)}")
@@ -224,6 +237,50 @@ def _specialist_payloads():
     }
 
 
+def _rebuttal_payloads():
+    return {
+        "risk_rebuttal": {
+            "answered": ["Margin reversal is not supported by the trend [F2]"],
+            "surviving": ["Multiple compression remains unaddressed [V1]"],
+            "sharpened": [],
+            "residual_severity": 40,
+            "residual_rationale": "Most of the case rested on margins [F2].",
+        },
+        "defence_rebuttal": {
+            "answered": ["Margin reversal [F2]"],
+            "conceded": ["Nothing in the evidence bounds the multiple [V1]"],
+            "overstated": [],
+            "strongest_surviving_risk": "Multiple compression [V1]",
+        },
+    }
+
+
+def _stance_payloads():
+    return {
+        "stance_aggressive": {
+            "stance": "SIZE_UP",
+            "rationale": "Margins keep expanding [F2] and price confirms [T7].",
+            "what_would_change_it": "Gross margin below 55% [F2]",
+        },
+        "stance_conservative": {
+            "stance": "SIZE_DOWN",
+            "rationale": "The multiple leaves no room for error [V1].",
+            "what_would_change_it": "A de-rating toward the historical band [V1]",
+        },
+        "stance_neutral": {
+            "stance": "HOLD_SIZE",
+            "rationale": "The record supports the thesis but not urgency [F2].",
+            "what_would_change_it": "The earnings print [E1]",
+        },
+    }
+
+
+def _all_payloads(**synthesis_overrides):
+    """Every agent the default configuration will call, rebuttal included."""
+    return (_specialist_payloads() | _rebuttal_payloads() | _stance_payloads()
+            | {"synthesiser": _synthesis(**synthesis_overrides)})
+
+
 def _synthesis(**overrides):
     payload = {
         "assessment": "BULLISH",
@@ -292,6 +349,12 @@ def wired(monkeypatch):
     settings = D.get_settings()
     monkeypatch.setattr(settings, "research_agents_enabled", True, raising=False)
     monkeypatch.setattr(settings, "research_extended_thinking", False, raising=False)
+    # Pinned off here so every test written before the rebuttal existed keeps
+    # exercising the path it was written for. The round has its own tests
+    # below, which turn it on explicitly.
+    monkeypatch.setattr(settings, "research_debate_rounds", 0, raising=False)
+    monkeypatch.setattr(settings, "research_stance_panel_enabled", False,
+                        raising=False)
     return db
 
 
@@ -505,17 +568,17 @@ def test_conviction_is_clamped_to_the_derived_anchor(wired):
     responses = _specialist_payloads() | {"synthesiser": _synthesis(conviction=99)}
     dossier = _run(FakeClient(responses))
 
-    anchor = dossier["derived_conviction"]
+    anchor = dossier["derived_research_conviction"]
     assert anchor is not None
-    assert dossier["conviction"] <= anchor + 15 + 1e-6
-    assert dossier["conviction"] < 99
+    assert dossier["research_conviction"] <= anchor + 15 + 1e-6
+    assert dossier["research_conviction"] < 99
 
 
 def test_conviction_within_the_band_is_left_alone(wired):
     responses = _specialist_payloads() | {"synthesiser": _synthesis()}
     dossier = _run(FakeClient(responses))
-    anchor = dossier["derived_conviction"]
-    assert abs(dossier["conviction"] - 70) < 1e-6 or abs(dossier["conviction"] - anchor) <= 15
+    anchor = dossier["derived_research_conviction"]
+    assert abs(dossier["research_conviction"] - 70) < 1e-6 or abs(dossier["research_conviction"] - anchor) <= 15
 
 
 # ── Model-judged dimension ────────────────────────────────────────────────────
@@ -780,3 +843,478 @@ def test_synthesis_error_reaches_the_api_model(wired):
 
     assert payload["report"] is None
     assert payload["synthesis_error"] == "synthesiser exploded"
+
+
+# ── The prior record inside the orchestrator ──────────────────────────────────
+# Memory enters as `O`-prefixed ledger evidence rather than as injected prose,
+# so it is subject to every rule the rest of the module enforces. These tests
+# pin the two properties that would fail silently: that the agents are actually
+# shown it, and that it can never raise a conviction.
+
+def _resolved_reading(alpha=-0.06, lesson=None, ticker="EXMP"):
+    return {
+        "ticker": ticker,
+        "as_of": "2026-07-01T06:00:00+00:00",
+        "outcome": {
+            "assessment": "BULLISH", "research_conviction": 78.0,
+            "horizon_days": 21, "return": 0.03, "benchmark_return": 0.09,
+            "benchmark_ticker": "SPY", "alpha": alpha, "assessment_correct": False,
+            "reflection": {"lesson": lesson} if lesson else None,
+        },
+    }
+
+
+@pytest.fixture
+def with_history(monkeypatch):
+    """A settled prior reading of this name, plus one of another."""
+    async def fake_resolved(_ticker, _user_id=None):
+        return [
+            _resolved_reading(lesson="Margin durability [F2] rested on two periods."),
+            _resolved_reading(ticker="OTHR", alpha=0.02),
+        ]
+
+    monkeypatch.setattr(D.prior_record, "load_resolved", fake_resolved)
+
+
+def test_every_agent_is_shown_the_prior_record(wired, with_history):
+    """
+    The record is scoped to all four specialists and the synthesiser, unlike
+    company evidence which is deliberately partitioned. A miss in how a name is
+    read is not the fundamentals analyst's alone.
+    """
+    seen = {}
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    client = FakeClient(responses)
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        name = FakeClient.identify(kwargs)
+        seen[name] = kwargs["system"][0]["text"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+
+    for agent in ("fundamentals", "technical", "news", "risk", "synthesiser"):
+        assert "[O1]" in seen[agent], f"{agent} was not shown the prior record"
+
+
+def test_the_prior_record_carries_the_alpha_and_the_lesson(wired, with_history):
+    seen = {}
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    client = FakeClient(responses)
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        seen[FakeClient.identify(kwargs)] = kwargs["system"][0]["text"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+
+    block = seen["synthesiser"]
+    assert "-6.0%" in block
+    assert "wrong on alpha" in block
+    assert "Margin durability [F2]" in block
+    assert "[different company]" in block
+
+
+def test_the_conviction_anchor_ignores_the_prior_record(wired, monkeypatch):
+    """
+    The single most important guarantee here. `derived_research_conviction` is
+    arithmetic over company data; if the record could move it, memory would be
+    able to manufacture a BUY rather than only temper one.
+
+    The same company data is read twice — once with a run of badly wrong prior
+    readings in the ledger, once with none — and the anchor must not move.
+    """
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+
+    async def no_history(_ticker, _user_id=None):
+        return []
+
+    async def bad_history(_ticker, _user_id=None):
+        return [_resolved_reading(alpha=-0.30) for _ in range(5)]
+
+    monkeypatch.setattr(D.prior_record, "load_resolved", no_history)
+    without = _run(FakeClient(responses))
+
+    monkeypatch.setattr(D.prior_record, "load_resolved", bad_history)
+    with_record = _run(FakeClient(responses))
+
+    assert with_record["coverage"]["prior_record"]["same_ticker"] == 5
+    assert without["coverage"]["prior_record"]["same_ticker"] == 0
+    assert (with_record["derived_research_conviction"]
+            == without["derived_research_conviction"])
+
+
+def test_a_lesson_cannot_push_conviction_past_the_anchor_band(wired, with_history):
+    """
+    A model told it was badly wrong last time may want to over-correct — in
+    either direction. The clamp is what stops the record becoming a second,
+    unaudited scoring input.
+    """
+    responses = _specialist_payloads() | {
+        "synthesiser": _synthesis(
+            conviction=99,
+            conviction_rationale="The prior reading was badly wrong [O1].",
+        )
+    }
+    dossier = _run(FakeClient(responses))
+    anchor = dossier["derived_research_conviction"]
+    assert abs(dossier["research_conviction"] - anchor) <= D._CONVICTION_BAND
+
+
+def test_a_fabricated_prior_record_citation_is_stripped_like_any_other(wired):
+    """
+    No prior record exists in this run, so [O1] refers to nothing. It must be
+    caught by the same audit that catches an invented [F99] — the record is
+    evidence, not a privileged channel.
+    """
+    responses = _specialist_payloads() | {
+        "synthesiser": _synthesis(
+            thesis="We were wrong on this name before [O1].",
+        )
+    }
+    dossier = _run(FakeClient(responses))
+    assert "O1" in dossier["citation_audit"]["invented"]
+    assert dossier["report"]["thesis"] is None
+
+
+def test_a_name_with_only_a_track_record_still_fails_the_evidence_guard(monkeypatch):
+    """
+    `meta=True` keeps the record out of `substantive_count`. Without that, a
+    ticker with eight settled readings and no financials would clear the guard
+    and pay for four agents to read its own history back.
+    """
+    ledger = Ledger()
+    added = D.prior_record.add_prior_record(
+        ledger, "EXMP", [_resolved_reading() for _ in range(8)]
+    )
+    assert added["same_ticker"] == 8
+    assert ledger.substantive_count() == 0
+
+
+def test_no_history_leaves_the_ledger_exactly_as_it_was(wired):
+    """The normal state for a name being read for the first time."""
+    responses = _specialist_payloads() | {"synthesiser": _synthesis()}
+    dossier = _run(FakeClient(responses))
+    assert dossier["coverage"]["prior_record"] == {
+        "same_ticker": 0, "cross_ticker": 0, "available": False,
+    }
+    assert not [e for e in dossier["evidence"] if e["id"].startswith("O")]
+
+
+# ── The rebuttal round ────────────────────────────────────────────────────────
+# One exchange, after both sides have already written independently. The
+# property that makes this safe — and that the reference implementation gives
+# up by having its bear react to a bull case from round one — is that neither
+# side saw the other while forming its view.
+
+@pytest.fixture
+def debating(wired, monkeypatch):
+    monkeypatch.setattr(D.get_settings(), "research_debate_rounds", 1, raising=False)
+    return wired
+
+
+def test_the_rebuttal_runs_after_both_sides_have_written(debating):
+    """
+    Ordering is the whole design. If either rebuttal started before the four
+    specialists finished, one side would be arguing against a view the other
+    had not yet formed, and the round would be the anchoring failure it exists
+    to avoid.
+    """
+    client = FakeClient(_all_payloads())
+    _run(client)
+
+    finished = {name: t for name, t in client.finished}
+    started = {name: t for name, t in client.started}
+    last_specialist = max(finished[n] for n in
+                          ("fundamentals", "technical", "news", "risk"))
+    for side in ("risk_rebuttal", "defence_rebuttal"):
+        assert started[side] >= last_specialist
+
+
+def test_the_two_sides_run_concurrently_and_cannot_read_each_other(debating):
+    """
+    Letting either read the other's answer would collapse the round into a
+    single voice agreeing with itself.
+    """
+    client = FakeClient(_all_payloads(), delay=0.05)
+    _run(client)
+
+    started = {name: t for name, t in client.started}
+    finished = {name: t for name, t in client.finished}
+    assert started["defence_rebuttal"] < finished["risk_rebuttal"]
+    assert started["risk_rebuttal"] < finished["defence_rebuttal"]
+
+
+def test_both_sides_argue_over_byte_identical_material(debating):
+    """
+    An asymmetry in what the two are shown would make the exchange a
+    comparison of inputs rather than of arguments.
+    """
+    seen = {}
+    client = FakeClient(_all_payloads())
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        name = FakeClient.identify(kwargs)
+        if name.endswith("_rebuttal"):
+            seen[name] = kwargs["messages"][0]["content"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+
+    risk_brief = seen["risk_rebuttal"].split("THE BEAR CASE", 1)[1]
+    defence_brief = seen["defence_rebuttal"].split("THE BEAR CASE", 1)[1]
+    assert risk_brief == defence_brief
+
+
+def test_the_synthesiser_is_shown_the_exchange(debating):
+    seen = {}
+    client = FakeClient(_all_payloads())
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        seen[FakeClient.identify(kwargs)] = kwargs["messages"][0]["content"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+
+    brief = seen["synthesiser"]
+    assert "THE REBUTTAL" in brief
+    assert "Nothing in the evidence bounds the multiple [V1]" in brief
+
+
+def test_the_exchange_is_citation_filtered_like_everything_else(debating):
+    """
+    The rebuttals are the one place a model is arguing rather than reporting,
+    which is exactly where an unsupported assertion is most persuasive and
+    least noticed.
+    """
+    payloads = _all_payloads()
+    payloads["defence_rebuttal"] = {
+        "answered": ["Margins are clearly fine",          # uncited — dropped
+                     "Margin reversal [F2]"],             # cited — kept
+        "conceded": ["The multiple is unbounded [V99]"],  # fabricated — dropped
+        "overstated": [],
+        "strongest_surviving_risk": "Multiple compression [V1]",
+    }
+    dossier = _run(FakeClient(payloads))
+
+    defence = dossier["debate"]["defence_rebuttal"]
+    assert defence["answered"] == ["Margin reversal [F2]"]
+    assert defence["conceded"] == []
+    assert defence["strongest_surviving_risk"] == "Multiple compression [V1]"
+
+
+def test_rounds_zero_restores_the_previous_path_exactly(wired):
+    """
+    The escape hatch has to be real: a deployment that turns the round off must
+    get the dossier it got before the round existed, not a degraded one.
+    """
+    client = FakeClient(_all_payloads())
+    dossier = _run(client)
+
+    assert dossier["debate"] is None
+    called = {name for name, _ in client.started}
+    assert "risk_rebuttal" not in called
+    assert "defence_rebuttal" not in called
+
+
+def test_a_failed_risk_agent_skips_the_round_rather_than_failing_the_dossier(debating):
+    """A dossier without a rebuttal is a complete dossier."""
+    client = FakeClient(_all_payloads(), fail=("risk",))
+    dossier = _run(client)
+
+    assert dossier["debate"] is None
+    assert dossier["report"] is not None
+    assert "risk" in dossier["agents_failed"]
+    assert "risk_rebuttal" not in {name for name, _ in client.started}
+
+
+def test_one_side_failing_still_leaves_a_usable_exchange(debating):
+    client = FakeClient(_all_payloads(), fail=("defence_rebuttal",))
+    dossier = _run(client)
+
+    assert dossier["debate"] is not None
+    assert dossier["debate"]["defence_rebuttal"] is None
+    assert dossier["debate"]["risk_rebuttal"]["surviving"]
+
+
+def test_both_sides_failing_reads_as_no_round_not_as_an_empty_one(debating):
+    """
+    A `debate` block full of nulls would read to the synthesiser as an argument
+    that produced no answers, rather than as an argument that never happened.
+    """
+    dossier = _run(FakeClient(_all_payloads(),
+                              fail=("risk_rebuttal", "defence_rebuttal")))
+    assert dossier["debate"] is None
+    assert dossier["report"] is not None
+
+
+def test_the_rebuttal_runs_on_the_orchestrator_model(debating):
+    """Judgement-heavy roles get the stronger model; this is one."""
+    models = {}
+    client = FakeClient(_all_payloads())
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        models[FakeClient.identify(kwargs)] = kwargs["model"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+
+    settings = D.get_settings()
+    assert models["risk_rebuttal"] == settings.research_orchestrator_model
+    assert models["defence_rebuttal"] == settings.research_orchestrator_model
+
+
+# ── The stance panel ──────────────────────────────────────────────────────────
+# Three temperaments reading the trade rather than the company. The property
+# worth defending is what they must NOT do: the reference implementation lets
+# its portfolio-manager agent decide the position, and deterministic sizing is
+# why the same inputs here produce the same order twice.
+
+@pytest.fixture
+def with_stances(wired, monkeypatch):
+    monkeypatch.setattr(D.get_settings(), "research_stance_panel_enabled", True,
+                        raising=False)
+    return wired
+
+
+def test_all_three_stances_run_and_are_stored(with_stances):
+    dossier = _run(FakeClient(_all_payloads()))
+    stances = dossier["stances"]
+    assert stances["aggressive"]["stance"] == "SIZE_UP"
+    assert stances["conservative"]["stance"] == "SIZE_DOWN"
+    assert stances["neutral"]["stance"] == "HOLD_SIZE"
+
+
+def test_the_three_run_concurrently(with_stances):
+    """They are asked the same question independently; sequencing them would
+    cost three round trips for no added information."""
+    client = FakeClient(_all_payloads(), delay=0.05)
+    _run(client)
+
+    started = {n: t for n, t in client.started}
+    finished = {n: t for n, t in client.finished}
+    assert started["stance_conservative"] < finished["stance_aggressive"]
+    assert started["stance_neutral"] < finished["stance_aggressive"]
+
+
+def test_the_panel_runs_after_synthesis_and_reads_the_merged_report(with_stances):
+    """
+    They read a conclusion, not four unmerged reports — handing them the raw
+    specialists would invite the re-analysis their prompts forbid.
+    """
+    seen = {}
+    client = FakeClient(_all_payloads())
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        name = FakeClient.identify(kwargs)
+        if name.startswith("stance_"):
+            seen[name] = kwargs["messages"][0]["content"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+
+    brief = seen["stance_aggressive"]
+    assert "THE READING" in brief
+    assert "Compounding at scale [F2]" in brief   # the synthesised thesis
+    assert "THE RISK GATE" in brief
+
+
+def test_the_panel_is_told_it_cannot_see_account_exposure(with_stances):
+    """
+    A dossier is shared across users, so the panel reads a name and not an
+    account. Saying so in the brief is what stops a stance asserting something
+    about exposure it was never given.
+    """
+    seen = {}
+    client = FakeClient(_all_payloads())
+    original = client.messages.create
+
+    async def capture(**kwargs):
+        name = FakeClient.identify(kwargs)
+        if name.startswith("stance_"):
+            seen[name] = kwargs["messages"][0]["content"]
+        return await original(**kwargs)
+
+    client.messages.create = capture
+    _run(client)
+    assert "not told how much of the account" in seen["stance_neutral"]
+
+
+def test_an_uncited_rationale_is_stripped_but_the_stance_survives(with_stances):
+    """
+    The verdict is a closed enum, not a claim. Leaving it with a visible hole
+    where the reasoning should be is the intended outcome — better than a
+    recommendation nobody can check.
+    """
+    payloads = _all_payloads()
+    payloads["stance_aggressive"] = {
+        "stance": "SIZE_UP",
+        "rationale": "This one just feels like a winner.",
+        "what_would_change_it": "A change of heart",
+    }
+    dossier = _run(FakeClient(payloads))
+
+    aggressive = dossier["stances"]["aggressive"]
+    assert aggressive["stance"] == "SIZE_UP"
+    assert aggressive["rationale"] is None
+
+
+def test_one_stance_failing_leaves_the_other_two(with_stances):
+    dossier = _run(FakeClient(_all_payloads(), fail=("stance_conservative",)))
+    assert dossier["stances"]["conservative"] is None
+    assert dossier["stances"]["aggressive"]["stance"] == "SIZE_UP"
+
+
+def test_all_three_failing_reads_as_no_panel(with_stances):
+    dossier = _run(FakeClient(
+        _all_payloads(),
+        fail=("stance_aggressive", "stance_conservative", "stance_neutral"),
+    ))
+    assert dossier["stances"] is None
+    assert dossier["report"] is not None
+
+
+def test_the_panel_is_skipped_when_there_is_no_report(with_stances):
+    """With nothing synthesised there is no trade to have a stance about."""
+    client = FakeClient(_all_payloads(), fail=("synthesiser",))
+    dossier = _run(client)
+
+    assert dossier["stances"] is None
+    assert not [n for n, _ in client.started if n.startswith("stance_")]
+
+
+def test_disabled_by_default_and_makes_no_calls(wired):
+    client = FakeClient(_all_payloads())
+    dossier = _run(client)
+
+    assert dossier["stances"] is None
+    assert not [n for n, _ in client.started if n.startswith("stance_")]
+
+
+def test_the_stances_never_reach_the_trading_guard_chain():
+    """
+    The line this project does not cross. `_prepare_entry` holds every guard
+    that can refuse or resize an order; if a stance could reach it, sizing
+    would stop being reproducible from the account and the risk model alone.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "app/services/trade_manager.py"
+    text = source.read_text()
+    # Word-bounded: `isinstance` contains the substring and is everywhere.
+    for token in (r"\bstances?\b", r"\bSIZE_UP\b", r"\bSIZE_DOWN\b",
+                  r"\bHOLD_SIZE\b", r"research_stance"):
+        assert not re.search(token, text), f"{token} reached the trading path"

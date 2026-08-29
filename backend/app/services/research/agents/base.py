@@ -28,8 +28,12 @@ research report missing its news section is worth more than no report.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
+
+from app.services.llm.anthropic_client import AnthropicAdapter
+from app.services.llm.base import Candidate
+from app.services.llm.resolver import complete_with_chain
 
 from app.utils.logger import get_logger
 
@@ -79,6 +83,16 @@ class AgentResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    #: Which model actually answered. Not bookkeeping: a dossier written by one
+    #: model cannot be pooled with one written by another, and the research
+    #: calibration arm exists to compare exactly those. Absent on a skip, since
+    #: no model was asked.
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    #: Every link the chain tried, successes and failures alike. A run that
+    #: quietly succeeded on its third key looks identical to one that succeeded
+    #: on its first unless the misses are kept.
+    attempts: list = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -91,91 +105,93 @@ class AgentResult:
 
 async def run_agent(client: Any, spec: AgentSpec, evidence_block: str,
                     model: str, effort: str,
-                    extended_thinking: bool = True) -> AgentResult:
+                    extended_thinking: bool = True,
+                    chain: Optional[list] = None) -> AgentResult:
     """
     Run one agent and return its parsed output, or a recorded failure.
 
-    The evidence block is the FIRST system block and is byte-identical across
-    every agent in a dossier, with the cache breakpoint on it. Caching is a
-    prefix match, so putting the shared material first is what makes it
-    cacheable at all — the previous analyst put its breakpoint on a ~200-token
-    system prompt, well under the minimum cacheable prefix, and by its own
-    admission never got a hit.
+    The request itself now lives in `services/llm/` — one adapter per provider
+    behind one protocol — so a trader can put a different model on a different
+    agent. What did not move is the shape of the ask, and two properties of it
+    are worth restating because they are easy to lose in an adapter:
+
+    The evidence block is the FIRST system block and, on Anthropic, carries the
+    cache breakpoint. Caching is a prefix match, so putting the shared material
+    first is what makes it cacheable at all — the previous analyst put its
+    breakpoint on a ~200-token system prompt, well under the minimum cacheable
+    prefix, and by its own admission never got a hit. No other provider lets us
+    place that breakpoint by hand, so the same dossier costs more there; the
+    coverage summary records which provider answered rather than letting the
+    difference show up only on a bill.
 
     Note the concurrency trade-off this leaves: a cache entry only becomes
     readable once the first response has started, so four agents fired at once
     all miss it. The wall-clock saving is worth more than the read here, and
     the synthesiser — which runs after them — does get the hit.
+
+    `client` and `chain` are two ways in, and only one is used at a time. A
+    `chain` is the real path: an ordered list of candidates resolved from the
+    user's configured keys with the server's own appended last. A bare `client`
+    is the injection seam the orchestration tests have always used, and it
+    still means exactly what it did — this one object, over Anthropic, with the
+    model named in the call. Keeping both is what makes this change provably
+    behaviour-neutral for a deployment that has configured nothing.
     """
-    system = [
-        {
-            "type": "text",
-            "text": evidence_block,
-            "cache_control": {"type": "ephemeral"},
-        },
-        {"type": "text", "text": spec.system_prompt},
-    ]
-
-    kwargs: dict = {
-        "model": model,
-        "system": system,
-        "messages": [{"role": "user", "content": spec.task}],
-        "max_tokens": MAX_TOKENS,
-        "output_config": {
-            "format": {"type": "json_schema", "schema": spec.schema},
-            "effort": effort,
-        },
-    }
-    if extended_thinking:
-        kwargs["thinking"] = {"type": "adaptive"}
+    if chain is None:
+        # Injected-client path: one candidate, this client, Anthropic's shape.
+        # The api_key is unused because the factory ignores it — the caller has
+        # already built an authenticated client.
+        candidates = [Candidate(provider="anthropic", model=model,
+                                api_key="", key_id=None)]
+        adapters = {"anthropic": AnthropicAdapter(client_factory=lambda _k: client)}
     else:
-        kwargs["thinking"] = {"type": "disabled"}
+        candidates = chain
+        adapters = None
 
-    try:
-        message = await client.messages.create(**kwargs)
-    except Exception as exc:
-        logger.warning("research_agent_call_failed", agent=spec.name, error=str(exc))
-        return AgentResult(name=spec.name, output=None, error=str(exc))
+    outcome = await complete_with_chain(
+        candidates,
+        evidence_block=evidence_block,
+        system_prompt=spec.system_prompt,
+        task=spec.task,
+        schema=spec.schema,
+        effort=effort,
+        extended_thinking=extended_thinking,
+        max_tokens=MAX_TOKENS,
+        label=spec.name,
+        adapters=adapters,
+    )
 
-    stop_reason = getattr(message, "stop_reason", None)
-    if stop_reason == "refusal":
-        details = getattr(message, "stop_details", None)
-        logger.warning("research_agent_refused", agent=spec.name,
-                       category=getattr(details, "category", None))
-        return AgentResult(name=spec.name, output=None, error="refusal")
-    if stop_reason == "max_tokens":
-        # The schema constrains the shape, so a truncated response is invalid
-        # JSON rather than a short answer. Recorded as its own failure so the
-        # fix (raise the ceiling, lower the effort) is obvious from the logs.
-        logger.warning("research_agent_truncated", agent=spec.name,
-                       max_tokens=MAX_TOKENS)
-        return AgentResult(name=spec.name, output=None, error="max_tokens")
+    result = outcome.result
+    if not result.ok:
+        logger.warning(
+            "research_agent_call_failed", agent=spec.name,
+            kind=result.error_kind.value if result.error_kind else None,
+            error=result.error,
+        )
+        return AgentResult(
+            name=spec.name, output=None, error=result.error,
+            provider=result.provider, model=result.model,
+            attempts=[a.__dict__ for a in outcome.attempts],
+        )
 
-    text = _first_text_block(message)
-    if not text:
-        return AgentResult(name=spec.name, output=None, error="empty response")
-
-    try:
-        parsed = json.loads(text)
-    except (TypeError, ValueError) as exc:
-        logger.warning("research_agent_unparseable", agent=spec.name, error=str(exc))
-        return AgentResult(name=spec.name, output=None, error=f"unparseable: {exc}")
-
-    usage = getattr(message, "usage", None)
-    result = AgentResult(
+    agent_result = AgentResult(
         name=spec.name,
-        output=parsed,
-        input_tokens=getattr(usage, "input_tokens", 0) or 0,
-        output_tokens=getattr(usage, "output_tokens", 0) or 0,
-        cache_read_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
+        output=result.output,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cache_read_tokens=result.cache_read_tokens,
+        provider=result.provider,
+        model=result.model,
+        attempts=[a.__dict__ for a in outcome.attempts],
     )
     logger.info(
         "research_agent_done",
-        agent=spec.name, model=model,
-        input_tokens=result.input_tokens, output_tokens=result.output_tokens,
-        cache_read=result.cache_read_tokens,
+        agent=spec.name, provider=result.provider, model=result.model,
+        input_tokens=agent_result.input_tokens,
+        output_tokens=agent_result.output_tokens,
+        cache_read=agent_result.cache_read_tokens,
     )
-    return result
+    return agent_result
 
 
 def _first_text_block(message: Any) -> str:

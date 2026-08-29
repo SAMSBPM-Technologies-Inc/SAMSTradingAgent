@@ -92,6 +92,14 @@ export const researchApi = {
     api.post<import('../types').ResearchDossier>(`/research/${ticker}`, undefined, {
       timeout: 300_000,
     }),
+  /**
+   * The veto reading alone — whether research currently blocks a BUY on this
+   * ticker. Cheap enough for an order ticket to call on every open, which the
+   * full dossier is not: that response carries the whole evidence ledger.
+   * Never 404s; a ticker with no dossier truthfully blocks nothing.
+   */
+  veto: (ticker: string) =>
+    api.get<import('../types').ResearchVetoStatus>(`/research/${ticker}/veto`),
 }
 
 export const performanceApi = {
@@ -103,6 +111,13 @@ export const performanceApi = {
     api.get<import('../types').CalibrationReport>('/performance/calibration', {
       params: { ticker, apply_risk_gate: applyRiskGate },
     }),
+  /** Does the deep-research reading predict anything? Unscoped by watchlist:
+   *  dossiers are a shared series, and slicing them per-user would thin every
+   *  bucket for no gain in relevance. */
+  researchCalibration: (ticker?: string) =>
+    api.get<import('../types').ResearchCalibrationReport>(
+      '/performance/research-calibration', { params: { ticker } },
+    ),
 }
 
 export const chartApi = {
@@ -151,4 +166,30 @@ export const tradingApi = {
       `/trading/proposals/${id}/approve`, null, { params: { confirm_live: confirmLive } },
     ),
   declineProposal: (id: string) => api.post(`/trading/proposals/${id}/decline`),
+}
+
+/** Which models your agents run on. Keys are write-only: they go in through
+ *  `addKey` and never come back — the response type has no field for one. */
+export const llmApi = {
+  settings: () => api.get<import('../types').LLMSettings>('/settings/llm'),
+  save: (roles: import('../types').LLMRoleChains, researchEnabled: boolean) =>
+    api.put<import('../types').LLMSettings>('/settings/llm', {
+      roles,
+      research_enabled: researchEnabled,
+    }),
+  /** Validated with a real schema-constrained call before it is stored — a key
+   *  that does not work is refused here rather than skipped silently every
+   *  night. */
+  addKey: (provider: string, apiKey: string, label: string) =>
+    api.post<import('../types').LLMSettings>('/settings/llm/keys', {
+      provider,
+      api_key: apiKey,
+      label,
+    }),
+  deleteKey: (keyId: string) =>
+    api.delete<import('../types').LLMSettings>(`/settings/llm/keys/${keyId}`),
+  testKey: (keyId: string) =>
+    api.post<import('../types').LLMKeyTestResult>(
+      `/settings/llm/keys/${keyId}/test`,
+    ),
 }

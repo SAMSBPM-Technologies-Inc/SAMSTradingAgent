@@ -36,6 +36,13 @@ vaderSentiment==3.3.2   # VADER sentiment analysis on news headlines (no API key
 # previous >=0.30.0 would let a rebuild install a version that cannot run
 # the analyst at all.
 anthropic>=0.122.0      # Claude API for AI analyst layer
+# Optional provider SDKs. Imported lazily inside their adapters
+# (services/llm/), so a deployment whose users configure neither never
+# loads them — but they must be installed for a trader to be able to
+# choose one, and a missing package would otherwise surface as an
+# import error mid-dossier rather than at the point of choosing.
+openai>=1.60.0          # user-selectable provider
+google-genai>=1.0.0     # user-selectable provider
 
 # Auth
 python-jose[cryptography]==3.3.0

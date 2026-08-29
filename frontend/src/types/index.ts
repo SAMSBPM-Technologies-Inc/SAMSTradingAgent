@@ -198,7 +198,9 @@ export interface DimensionScore {
 
 export interface ResearchReport {
   assessment?: 'BULLISH' | 'NEUTRAL' | 'BEARISH' | null
-  conviction?: number | null
+  /** Conviction is deliberately absent here — the server stops sending the
+   *  same 0-100 number at two depths of one response. Read
+   *  `ResearchDossier.research_conviction`. */
   thesis?: string | null
   bull_case?: string | null
   bear_case?: string | null
@@ -221,15 +223,197 @@ export interface CitationAudit {
   invented: string[]
 }
 
+export interface ResearchVetoStatus {
+  /** RESEARCH_VETO_ENABLED. False means nothing here can stop an order. */
+  enabled: boolean
+  /** The dossier exists and is fresh enough to be capable of vetoing. */
+  considered: boolean
+  /** The dossier meets a blocking trigger, whether or not the veto is on.
+   *  Separate from `blocking` because the flag is off by default: "research
+   *  would refuse this entry if you switched the veto on" is the sentence a
+   *  user needs in order to decide whether to switch it on. */
+  would_block: boolean
+  /** `enabled && would_block` — the only field the backend guard acts on. */
+  blocking: boolean
+  reason?: string | null
+  /** 'bearish' | 'low_conviction' | null */
+  trigger?: string | null
+  assessment?: string | null
+  research_conviction?: number | null
+  /** The floor conviction must clear, so the distance to the edge can be shown
+   *  rather than a bare number with no scale. */
+  min_conviction: number
+  age_hours?: number | null
+  max_age_hours: number
+  /** 'no_dossier' | 'undated' | 'stale' — each allows the trade, and each for
+   *  a different reason worth telling apart. */
+  not_considered_reason?: string | null
+}
+
+/** How this reading turned out, once enough time passed to know. Absent on a
+ *  dossier too recent to grade — the normal state for the one a ticker page
+ *  shows, since it was written today. */
+export interface ResearchOutcome {
+  settled_at?: string | null
+  horizon_days?: number | null
+  price_at_dossier?: number | null
+  price_at_settlement?: number | null
+  return?: number | null
+  benchmark_ticker?: string | null
+  benchmark_return?: number | null
+  alpha?: number | null
+  assessment?: string | null
+  research_conviction?: number | null
+  /** Judged on ALPHA, not raw return: BULLISH on a name that rose 4% while the
+   *  market rose 9% was not right. `null` for a NEUTRAL reading and for a
+   *  window whose benchmark could not be read — both mean "cannot say", and
+   *  neither may be rendered as a miss. */
+  assessment_correct?: boolean | null
+  reflection?: ResearchReflection | null
+}
+
+export interface ResearchReflection {
+  /** `null` when nothing the model wrote cited a real evidence id. The numbers
+   *  beside it still stand — the prose is the optional part, and an
+   *  unattributable lesson must never be carried into a future prompt. */
+  lesson?: string | null
+  what_held: string[]
+  what_failed: string[]
+  /** True when the whole lesson was dropped for citing nothing. "We reflected
+   *  and it was unusable" and "we never reflected" are different facts. */
+  uncited: boolean
+  fabricated_citations: string[]
+}
+
+/** How many settled prior readings were in this dossier's evidence when it was
+ *  built. Zero for any name being read for the first time. */
+export interface PriorRecordCoverage {
+  same_ticker: number
+  cross_ticker: number
+  available: boolean
+}
+
+export interface RebuttalSide {
+  answered: string[]
+  /** Risk analyst only. */
+  surviving: string[]
+  sharpened: string[]
+  /** Defence only — the valuable half. An answer that disposes of every risk
+   *  is the strongest signal the step was not done honestly. */
+  conceded: string[]
+  overstated: string[]
+  residual_severity?: number | null
+  residual_rationale?: string | null
+  strongest_surviving_risk?: string | null
+}
+
+/** One exchange, after both sides had already written independently. Either
+ *  side may be null — its call failed — which is not the same as a side that
+ *  argued and found nothing. */
+export interface ResearchDebate {
+  rounds: number
+  risk_rebuttal?: RebuttalSide | null
+  defence_rebuttal?: RebuttalSide | null
+}
+
+/** One temperament's reading of the position, not of the company.
+ *
+ *  **Advisory only.** No order quantity follows from these: sizing is
+ *  arithmetic on a frozen equity basis and no part of the trading guard chain
+ *  reads them. They also do not see account exposure — a dossier is shared, so
+ *  a per-user panel would multiply its cost by the user count. */
+export interface TradeStance {
+  stance?: 'SIZE_UP' | 'HOLD_SIZE' | 'SIZE_DOWN' | 'WAIT' | null
+  /** `null` when the reasoning cited nothing and was stripped. The stance is a
+   *  closed enum and survives; the visible gap is intended. */
+  rationale?: string | null
+  what_would_change_it?: string | null
+}
+
+export interface ResearchStances {
+  aggressive?: TradeStance | null
+  conservative?: TradeStance | null
+  neutral?: TradeStance | null
+}
+
+// ── Model configuration ───────────────────────────────────────────────────────
+// A trader brings their own keys and assigns a model per role. Order within a
+// role is the priority: a rate-limited or dead key falls through to the next.
+
+export type LLMRole = 'orchestrator' | 'specialist' | 'analyst'
+
+/** A stored credential, as the client is allowed to see it.
+ *
+ *  There is no key field here and there must never be one — the server's
+ *  response type has no room for one either. To check a key works, call the
+ *  test endpoint, which returns a verdict rather than a secret. */
+export interface LLMKeyStatus {
+  id: string
+  provider: string
+  label: string
+  /** e.g. `sk-ant-…4f2a` — enough to tell two of your own keys apart. */
+  fingerprint: string
+  added_at?: string | null
+  last_ok_at?: string | null
+  last_error?: string | null
+  last_error_at?: string | null
+}
+
+export interface LLMRoleEntry {
+  key_id: string
+  model: string
+}
+
+export interface LLMRoleChains {
+  orchestrator: LLMRoleEntry[]
+  specialist: LLMRoleEntry[]
+  analyst: LLMRoleEntry[]
+}
+
+export interface LLMSettings {
+  keys: LLMKeyStatus[]
+  roles: LLMRoleChains
+  /** Gates the daily research job for this user. Off until asked: research is
+   *  five to seven model calls per ticker per day, on your own key. */
+  research_enabled: boolean
+  /** What the server falls back to when your chain is empty or exhausted. A
+   *  trader who configures nothing still gets dossiers, and should be able to
+   *  see what produced them. */
+  server_fallback?: string | null
+}
+
+export interface LLMKeyTestResult {
+  ok: boolean
+  provider: string
+  model?: string | null
+  error?: string | null
+  /** `auth` reads very differently from `rate_limit` when you are deciding
+   *  whether to re-paste a key. */
+  error_kind?: string | null
+}
+
+/** One producer behind a dossier, and the agents it wrote. */
+export interface ModelUsed {
+  provider?: string | null
+  model?: string | null
+  agents: string[]
+}
+
+
 export interface ResearchDossier {
   ticker: string
   as_of: string
   stale: boolean
   age_hours?: number | null
-  conviction?: number | null
+  /** 0-100, the research module's own conviction. Distinct from the analyst's
+   *  HIGH/MEDIUM/LOW `conviction` on a signal or a trade: different scale,
+   *  different producer, different gate — this one feeds the entry veto, that
+   *  one decides whether the agent may execute unattended. */
+  research_conviction?: number | null
   /** The arithmetic anchor conviction was clamped to. A persistent gap between
-   *  this and `conviction` means the numbers and the model's read disagree. */
-  derived_conviction?: number | null
+   *  this and `research_conviction` means the numbers and the model's read
+   *  disagree. */
+  derived_research_conviction?: number | null
   report?: ResearchReport | null
   dimensions: DimensionScore[]
   evidence: EvidenceItem[]
@@ -248,6 +432,18 @@ export interface ResearchDossier {
    *  filter. A non-clean audit means the model wrote at least one uncited or
    *  fabricated claim that no longer appears in the report. */
   citation_audit?: CitationAudit | null
+  /** What this dossier does to a BUY on this ticker, right now. Always sent —
+   *  a dossier that blocks nothing says so, because "no veto field" and "veto
+   *  found nothing" are not the same claim. */
+  veto?: ResearchVetoStatus | null
+  outcome?: ResearchOutcome | null
+  prior_record?: PriorRecordCoverage | null
+  debate?: ResearchDebate | null
+  /** Advisory stance panel. Never binding on an order — see `TradeStance`. */
+  stances?: ResearchStances | null
+  /** Which models produced this reading. Empty on dossiers written
+   *  before provenance was recorded. */
+  models_used?: ModelUsed[]
 }
 
 export interface PerformanceResponse {
@@ -255,6 +451,13 @@ export interface PerformanceResponse {
   settled_signals: number
   overall_win_rate?: number
   overall_avg_return_20d?: number
+  /** What alpha is measured against, so the client never names it itself. */
+  benchmark_ticker?: string | null
+  /** Alpha carries its own count. Records settled before benchmark
+   *  measurement existed have a return and no alpha, so `settled_signals`
+   *  overstates the evidence behind the alpha figure. */
+  alpha_settled_signals?: number
+  overall_avg_alpha_20d?: number | null
   by_signal: SignalPerformanceRecord[]
   by_ticker: TickerPerformance[]
 }
@@ -266,6 +469,9 @@ export interface SignalPerformanceRecord {
   correct: number
   win_rate?: number
   avg_return_20d?: number
+  /** Its own denominator — see `PerformanceResponse.alpha_settled_signals`. */
+  alpha_settled?: number
+  avg_alpha_20d?: number | null
 }
 
 export interface TickerPerformance {
@@ -274,6 +480,8 @@ export interface TickerPerformance {
   settled: number
   win_rate?: number
   avg_return_20d?: number
+  alpha_settled?: number
+  avg_alpha_20d?: number | null
 }
 
 export interface SignalRecord {
@@ -602,6 +810,16 @@ export interface CalibrationBucket {
   avg_return: number | null
   median_return: number | null
   significant: boolean
+  /** Alpha carries its OWN count and its own significance flag. Records
+   *  settled before benchmark measurement existed have a return and no alpha,
+   *  so the two samples are different sizes — showing one `n` against both
+   *  would let a three-record alpha inherit a three-hundred-record
+   *  confidence. */
+  alpha_n: number
+  alpha_win_rate: number | null
+  avg_alpha: number | null
+  median_alpha: number | null
+  alpha_significant: boolean
 }
 
 export interface ScoreBucket extends CalibrationBucket {
@@ -624,12 +842,68 @@ export interface ConfidenceBucket extends CalibrationBucket {
 export interface CalibrationReport {
   ticker: string | null
   settled_records: number
+  benchmark_ticker?: string | null
+  alpha_records?: number
   base_rate: CalibrationBucket
   score_buckets: ScoreBucket[]
   /** null when there aren't enough usable buckets to say either way. */
   score_ranks_outcomes: boolean | null
+  /** The stricter test, asked of alpha on its own sample. A score can rank raw
+   *  returns simply by preferring high-beta names in a rising market, and
+   *  would look calibrated right up to the month the market turns. */
+  score_ranks_alpha?: boolean | null
   usable_buckets: number
+  alpha_usable_buckets?: number
   threshold_sweep: ThresholdRow[]
   confidence_buckets: ConfidenceBucket[]
+  min_samples_for_signal: number
+}
+
+// ── Research calibration ──────────────────────────────────────────────────────
+// Whether the deep-research reading predicts anything. Graded on alpha rather
+// than raw return: BULLISH on a name that rose 4% while the market rose 9% was
+// not right, and counting it as a win is how a desk mistakes exposure for skill.
+
+export interface ConvictionBucket extends CalibrationBucket {
+  lo: number
+  hi: number
+}
+
+export interface AssessmentAccuracyRow extends CalibrationBucket {
+  assessment: 'BULLISH' | 'NEUTRAL' | 'BEARISH'
+  /** Smaller than `n` on purpose: NEUTRAL readings and unmeasurable windows
+   *  are excluded rather than counted as misses, which would make the number
+   *  describe the sample's direction instead of the reading's quality. */
+  graded: number
+  correct: number
+  accuracy: number | null
+}
+
+/** What the names research would have refused actually did. The number
+ *  `RESEARCH_VETO_ENABLED` should be argued from, and that nobody has had. */
+export interface VetoCounterfactual {
+  floor: number
+  would_block: CalibrationBucket
+  allowed: CalibrationBucket
+  /** Positive means the veto refused the worse names — the only result that
+   *  justifies switching it on. `null` when either side is too thin to
+   *  compare, which is the honest answer far more often than not. */
+  alpha_saved: number | null
+  conclusive: boolean
+}
+
+export interface ResearchCalibrationReport {
+  ticker: string | null
+  graded_dossiers: number
+  benchmark_ticker: string
+  base_rate: CalibrationBucket
+  conviction_buckets: ConvictionBucket[]
+  conviction_ranks_alpha: boolean | null
+  usable_buckets: number
+  assessment_accuracy: AssessmentAccuracyRow[]
+  veto_counterfactual: VetoCounterfactual
+  /** A high graded count with few lessons means reflection is running and
+   *  being citation-filtered away — a different problem from it not running. */
+  lessons_recorded: number
   min_samples_for_signal: number
 }

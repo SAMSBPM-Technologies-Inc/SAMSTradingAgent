@@ -18,8 +18,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.config import get_settings
 from app.db import COLL_FUNDAMENTALS_CACHE, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
-from app.models.stock import CitationAudit, ResearchDossier
+from app.models.stock import (
+    CitationAudit, PriorRecordCoverage, ResearchDebate, ResearchDossier,
+    ModelUsed, ResearchOutcome, ResearchStances, ResearchVetoStatus,
+)
 from app.services.research.dossier import build_dossier, latest_dossier
+from app.services.research.veto import evaluate_veto
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["research"])
@@ -31,7 +35,7 @@ logger = get_logger(__name__)
 async def get_research(ticker: str,
                        current_user: dict = Depends(get_current_user)) -> ResearchDossier:
     ticker = ticker.upper().strip()
-    doc = await latest_dossier(ticker)
+    doc = await latest_dossier(ticker, str(current_user.get("_id") or ""))
     if not doc:
         raise HTTPException(
             status_code=404,
@@ -75,6 +79,30 @@ async def create_research(ticker: str,
     dossier["age_hours"] = 0.0
     dossier["stale"] = False
     return _to_model(dossier)
+
+
+@router.get("/research/{ticker}/veto", response_model=ResearchVetoStatus,
+            summary="Whether research currently blocks a BUY on this ticker")
+async def get_research_veto(ticker: str,
+                            current_user: dict = Depends(get_current_user)
+                            ) -> ResearchVetoStatus:
+    """
+    The veto reading alone, without the dossier around it.
+
+    This exists so an order ticket can warn before the Buy button is pressed.
+    It could read `GET /research/{ticker}` instead, but that response carries
+    the full evidence ledger and every prose field — kilobytes of report to
+    render one line of warning, fetched on every ticker the user opens.
+
+    Never 404s. A ticker with no dossier is not an error here; it is the
+    ordinary case, and the answer to "does research block this" is a truthful
+    no. Returning an error would push every client into treating a missing
+    dossier as a failure, which is the opposite of how the guard itself
+    behaves.
+    """
+    ticker = ticker.upper().strip()
+    doc = await latest_dossier(ticker, str(current_user.get("_id") or ""))
+    return ResearchVetoStatus(**evaluate_veto(doc).to_dict())
 
 
 async def _watchlist_context(user_id: str) -> list[dict]:
@@ -122,8 +150,8 @@ def _to_model(doc: dict) -> ResearchDossier:
         as_of=str(as_of or datetime.now(tz=timezone.utc).isoformat()),
         stale=bool(doc.get("stale")),
         age_hours=doc.get("age_hours"),
-        conviction=doc.get("conviction"),
-        derived_conviction=doc.get("derived_conviction"),
+        research_conviction=doc.get("research_conviction"),
+        derived_research_conviction=doc.get("derived_research_conviction"),
         report=doc.get("report") or None,
         dimensions=doc.get("dimensions") or [],
         evidence=doc.get("evidence") or [],
@@ -134,5 +162,29 @@ def _to_model(doc: dict) -> ResearchDossier:
         synthesis_error=doc.get("synthesis_error"),
         citation_audit=(
             CitationAudit(**doc["citation_audit"]) if doc.get("citation_audit") else None
+        ),
+        # Computed on read rather than stored. The veto is a function of the
+        # dossier *and* the current settings, and the settings can change
+        # between the build and the reading — a status frozen at build time
+        # would confidently describe a threshold that no longer applies.
+        veto=ResearchVetoStatus(**evaluate_veto(doc).to_dict()),
+        # Present only on dossiers old enough to have been graded. The one a
+        # ticker page displays is normally today's, so `None` here is the usual
+        # case rather than a gap — the settled series is what the research
+        # calibration arm reads.
+        outcome=(
+            ResearchOutcome.model_validate(doc["outcome"]) if doc.get("outcome") else None
+        ),
+        debate=(
+            ResearchDebate.model_validate(doc["debate"]) if doc.get("debate") else None
+        ),
+        models_used=[ModelUsed(**m) for m in (doc.get("models_used") or [])],
+        stances=(
+            ResearchStances.model_validate(doc["stances"]) if doc.get("stances") else None
+        ),
+        prior_record=(
+            PriorRecordCoverage(**(doc.get("coverage") or {}).get("prior_record", {}))
+            if isinstance((doc.get("coverage") or {}).get("prior_record"), dict)
+            else None
         ),
     )

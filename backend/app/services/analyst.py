@@ -23,13 +23,12 @@ Output schema stored in signal doc under "analyst_output":
   catalysts    : list[str]
   analyst_note : str  (2-3 paragraph research note)
 """
-import json
-import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
+from app.services.research.agents.base import AgentSpec, run_agent
 from app.services.risk_engine import assess_risk
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
@@ -52,7 +51,6 @@ You are a senior equity research analyst with 20 years of experience across mult
 You produce institutional-grade research notes: specific, data-driven, and honest about uncertainty.
 
 Rules:
-- Respond with valid JSON only — no markdown fences, no text outside the JSON object
 - Reference actual numbers from the data provided; do not invent figures
 - Set price_target and stop_loss as realistic levels derived from ATR or support/resistance
 - thesis: 1-2 sentences capturing the core investment case
@@ -63,30 +61,54 @@ Rules:
 - When technicals and fundamentals conflict, reason through the dominant driver before deciding
 """
 
-_RESPONSE_SCHEMA = """\
-{
-  "signal": "BUY|SELL|HOLD",
-  "conviction": "HIGH|MEDIUM|LOW",
-  "price_target": <float or null>,
-  "stop_loss": <float or null>,
-  "time_horizon": "<e.g. 2-4 weeks or 3-6 months>",
-  "thesis": "<1-2 sentence core investment thesis>",
-  "bull_case": "<primary upside argument>",
-  "bear_case": "<primary downside risk>",
-  "key_risks": ["<risk 1>", "<risk 2>"],
-  "catalysts": ["<catalyst 1>", "<catalyst 2>"],
-  "analyst_note": "<2-3 paragraph research note in sell-side style>"
-}"""
+# The shape, enforced server-side rather than requested in prose.
+#
+# This call used to paste a hand-written pseudo-schema into the prompt, take
+# whatever came back, strip markdown fences with two regexes and hope
+# `json.loads` worked. A truncated or fenced response failed to parse and wasted
+# the entire call — including its thinking tokens, which are most of the bill.
+# `services/research/` has used structured outputs since it was written; this is
+# the same mechanism, so both paths now fail the same way and neither can
+# silently return prose.
+#
+# Note the constraints deliberately absent: no `minimum`/`maximum`, no string
+# length bounds, no array bounds. Structured outputs reject those outright with
+# a 400 rather than ignoring them — the incident `tests/test_research_schemas.py`
+# fences against. Bounds that matter are enforced in Python below.
+_NUMBER_OR_NULL = {"type": ["number", "null"]}
+_STRING = {"type": "string"}
+_STRING_LIST = {"type": "array", "items": {"type": "string"}}
+
+_RESPONSE_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "signal": {"type": "string", "enum": ["BUY", "SELL", "HOLD"]},
+        "conviction": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
+        "price_target": _NUMBER_OR_NULL,
+        "stop_loss": _NUMBER_OR_NULL,
+        "time_horizon": _STRING,
+        "thesis": _STRING,
+        "bull_case": _STRING,
+        "bear_case": _STRING,
+        "key_risks": _STRING_LIST,
+        "catalysts": _STRING_LIST,
+        "analyst_note": _STRING,
+    },
+    "required": ["signal", "conviction", "price_target", "stop_loss",
+                 "time_horizon", "thesis", "bull_case", "bear_case",
+                 "key_risks", "catalysts", "analyst_note"],
+    "additionalProperties": False,
+}
 
 
-async def run_analysis(ticker: str) -> Optional[dict]:
+async def run_analysis(ticker: str, client: Any = None) -> Optional[dict]:
     """
     Produce a full analyst signal doc for *ticker*.
     Returns a signal-doc-compatible dict (ready to upsert into stocks_signals)
     or None if analyst is disabled / API call fails.
     """
     settings = get_settings()
-    if not settings.anthropic_api_key:
+    if client is None and not settings.anthropic_api_key:
         logger.warning("analyst_disabled", reason="ANTHROPIC_API_KEY not set")
         return None
 
@@ -109,6 +131,7 @@ async def run_analysis(ticker: str) -> Optional[dict]:
             model=settings.analyst_model,
             extended_thinking=settings.analyst_extended_thinking,
             effort=settings.analyst_effort,
+            client=client,
         )
     except Exception as exc:
         logger.warning("analyst_claude_failed", ticker=ticker, error=str(exc))
@@ -302,8 +325,9 @@ Insider Transactions (90d): {ins_str}
 Risk Score: {risk['risk_score']:.1f}/10 ({risk['risk_level']})
 {risk['explanation']}
 
-Respond with this exact JSON schema (no markdown, no extra text):
-{_RESPONSE_SCHEMA}"""
+Your response shape is enforced by the API — write the content, not the \
+envelope. Leave price_target or stop_loss null rather than estimating one the \
+data does not support."""
 
 
 # ── Claude API call ────────────────────────────────────────────────────────────
@@ -314,92 +338,68 @@ async def _call_claude(
     model: str = _MODEL,
     extended_thinking: bool = True,
     effort: str = "medium",
+    client: Any = None,
 ) -> dict:
-    import anthropic
+    """
+    One structured call, through the same seam the research agents use.
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    This shares `agents/base.run_agent` rather than reimplementing the request,
+    and that is the point of the change. The old version built its client
+    inline — which is why this module has had no tests since it was written —
+    asked for JSON in prose, stripped markdown fences with two regexes, and
+    called `json.loads` on whatever survived. A truncated response failed to
+    parse and wasted the whole call including its thinking tokens, which are
+    most of the bill. `run_agent` already handles the refusal stop reason, the
+    truncation stop reason, and schema enforcement, and it is covered by
+    `tests/test_research_orchestrator.py`.
 
-    # Prompt caching keeps the system prompt cheap on repeat calls. Worth having,
-    # but not worth much here: input is a small share of the bill next to
-    # thinking tokens, so the levers that matter are the model, the effort
-    # level, and not making the call at all.
-    system = [
-        {
-            "type": "text",
-            "text": _SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
+    `client` is injectable for the same reason it is on `build_dossier`: so
+    this path can finally be tested without a network call.
+    """
+    if client is None:
+        import anthropic
 
-    kwargs: dict = {
-        "model": model,
-        "system": system,
-        "messages": [{"role": "user", "content": context}],
-        "max_tokens": _MAX_TOKENS,
-    }
+        client = anthropic.AsyncAnthropic(api_key=api_key)
 
-    if extended_thinking:
-        # Adaptive thinking replaces the fixed `budget_tokens` form, which is
-        # deprecated on 4.6-era models and rejected outright by current ones.
-        # It also matches spend to difficulty: an obvious HOLD no longer costs
-        # the same as a genuinely contested call, which the fixed budget did.
-        kwargs["thinking"] = {"type": "adaptive"}
-        kwargs["output_config"] = {"effort": effort}
-    else:
-        # Adaptive is the default on these models, so opting out has to be
-        # explicit — omitting `thinking` would leave it on.
-        kwargs["thinking"] = {"type": "disabled"}
+    spec = AgentSpec(
+        name="analyst",
+        prefixes=(),
+        system_prompt=_SYSTEM_PROMPT,
+        task=context,
+        schema=_RESPONSE_SCHEMA,
+        model_role="orchestrator",
+    )
+    # The system prompt carries the cache breakpoint here rather than an
+    # evidence block: this path has no ledger, and the prompt is the only part
+    # that repeats across tickers. It is small enough that the hit is worth
+    # little — the levers that matter on this call are the model, the effort
+    # level, and `pipeline._analyst_worth_calling` not making it at all.
+    result = await run_agent(client, spec, _SYSTEM_PROMPT, model, effort,
+                             extended_thinking)
+    if not result.ok:
+        raise ValueError(result.error or "analyst call produced no output")
 
-    message = await client.messages.create(**kwargs)
+    parsed = dict(result.output or {})
 
-    # A truncated response cannot be parsed and wastes the whole call. Surface
-    # it rather than letting it read as a generic JSON failure downstream.
-    if getattr(message, "stop_reason", None) == "max_tokens":
-        logger.warning(
-            "analyst_response_truncated",
-            model=model, max_tokens=_MAX_TOKENS,
-            hint="raise _MAX_TOKENS or lower analyst_effort",
-        )
-
-    # Extended thinking returns multiple content blocks; extract the text block
-    raw_text = ""
-    for block in message.content:
-        if block.type == "text":
-            raw_text = block.text.strip()
-            break
-
-    if not raw_text:
-        raise ValueError("No text block in Claude response")
-
-    # Strip markdown fences if model adds them despite instructions
-    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-    raw_text = re.sub(r"\s*```$", "", raw_text)
-
-    parsed = json.loads(raw_text)
-
-    # Validate required fields
-    for field in ("signal", "conviction", "thesis", "analyst_note"):
-        if field not in parsed:
-            raise ValueError(f"Missing required field '{field}' in analyst response")
-
-    # Normalise signal/conviction
-    parsed["signal"] = parsed["signal"].upper()
-    parsed["conviction"] = parsed["conviction"].upper()
+    # The schema guarantees the enum members, so these two normalisations are
+    # now belt-and-braces rather than the only thing standing between the model
+    # and a signal doc. Kept because `_conviction_to_confidence` and the
+    # trading path both key off exact strings, and a silent drift to "Buy"
+    # would route through `.get(..., 0.25)` and read as low conviction.
+    parsed["signal"] = str(parsed.get("signal", "HOLD")).upper()
+    parsed["conviction"] = str(parsed.get("conviction", "LOW")).upper()
     if parsed["signal"] not in ("BUY", "SELL", "HOLD"):
         parsed["signal"] = "HOLD"
     if parsed["conviction"] not in ("HIGH", "MEDIUM", "LOW"):
         parsed["conviction"] = "LOW"
 
-    # Log cache and thinking usage for cost monitoring
-    usage = message.usage
     logger.info(
         "analyst_claude_usage",
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        cache_read=getattr(usage, "cache_read_input_tokens", 0),
-        cache_created=getattr(usage, "cache_creation_input_tokens", 0),
+        model=model,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cache_read=result.cache_read_tokens,
     )
-
     return parsed
 
 

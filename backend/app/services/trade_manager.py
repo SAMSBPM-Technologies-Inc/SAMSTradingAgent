@@ -18,6 +18,9 @@ from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_SIGNALS, COLL_TRADES, COLL_USERS, get_db
 from app.models.trade import AutoTradeSettings, TradeRecord, TradeStatus
 from app.services import broker as ibkr
+from app.services.benchmark import (
+    alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
+)
 from app.services.signal_generator import SELL_THRESHOLD
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
@@ -593,77 +596,56 @@ class EntryPlan:
         return self.qty + self.held_qty
 
 
-async def _research_veto(ticker: str) -> str | None:
+async def _research_veto(ticker: str, user_id: str) -> str | None:
     """
     Whether the latest research dossier blocks a BUY on *ticker*.
 
     Returns a reason string to block, or None to allow.
 
-    **Every uncertain path allows the trade.** No dossier, a stale one, a
+    The judgement itself lives in `services/research/veto.evaluate_veto` — a
+    pure function over a dossier — so the same reading that refuses an order
+    here can be shown to a user on the ticker page before they place one. This
+    wrapper owns only the parts that cannot be pure: the database read, the
+    logging, and the decision not to read at all when the veto is switched off.
+
+    Every uncertain path allows the trade. No dossier, a stale one, a
     conviction that could not be derived, an unreadable database — all return
     None. That is a deliberate choice, not laziness: the alternative is that a
     scheduler outage or an empty collection silently halts all buying, and a
     system that stops trading for a reason nobody can see is a worse failure
     than one that trades without an extra opinion. The veto is an additional
     check on top of the existing guard chain, never a dependency of it.
-
-    Two triggers, both explicit statements rather than absences: conviction
-    below the configured floor, and an assessment of BEARISH. A dossier that
-    merely failed to reach a view does not block anything.
     """
     env = get_settings()
     if not env.research_veto_enabled:
+        # Checked before the lookup, not inside the evaluator: while the veto
+        # is off there is no reason to spend a query on an answer that cannot
+        # change the outcome.
         return None
 
     try:
         from app.services.research.dossier import latest_dossier
 
-        dossier = await latest_dossier(ticker)
+        # This user's reading, not a shared one. An order is refused on the
+        # judgement its owner's models actually made — anything else refuses a
+        # trade on an opinion the trader never held.
+        dossier = await latest_dossier(ticker, user_id)
     except Exception as exc:
         logger.warning("research_veto_lookup_failed", ticker=ticker, error=str(exc))
         return None
 
-    if not dossier:
+    from app.services.research.veto import evaluate_veto
+
+    status = evaluate_veto(dossier, env)
+    if not status.blocking:
+        if status.not_considered_reason == "stale":
+            logger.info("research_veto_skipped_stale", ticker=ticker,
+                        age_hours=status.age_hours)
         return None
 
-    age_hours = dossier.get("age_hours")
-    if age_hours is None or age_hours > env.research_veto_max_age_hours:
-        logger.info("research_veto_skipped_stale", ticker=ticker, age_hours=age_hours)
-        return None
-
-    report = dossier.get("report") or {}
-    assessment = (report.get("assessment") or "").upper()
-    conviction = dossier.get("conviction")
-
-    if assessment == "BEARISH":
-        logger.info("research_veto_applied", ticker=ticker, reason="bearish",
-                    conviction=conviction)
-        return (
-            f"Research veto: the {_age_phrase(age_hours)} dossier for {ticker} "
-            f"reads BEARISH"
-        )
-
-    if conviction is not None and conviction < env.research_veto_min_conviction:
-        logger.info("research_veto_applied", ticker=ticker, reason="low_conviction",
-                    conviction=conviction)
-        return (
-            f"Research veto: conviction {conviction:.0f}/100 is below the "
-            f"{env.research_veto_min_conviction:.0f} floor "
-            f"({_age_phrase(age_hours)} dossier)"
-        )
-
-    return None
-
-
-def _age_phrase(age_hours: float | None) -> str:
-    """Human phrasing for dossier age, so a skip reason says how fresh it was."""
-    if age_hours is None:
-        return "undated"
-    if age_hours < 1:
-        return "current"
-    if age_hours < 24:
-        return f"{age_hours:.0f}h-old"
-    return f"{age_hours / 24:.0f}d-old"
+    logger.info("research_veto_applied", ticker=ticker, reason=status.trigger,
+                conviction=status.research_conviction)
+    return status.reason
 
 
 async def _prepare_entry(
@@ -710,7 +692,7 @@ async def _prepare_entry(
     #
     # Applied to adds as well as first entries, because an add increases
     # exposure and blocking one does not force anything to be sold.
-    veto = await _research_veto(ticker)
+    veto = await _research_veto(ticker, user_id)
     if veto:
         return None, veto
 
@@ -2031,6 +2013,13 @@ async def reconcile_trades() -> dict:
 
     # ── Phase 3: detect closures and price them ──────────────────────────────
     now = utcnow()
+    # One benchmark series for the whole pass. Fetched here rather than per
+    # trade because a reconciliation run can close several positions at once
+    # and the licensed price provider is rate-limited.
+    bench_series = await benchmark_closes()
+    bench_close_now = (
+        close_on_or_before(bench_series, now) if bench_series is not None else None
+    )
     for trade in open_trades:
         if trade.get("action") != "BUY" or trade.get("closed_at") is not None:
             continue
@@ -2101,6 +2090,26 @@ async def reconcile_trades() -> dict:
             )
             if commission is not None and complete:
                 update["pnl_net"] = round(update["pnl"] - float(commission), 2)
+
+            # What the market did over this position's own window. Gross and
+            # net say what the trade earned; alpha says whether holding the
+            # index instead would have earned it anyway. All three stay None
+            # rather than 0.0 when unmeasurable, for the reason net does: a
+            # zero benchmark reports the whole return as skill, and does it in
+            # the flattering direction every time the market rose.
+            entry_ret = (float(exit_price) - float(entry_price)) / float(entry_price)
+            update["return_pct"] = round(entry_ret, 6)
+            bench_ret = None
+            if bench_close_now is not None and isinstance(filled_at, datetime):
+                bench_open = close_on_or_before(bench_series, filled_at)
+                if bench_open:
+                    bench_ret = (bench_close_now - bench_open) / bench_open
+            excess = alpha(entry_ret, bench_ret)
+            update["benchmark_ticker"] = benchmark_ticker()
+            update["benchmark_return"] = (
+                round(bench_ret, 6) if bench_ret is not None else None
+            )
+            update["alpha"] = round(excess, 6) if excess is not None else None
             summary["closed"] += 1
         else:
             # Close it regardless so position counts and the duplicate-entry

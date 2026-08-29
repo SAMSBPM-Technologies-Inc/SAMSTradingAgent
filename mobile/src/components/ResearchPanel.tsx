@@ -1,10 +1,21 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native'
-import { AlertCircle, ExternalLink, RefreshCw } from 'lucide-react-native'
+import { AlertCircle, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react-native'
 
 import { researchApi } from '../lib/api'
 import { usePalette, type Palette } from '../lib/palette'
-import type { DimensionScore, EvidenceItem, ResearchDossier } from '../types'
+import type {
+  DimensionScore,
+  EvidenceItem,
+  ModelUsed,
+  PriorRecordCoverage,
+  ResearchDebate,
+  ResearchDossier,
+  ResearchOutcome,
+  ResearchStances,
+  ResearchVetoStatus,
+  TradeStance,
+} from '../types'
 
 /**
  * Deep research dossier — the mobile mirror of the web panel.
@@ -94,6 +105,8 @@ export default function ResearchPanel({ ticker }: { ticker: string }) {
 
       {error && <Callout C={C} tone={C.red}>{error}</Callout>}
 
+      <VetoNote veto={dossier?.veto} C={C} />
+
       {dossier && <Body dossier={dossier} C={C} />}
     </View>
   )
@@ -114,9 +127,12 @@ function Header({ dossier, C }: { dossier: ResearchDossier; C: Palette }) {
           </Text>
         </View>
       )}
-      {dossier.conviction != null && (
+      {dossier.research_conviction != null && (
         <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg }}>
-          Conviction {Math.round(dossier.conviction)}/100
+          {/* "Research conviction", never bare "Conviction" — the analyst's own
+              HIGH/MEDIUM/LOW conviction is on this same screen and gates
+              something else entirely. */}
+          Research conviction {Math.round(dossier.research_conviction)}/100
         </Text>
       )}
       <Text style={{ fontSize: 12, color: C.fgMuted }}>{formatAge(dossier)}</Text>
@@ -130,7 +146,91 @@ function Header({ dossier, C }: { dossier: ResearchDossier; C: Palette }) {
           </Text>
         </View>
       )}
+      <VetoChip veto={dossier.veto} C={C} />
     </>
+  )
+}
+
+/**
+ * Whether this dossier is standing on the Buy button.
+ *
+ * In the header rather than the body because it is the one thing here that
+ * changes what the system will do, as opposed to what it thinks. `blocking`
+ * is a fact about now; `would_block` with the veto off is a fact about a
+ * setting — calling the second one "blocked" would be untrue, and hiding it
+ * would throw away the only evidence for deciding whether to switch it on.
+ */
+function VetoChip({ veto, C }: { veto?: ResearchVetoStatus | null; C: Palette }) {
+  if (!veto?.would_block) return null
+  const blocking = veto.blocking
+  return (
+    <View style={{
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      backgroundColor: blocking ? C.tintSell : C.tintHold,
+      borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2,
+    }}>
+      <ShieldAlert size={11} color={blocking ? C.red : C.amber} />
+      <Text style={{
+        fontSize: 9, fontWeight: '700', letterSpacing: 0.4,
+        color: blocking ? C.red : C.amber,
+      }}>
+        {blocking ? 'BLOCKS BUYING' : 'WOULD BLOCK'}
+      </Text>
+    </View>
+  )
+}
+
+/**
+ * What this dossier does to a BUY, stated in full — the mobile mirror of the
+ * web panel's note. Names the trigger, the threshold, and how much room is
+ * left when nothing is blocking, because 38 against a floor of 35 is a
+ * different situation from 90 against 35.
+ */
+function VetoNote({ veto, C }: { veto?: ResearchVetoStatus | null; C: Palette }) {
+  if (!veto) return null
+
+  if (!veto.considered) {
+    if (veto.not_considered_reason === 'stale') {
+      return (
+        <Callout C={C} tone={C.amber}>
+          This dossier is older than the {veto.max_age_hours}h the veto will
+          trust, so it cannot block an entry. A research outage must not
+          silently halt buying.
+        </Callout>
+      )
+    }
+    return null
+  }
+
+  if (veto.would_block) {
+    const trigger = veto.trigger === 'bearish'
+      ? 'the assessment is BEARISH'
+      : `research conviction ${Math.round(veto.research_conviction ?? 0)} is below the ${Math.round(veto.min_conviction)} floor`
+    return veto.blocking ? (
+      <Callout C={C} tone={C.red} bg={C.tintSell}>
+        Research is blocking new buying in this name — {trigger}. Both the
+        agent and your own Buy button run the same guard, so an order placed
+        here will be refused. Selling is unaffected: research may veto an
+        entry, never an exit.
+      </Callout>
+    ) : (
+      <Callout C={C} tone={C.amber}>
+        Research would block a buy here — {trigger} — but the veto is switched
+        off, so nothing is being stopped. This is what turning it on would
+        have caught.
+      </Callout>
+    )
+  }
+
+  const margin = veto.research_conviction != null
+    ? Math.round(veto.research_conviction - veto.min_conviction)
+    : null
+  return (
+    <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+      Research does not block buying in this name
+      {margin != null && ` — conviction clears the ${Math.round(veto.min_conviction)} floor by ${margin}`}
+      {!veto.enabled && ', and the veto is switched off in any case'}.
+    </Text>
   )
 }
 
@@ -191,8 +291,14 @@ function Body({ dossier, C }: { dossier: ResearchDossier; C: Palette }) {
             C={C}
           />
           <Prose label="Conclusion" text={report.conclusion} C={C} />
+          <Debate debate={dossier.debate} C={C} />
+          <Stances stances={dossier.stances} C={C} />
         </>
       )}
+
+      <ModelsLine models={dossier.models_used} C={C} />
+      <PriorRecordNote coverage={dossier.prior_record} C={C} />
+      <OutcomeNote outcome={dossier.outcome} C={C} />
 
       <Bullets
         label="What could not be assessed"
@@ -363,18 +469,264 @@ function Evidence({ items, C }: { items: EvidenceItem[]; C: Palette }) {
   )
 }
 
+/**
+ * The panel's caveat block. `bg` is overridden only for the case that is not a
+ * caveat but a refusal — research actively blocking an entry — which should
+ * not read in the same amber as "an agent didn't report".
+ */
 function Callout({
-  C, tone, children,
-}: { C: Palette; tone: string; children: React.ReactNode }) {
+  C, tone, bg, children,
+}: { C: Palette; tone: string; bg?: string; children: React.ReactNode }) {
   return (
     <View style={{
       flexDirection: 'row', gap: 8, alignItems: 'flex-start',
-      backgroundColor: C.tintHold, borderRadius: 6, padding: 10,
+      backgroundColor: bg ?? C.tintHold, borderRadius: 6, padding: 10,
     }}>
       <AlertCircle size={13} color={tone} style={{ marginTop: 2 }} />
       <Text style={{ fontSize: 12, color: tone, flex: 1, lineHeight: 17 }}>{children}</Text>
     </View>
   )
+}
+
+/**
+ * The rebuttal exchange — mirrors the web panel.
+ *
+ * The concession is the part worth the most: a bear case nobody answered
+ * reaches the report at full strength whether or not the evidence disposes of
+ * it, and a defence that answered every risk is the clearest sign the step was
+ * not done honestly. Neither is visible in the merged report alone.
+ */
+function Debate({ debate, C }: { debate?: ResearchDebate | null; C: Palette }) {
+  const [open, setOpen] = useState(false)
+  if (!debate) return null
+
+  const risk = debate.risk_rebuttal
+  const defence = debate.defence_rebuttal
+  const conceded = defence?.conceded ?? []
+  const surviving = risk?.surviving ?? []
+
+  return (
+    <View>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        accessibilityRole="button"
+        accessibilityLabel={open ? 'Hide the rebuttal' : 'Show the rebuttal'}
+        style={{ flexDirection: 'row', justifyContent: 'space-between' }}
+      >
+        <Text style={{ fontSize: 11, fontWeight: '600', letterSpacing: 0.5, color: C.fgMuted }}>
+          THE REBUTTAL
+        </Text>
+        <Text style={{ fontSize: 11, color: C.fgMuted }}>{open ? 'hide' : 'show'}</Text>
+      </Pressable>
+      <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 3, lineHeight: 15 }}>
+        One exchange, after both sides had already written independently — so
+        neither inherited the other&rsquo;s framing. {surviving.length} risk
+        {surviving.length === 1 ? '' : 's'} survived the evidence;{' '}
+        {conceded.length} {conceded.length === 1 ? 'was' : 'were'} conceded as
+        unanswerable from what was collected.
+      </Text>
+
+      {open && (
+        <View style={{ gap: 12, marginTop: 10 }}>
+          {!risk && (
+            <Callout C={C} tone={C.amber}>
+              The risk analyst&rsquo;s reply did not come back. Its original
+              risks stand unanswered rather than disposed of.
+            </Callout>
+          )}
+          {!defence && (
+            <Callout C={C} tone={C.amber}>
+              No defence was recorded. Do not read any risk as answered because
+              this half is missing.
+            </Callout>
+          )}
+          <Bullets
+            label="Conceded — the evidence does not answer these"
+            items={conceded}
+            color={C.red}
+            hint="Named by the side arguing for the company. A concession here is the strongest thing in this panel."
+            C={C}
+          />
+          <Bullets label="Survived the evidence" items={surviving} color={C.red} C={C} />
+          <Bullets label="Made worse by the evidence" items={risk?.sharpened} color={C.red} C={C} />
+          <Bullets
+            label="Answered"
+            items={defence?.answered}
+            hint="Risks the collected evidence disposes of, each citing what does it."
+            C={C}
+          />
+          {risk?.residual_severity != null && (
+            <Text style={{ fontSize: 12, color: C.fgMuted, lineHeight: 17 }}>
+              The risk analyst put the bear case at {risk.residual_severity}/100
+              after the exchange
+              {risk.residual_rationale ? ` — ${risk.residual_rationale}` : ''}
+            </Text>
+          )}
+        </View>
+      )}
+    </View>
+  )
+}
+
+/**
+ * The advisory stance panel.
+ *
+ * The wording is load-bearing and matches the web copy exactly. These do not
+ * size anything — sizing is arithmetic on a frozen equity basis, no part of the
+ * trading guard chain reads them, and three unanimous WAITs still leave the
+ * order the risk model computed.
+ */
+function Stances({ stances, C }: { stances?: ResearchStances | null; C: Palette }) {
+  if (!stances) return null
+  const rows: Array<[string, TradeStance | null | undefined]> = [
+    ['Aggressive', stances.aggressive],
+    ['Neutral', stances.neutral],
+    ['Conservative', stances.conservative],
+  ]
+  if (!rows.some(([, stance]) => stance)) return null
+
+  return (
+    <View>
+      <Text style={{ fontSize: 11, fontWeight: '600', letterSpacing: 0.5, color: C.fgMuted }}>
+        HOW THREE READERS WOULD SIZE THIS
+      </Text>
+      <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 3, lineHeight: 15 }}>
+        Advice, not sizing. The order quantity comes from the risk model and
+        your account — nothing here changes it. These readers are also not shown
+        how much of your account is already in this name.
+      </Text>
+      <View style={{ gap: 8, marginTop: 8 }}>
+        {rows.map(([label, stance]) =>
+          stance ? (
+            <View key={label} style={{ gap: 2 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: C.fg }}>{label}</Text>
+                <Text
+                  style={{
+                    fontSize: 11, fontWeight: '600', paddingHorizontal: 6,
+                    paddingVertical: 2, borderRadius: 4,
+                    color: stanceColor(stance.stance, C),
+                  }}
+                >
+                  {stanceLabel(stance.stance)}
+                </Text>
+              </View>
+              {stance.rationale ? (
+                <Text style={{ fontSize: 12.5, color: C.fg, lineHeight: 18 }}>
+                  {stance.rationale}
+                </Text>
+              ) : (
+                <Text style={{ fontSize: 11.5, color: C.fgMuted, fontStyle: 'italic', lineHeight: 16 }}>
+                  Its reasoning cited no evidence and was removed.
+                </Text>
+              )}
+            </View>
+          ) : null,
+        )}
+      </View>
+    </View>
+  )
+}
+
+function stanceLabel(stance?: string | null): string {
+  switch (stance) {
+    case 'SIZE_UP': return 'lean in'
+    case 'SIZE_DOWN': return 'take less'
+    case 'HOLD_SIZE': return 'as sized'
+    case 'WAIT': return 'wait'
+    default: return 'no view'
+  }
+}
+
+function stanceColor(stance: string | null | undefined, C: Palette): string {
+  if (stance === 'SIZE_UP') return C.green
+  if (stance === 'SIZE_DOWN' || stance === 'WAIT') return C.red
+  return C.amber
+}
+
+/**
+ * Whether the agents were given this desk's own track record.
+ *
+ * Zero is the honest answer for any name being read for the first time, and a
+ * reader who assumes the agents know their history when they do not is drawing
+ * a conclusion the panel never supported.
+ */
+function PriorRecordNote({
+  coverage, C,
+}: { coverage?: PriorRecordCoverage | null; C: Palette }) {
+  if (!coverage) return null
+  const { same_ticker: same, cross_ticker: cross } = coverage
+  return (
+    <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+      {same === 0 && cross === 0
+        ? 'The analysts had no settled record to work from on this name — every reading here comes from the current evidence alone.'
+        : `The analysts were shown ${same} previous graded reading${same === 1 ? '' : 's'} of this name${
+            cross > 0 ? ` and ${cross} from other names` : ''
+          }, each with what the position went on to do. Those entries are cited like any other evidence, and they can lower conviction but never raise it past the arithmetic anchor.`}
+    </Text>
+  )
+}
+
+/**
+ * How a past reading turned out. Judged on alpha, not raw return.
+ */
+function OutcomeNote({ outcome, C }: { outcome?: ResearchOutcome | null; C: Palette }) {
+  if (!outcome || outcome.return == null) return null
+  const correct = outcome.assessment_correct
+  const tone = correct === true ? C.green : correct === false ? C.red : C.fgMuted
+
+  return (
+    <View>
+      <Text style={{ fontSize: 11, fontWeight: '600', letterSpacing: 0.5, color: C.fgMuted }}>
+        HOW THIS READING TURNED OUT
+      </Text>
+      <Text style={{ fontSize: 12.5, color: C.fg, lineHeight: 18, marginTop: 4 }}>
+        Over the following {outcome.horizon_days} days the name returned{' '}
+        {formatPct(outcome.return)}
+        {outcome.alpha != null && outcome.benchmark_return != null
+          ? `, against ${formatPct(outcome.benchmark_return)} for ${
+              outcome.benchmark_ticker ?? 'the benchmark'
+            } — ${formatPct(outcome.alpha)} of alpha`
+          : ' (the benchmark could not be read for this window, so there is no alpha to judge it on)'}
+        .{' '}
+        <Text style={{ color: tone }}>
+          {correct === true
+            ? 'The call was right on alpha.'
+            : correct === false
+              ? 'The call was wrong on alpha.'
+              : 'Not graded — the reading took no side, or the window could not be measured.'}
+        </Text>
+      </Text>
+      {outcome.reflection?.lesson ? (
+        <Text style={{ fontSize: 12.5, color: C.fg, lineHeight: 18, marginTop: 6 }}>
+          <Text style={{ color: C.fgMuted }}>Lesson recorded: </Text>
+          {outcome.reflection.lesson}
+        </Text>
+      ) : outcome.reflection?.uncited ? (
+        <Text style={{ fontSize: 11, color: C.fgMuted, fontStyle: 'italic', marginTop: 6, lineHeight: 16 }}>
+          A lesson was written but cited no evidence, so it was not kept. The
+          figures above stand on their own.
+        </Text>
+      ) : null}
+    </View>
+  )
+}
+
+/** Which models wrote this reading — mirrors the web panel. */
+function ModelsLine({ models, C }: { models?: ModelUsed[]; C: Palette }) {
+  if (!models || models.length === 0) return null
+  const text = models
+    .map((m) => (m.agents.length ? `${m.model} (${m.agents.join(', ')})` : m.model))
+    .join('; ')
+  return (
+    <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+      Written by {text}.
+    </Text>
+  )
+}
+
+function formatPct(value: number): string {
+  return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(1)}%`
 }
 
 function assessmentTone(assessment: string | null | undefined, C: Palette) {

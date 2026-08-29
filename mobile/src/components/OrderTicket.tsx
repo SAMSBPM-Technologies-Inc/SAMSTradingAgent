@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native'
-import { AlertTriangle, ShoppingCart, WifiOff, X } from 'lucide-react-native'
-import { tradingApi } from '../lib/api'
+import { AlertTriangle, ShieldAlert, ShoppingCart, WifiOff, X } from 'lucide-react-native'
+import { researchApi, tradingApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
-import type { AnalyzeResponse, AutoTradeSettingsResponse } from '../types'
+import type {
+  AnalyzeResponse,
+  AutoTradeSettingsResponse,
+  ResearchVetoStatus,
+} from '../types'
 import { usePalette } from '../lib/palette'
 
 /**
@@ -110,6 +114,24 @@ export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
   const liveConfirmed =
     !isLive || confirmText.trim().toUpperCase() === data.ticker.toUpperCase()
 
+  // The research veto, which differs from the risk gate in the way that
+  // matters at a Buy button: the risk gate restricts what the *agent* may
+  // pick, while the veto lives in `_prepare_entry` and refuses a hand-placed
+  // order too. Fetched on its own rather than read off `/analyze`, which is
+  // cached for 30 minutes and could describe a dossier since rebuilt.
+  const [veto, setVeto] = useState<ResearchVetoStatus | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setVeto(null)
+    researchApi.veto(data.ticker)
+      .then(({ data: status }) => { if (!cancelled) setVeto(status) })
+      // A veto that cannot be read is not a veto. The server runs the real
+      // guard on submit; this banner is a courtesy and must not block the
+      // ticket when it fails.
+      .catch(() => { if (!cancelled) setVeto(null) })
+    return () => { cancelled = true }
+  }, [data.ticker])
+
   const submit = async () => {
     if (submitting || !liveConfirmed || parsedQty < 1) return
     setSubmitting(true)
@@ -215,6 +237,41 @@ export default function OrderTicket({ data }: { data: AnalyzeResponse }) {
                 : 'Paper trading — this is a simulated order.'}
             </Text>
           </View>
+
+          {/* The button stays enabled: the server runs the guard at submit and
+              is the only authority on it, exactly as it is for quantity. A
+              client that disabled the button would be asserting a verdict it
+              read seconds ago and cannot refresh. */}
+          {veto?.blocking && (
+            <View style={{
+              flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+              backgroundColor: C.tintSell, borderRadius: 8, padding: 10,
+            }}>
+              <ShieldAlert size={14} color={C.red} style={{ marginTop: 1 }} />
+              <Text style={{ flex: 1, fontSize: 11, lineHeight: 16, color: C.red }}>
+                {veto.reason} This guard applies to your orders as well as the
+                agent's, so this order will be refused. Closing a position is
+                unaffected.
+              </Text>
+            </View>
+          )}
+
+          {/* The veto is off by default, so this is the state that actually
+              occurs on most deployments — and the only evidence available for
+              deciding whether to switch it on. */}
+          {veto?.would_block && !veto.blocking && (
+            <View style={{
+              flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+              backgroundColor: C.tintHold, borderRadius: 8, padding: 10,
+            }}>
+              <ShieldAlert size={14} color={C.amber} style={{ marginTop: 1 }} />
+              <Text style={{ flex: 1, fontSize: 11, lineHeight: 16, color: C.amber }}>
+                Deep research reads this name badly enough to refuse the entry,
+                but the research veto is switched off — nothing is stopping
+                this order.
+              </Text>
+            </View>
+          )}
 
           <View style={{ gap: 4 }}>
             <Text style={{ fontSize: 12, color: C.fgMuted }}>Quantity</Text>
