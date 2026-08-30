@@ -114,6 +114,14 @@ export const performanceApi = {
     }),
 }
 
+export const systemApi = {
+  /**
+   * What is working right now. Nothing is probed server-side — every row is
+   * what the source actually did on the last pipeline cycle.
+   */
+  status: () => api.get<import('../types').SystemStatus>('/system/status'),
+}
+
 export const alertsApi = {
   getSettings: () => api.get<import('../types').AlertSettings>('/alerts/settings'),
   updateSettings: (data: import('../types').AlertSettings) =>

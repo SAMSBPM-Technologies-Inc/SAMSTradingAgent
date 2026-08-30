@@ -53,6 +53,7 @@ def _trade_to_response(doc: dict) -> TradeResponse:
         signal_score=doc.get("signal_score"),
         signal_type=doc.get("signal_type"),
         entry_reason=doc.get("entry_reason"),
+        input_completeness=doc.get("input_completeness"),
         entry_price=doc.get("entry_price"),
         exit_price=doc.get("exit_price"),
         pnl=doc.get("pnl"),

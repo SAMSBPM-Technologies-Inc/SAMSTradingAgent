@@ -127,6 +127,7 @@ export default function CommandPalette({ open, onOpenChange }: CommandPalettePro
       { kind: 'Screen', label: 'Settings', hint: 'Autonomy, risk limits, weights, alerts', to: '/settings' },
       { kind: 'Screen', label: 'Performance', hint: 'Signal accuracy and win rate', to: '/performance' },
       { kind: 'Screen', label: 'Calibration', hint: 'Do the thresholds hold up?', to: '/calibration' },
+      { kind: 'Screen', label: 'System status', hint: 'What is working, and what each gap costs', to: '/status' },
       { kind: 'Screen', label: 'Search tickers', hint: 'Analyse without watching first', to: '/search' },
       { kind: 'Screen', label: 'IB Gateway guide', hint: 'Broker connection setup', to: '/guide' },
     ],

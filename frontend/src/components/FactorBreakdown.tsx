@@ -1,5 +1,5 @@
 import { Info } from 'lucide-react'
-import type { ScoreBreakdown } from '../types'
+import type { ScoreBreakdown, SignalInputs } from '../types'
 
 /**
  * Where the composite score came from, factor by factor.
@@ -102,7 +102,53 @@ function FactorRow({
   )
 }
 
-export default function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdown }) {
+/**
+ * How much of this score was measured, stated above the factors themselves.
+ *
+ * A 0.50 sub-score in the table below is ambiguous in a way nothing on this
+ * panel could previously resolve: it means either "measured, and genuinely
+ * neutral" or "we never found out". Those are not the same fact, and one of
+ * them should make a reader trust the composite less.
+ *
+ * Renders nothing at full completeness — a banner that is always present stops
+ * being read, and "everything arrived" is the expected case.
+ */
+function InputCompleteness({ inputs }: { inputs: SignalInputs }) {
+  if (inputs.completeness == null || inputs.completeness >= 0.999) return null
+
+  const measured = Math.round(inputs.completeness * 100)
+  const named = inputs.fallback_factors
+  return (
+    <div
+      className="flex items-start gap-2 rounded-md border border-[var(--color-border)]
+                 bg-[var(--color-hover)] px-2.5 py-2 text-[0.7rem] leading-relaxed
+                 text-[var(--color-fg-muted)]"
+    >
+      <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
+      <p>
+        <strong className="text-[var(--color-fg)]">{measured}% of this score
+        came from measured data.</strong>{' '}
+        {named.length > 0 ? (
+          <>
+            {named.join(' and ')} {named.length === 1 ? 'was' : 'were'} unavailable,
+            so {named.length === 1 ? 'it sits' : 'they sit'} at a neutral 0.50 and
+            {named.length === 1 ? ' says' : ' say'} nothing about this company.
+          </>
+        ) : (
+          <>Some factors were built from partial data and are blended toward neutral.</>
+        )}
+      </p>
+    </div>
+  )
+}
+
+export default function FactorBreakdown({
+  breakdown,
+  inputs,
+}: {
+  breakdown: ScoreBreakdown
+  inputs?: SignalInputs | null
+}) {
   // The ML path did not compute this score from these weights. Showing a
   // weighted decomposition next to it would be a fabrication, so say so.
   if (!breakdown.attributable) {
@@ -126,6 +172,7 @@ export default function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdo
 
   return (
     <div className="flex flex-col gap-3">
+      {inputs && <InputCompleteness inputs={inputs} />}
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-[0.65rem] uppercase tracking-widest text-[var(--color-fg-muted)]">
           Factor · sub-score / contribution

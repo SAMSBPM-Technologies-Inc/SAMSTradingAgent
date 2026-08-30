@@ -43,6 +43,7 @@ from app.models.trade import TradeStatus
 from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
+from app.services import source_health
 from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD, generate_signal
 from app.services.signal_stability import (
     STABILITY_FIELD,
@@ -74,10 +75,24 @@ async def run_pipeline(ticker: str) -> dict:
     prev_conviction = ((prev_doc or {}).get("analyst_output") or {}).get("conviction")
 
     raw_doc = await ingest_ticker(ticker)
+    # Every sentinel each fetch already wrote is in that one document. Reading
+    # them is the whole of health recording — nothing is probed, and nothing
+    # here can fail the cycle.
+    source_health.observe(raw_doc)
     await compute_features(ticker)
-    await score_ticker(ticker)
+    scored = await score_ticker(ticker)
+    await source_health.record_subsystem(
+        "scoring", source_health.OK, method=scored.get("scoring_method"),
+    )
+    await source_health.flush()
 
     data_sources = _build_data_sources(raw_doc)
+    # What each factor of this score was actually built from. Carried onto the
+    # signal so a reader — and, twenty days later, the calibration replay — can
+    # tell a verdict built on live data from one built on neutral fallbacks.
+    # `score_ticker` returns the feature document it just scored, so this costs
+    # no read.
+    inputs = scored.get("inputs")
     settings = get_settings()
     signal = None
 
@@ -153,6 +168,7 @@ async def run_pipeline(ticker: str) -> dict:
                 signal = await run_analysis(ticker)
                 if signal:
                     signal["data_sources"] = data_sources
+                    signal["inputs"] = inputs
                     signal["analyst_used"] = True
                     signal["current_price"] = current_price
                     signal["day_change_pct"] = day_change_pct
@@ -177,6 +193,7 @@ async def run_pipeline(ticker: str) -> dict:
     # minutes. The stability layer below handles the rest.
     signal = await generate_signal(ticker, previous_signal=prev_signal)
     signal["data_sources"] = data_sources
+    signal["inputs"] = inputs
     signal["analyst_used"] = False
     signal["current_price"] = current_price
     signal["day_change_pct"] = day_change_pct
@@ -196,6 +213,7 @@ async def run_pipeline(ticker: str) -> dict:
 async def run_pipeline_all(tickers: list[str]) -> dict[str, str]:
     """Run the pipeline for a list of tickers; returns ticker → 'ok' | error."""
     results: dict[str, str] = {}
+    started = utcnow()
     for ticker in tickers:
         try:
             await run_pipeline(ticker)
@@ -203,6 +221,24 @@ async def run_pipeline_all(tickers: list[str]) -> dict[str, str]:
         except Exception as exc:
             logger.error("pipeline_failed", ticker=ticker, error=str(exc))
             results[ticker] = str(exc)
+
+    # This map was built, logged and dropped. Without it a status page cannot
+    # tell "FRED is down" from "the pipeline has not run for six hours", which
+    # are the two things a reader most needs told apart — and every other
+    # number on that page is uninterpretable until they are.
+    failed = {t: err for t, err in results.items() if err != "ok"}
+    await source_health.record_subsystem(
+        "pipeline",
+        source_health.FAILED if failed and len(failed) == len(results)
+        else source_health.DEGRADED if failed
+        else source_health.OK,
+        last_cycle_at=started,
+        last_cycle_finished_at=utcnow(),
+        tickers_ok=len(results) - len(failed),
+        tickers_total=len(results),
+        last_error=source_health.scrub(next(iter(failed.values()), None)),
+        failed_tickers=sorted(failed),
+    )
     return results
 
 
@@ -393,13 +429,55 @@ async def _publish_verdict(
     return decision.changed
 
 
+#: Bumped whenever the meaning of a `data_sources` value changes.
+#:
+#: Version 1 reported `fundamentals` as `"yfinance"` or `"none"`, inferred from
+#: whether a P/E was present. Both halves were wrong: yfinance has not been in
+#: the fundamentals chain since it was replaced by Massive and Alpha Vantage,
+#: and a Massive-only refresh — which is exactly what every ticker past the
+#: Alpha Vantage daily budget gets — carries real revenue growth, free cash
+#: flow and debt/equity but no P/E, so it was reported as `"none"`. The field
+#: claimed absence where there was data.
+#:
+#: Historical rows are **not** backfilled. The provider that actually answered
+#: on 21 August cannot be recovered from a row that never recorded it, and a
+#: guess written into a provenance field is worse than a gap in one. The
+#: version marker is how a reader tells a corrected row from an uncorrected
+#: one — the same discipline as trades closed before commissions were accrued.
+DATA_SOURCES_VERSION = 2
+
+
 def _build_data_sources(raw_doc: dict) -> dict:
-    """Extract provenance from raw_doc — indicates which sources were real vs. fallback."""
-    sentiment_source = (raw_doc.get("sentiment_raw") or {}).get("source", "none")
-    macro_source     = (raw_doc.get("macro") or {}).get("source", "none")
-    fund             = raw_doc.get("fundamentals") or {}
-    fund_source      = "yfinance" if fund.get("pe_ratio") is not None else "none"
-    return {"sentiment": sentiment_source, "macro": macro_source, "fundamentals": fund_source}
+    """
+    Which provider actually supplied each input to this signal.
+
+    Every value here is the fetch's own report of what it did, never inferred
+    from whether some field came back populated. `stocks_raw` already carries a
+    `source` sentinel on each enrichment — `finnhub+vader+finlex`, `no_api_key`,
+    `error`, `massive+alphavantage`, `pending` — because each fetcher writes one
+    on the way past. Reading them is the whole of this function; guessing was
+    the whole of the bug.
+    """
+    fund = raw_doc.get("fundamentals") or {}
+    alt = raw_doc.get("alternative_data") or {}
+
+    return {
+        "version": DATA_SOURCES_VERSION,
+        # The only hard dependency, and the one with a licensing question
+        # attached — yahoo is evaluation-only. Absent before version 2, which
+        # left the most consequential provenance fact in the system unrecorded.
+        "price": raw_doc.get("price_source") or "unknown",
+        "sentiment": (raw_doc.get("sentiment_raw") or {}).get("source", "none"),
+        "macro": (raw_doc.get("macro") or {}).get("source", "none"),
+        "fundamentals": fund.get("source") or "none",
+        # A cache served past its TTL is still a real provider answer, but it is
+        # not today's. Kept beside the source rather than folded into it: they
+        # are different questions and a reader needs both.
+        "fundamentals_stale": bool(fund.get("stale")),
+        # Three independent yfinance calls that fail independently; the options
+        # leg is the one that feeds the score.
+        "alternative": (alt.get("options_flow") or {}).get("source", "none"),
+    }
 
 
 async def _append_history(signal: dict, raw_doc: dict) -> None:
@@ -428,6 +506,11 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
             "conviction":      ao.get("conviction"),
             "price_at_signal": raw_doc.get("current_price"),
             "data_sources":    signal.get("data_sources", {}),
+            # Stored so a calibration replay can ask whether thin inputs
+            # predicted worse outcomes — the question the completeness figure
+            # exists to make answerable, and one no stored row could support
+            # before this.
+            "inputs":          signal.get("inputs"),
             "analyst_used":    signal.get("analyst_used", False),
             # Filled by performance tracker after ~20 trading days:
             "price_20d_later": None,

@@ -11,6 +11,8 @@ import GuidePage from './pages/GuidePage'
 import AnalysisPage from './pages/AnalysisPage'
 import SearchPage from './pages/SearchPage'
 import CalibrationPage from './pages/CalibrationPage'
+import StatusPage from './pages/StatusPage'
+import { SystemStatusProvider } from './lib/system-status'
 import { ToastProvider } from './lib/toast-context'
 import { TradingSettingsProvider } from './lib/trading-context'
 import LoadingSpinner from './components/LoadingSpinner'
@@ -142,6 +144,17 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      {/* What the engine actually has to work with right now. Authenticated
+          like everything else: it names environment variables and provider
+          error text, which is not for a stranger. */}
+      <Route
+        path="/status"
+        element={
+          <ProtectedRoute>
+            <StatusPage />
+          </ProtectedRoute>
+        }
+      />
       <Route path="/orders" element={<Navigate to="/" replace />} />
       <Route
         path="/settings"
@@ -173,9 +186,11 @@ export default function App() {
     <ThemeProvider>
       <AuthProvider>
         <TradingSettingsProvider>
-          <ToastProvider>
-            <AppRoutes />
-          </ToastProvider>
+          <SystemStatusProvider>
+            <ToastProvider>
+              <AppRoutes />
+            </ToastProvider>
+          </SystemStatusProvider>
         </TradingSettingsProvider>
       </AuthProvider>
     </ThemeProvider>

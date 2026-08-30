@@ -131,6 +131,32 @@ export interface SignalGate {
   risk_passes_buy: boolean
 }
 
+/** One factor's share of measured input. */
+export interface FactorInput {
+  key: string
+  label: string
+  /** `measured` all of it · `partial` some · `fallback` none, so it is the flat 0.5. */
+  state: 'measured' | 'partial' | 'fallback'
+  coverage: number
+}
+
+/**
+ * How much of a score was measured.
+ *
+ * Every source here degrades to a neutral 0.5 rather than failing the cycle, so
+ * a composite built on three fallbacks used to look identical to one built on
+ * live data. This is that distinction — and it is what makes the six-factor
+ * breakdown beside it readable, since a 0.50 sub-score can mean "measured, and
+ * genuinely neutral" or "we never found out".
+ */
+export interface SignalInputs {
+  factors: FactorInput[]
+  /** Weighted by *your* weights. Null for signals from before this existed. */
+  completeness: number | null
+  /** Weighted factors carrying no measured data, heaviest first. */
+  fallback_factors: string[]
+}
+
 export interface AnalyzeResponse {
   ticker: string
   score: number
@@ -160,6 +186,10 @@ export interface AnalyzeResponse {
   analyst_used?: boolean
   /** The model this server is configured to call. Null when the analyst is disabled. */
   analyst_model?: string | null
+  /** Which provider actually supplied each input to this score. */
+  data_sources?: Record<string, string | number | boolean> | null
+  /** How much of this score was measured, and how much is a placeholder. */
+  inputs?: SignalInputs | null
 }
 
 /**
@@ -515,6 +545,8 @@ export interface AlertSettings {
    */
   notify_on_trade?: boolean
   notify_on_fill?: boolean
+  /** A data source degraded or recovered. Transitions only. */
+  notify_on_degraded?: boolean
   /** Blank sends to the account email. */
   trade_email?: string
 }
@@ -679,6 +711,62 @@ export interface TradeRecord {
   exit_trigger?: string | null
   /** True while exit_price and pnl are the levels we asked for, not a fill. */
   exit_price_estimated?: boolean | null
+}
+
+// ── System status ─────────────────────────────────────────────────────────────
+
+/**
+ * `ok` working · `stale` a real answer served past its freshness window ·
+ * `degraded` answering with less than it should · `failed` configured and
+ * erroring · `not_configured` no key, which is a choice rather than a fault ·
+ * `never_run` nothing recorded yet.
+ */
+export type SourceState =
+  | 'ok' | 'stale' | 'degraded' | 'failed' | 'not_configured' | 'never_run'
+
+/** What losing a capability costs. Same three words the document groups by. */
+export type CapabilityTier = 'stops' | 'behaviour' | 'quiet'
+
+export interface CapabilityStatus {
+  id: string
+  label: string
+  tier: CapabilityTier
+  /** The env var that switches it on, when one does. */
+  required_key: string | null
+  /** What the system does without it — the reason the row is worth reading. */
+  impact: string
+  /** Which factor it feeds, and that factor's default weight. */
+  feeds: string | null
+  /** Whether this deployment switched it on. Separate from whether it works. */
+  configured: boolean
+  state: SourceState
+  /** What is happening, as opposed to what it would mean. */
+  detail: string
+  last_success_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+  consecutive_failures: number
+}
+
+export interface CycleStatus {
+  last_run_at: string | null
+  age_minutes: number | null
+  /** Judged against the market clock — the pipeline does not run overnight. */
+  stale: boolean
+  tickers_ok: number | null
+  tickers_total: number | null
+  failed_tickers: string[]
+  last_error: string | null
+}
+
+export interface SystemStatus {
+  overall: 'ok' | 'degraded' | 'halted'
+  /** Composed on the server so web and mobile cannot word it differently. */
+  summary: string
+  checked_at: string
+  market_open: boolean
+  cycle: CycleStatus
+  capabilities: CapabilityStatus[]
 }
 
 export interface AuthResponse {

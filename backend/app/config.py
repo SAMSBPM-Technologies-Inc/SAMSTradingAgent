@@ -210,6 +210,47 @@ class Settings(BaseSettings):
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
 
+    # ── Which capabilities this deployment actually has ──────────────────────
+    #
+    # "Is this key set" is decided here and nowhere else. The status endpoint,
+    # the ticker page's source panel and the document all read these, so a
+    # provider cannot be reported as configured in one place and absent in
+    # another — which is exactly how the source panel came to claim Finnhub was
+    # live on a server that had never held a Finnhub key.
+
+    @property
+    def finnhub_enabled(self) -> bool:
+        return bool(self.finnhub_api_key)
+
+    @property
+    def fred_enabled(self) -> bool:
+        return bool(self.fred_api_key)
+
+    @property
+    def fundamentals_enabled(self) -> bool:
+        """Either provider is enough — they cover different fields."""
+        return bool(self.massive_api_key or self.alphavantage_api_key)
+
+    @property
+    def analyst_enabled(self) -> bool:
+        """
+        Both halves are required, and the flag alone is the confusing state:
+        `ENABLE_AI_ANALYST=true` with no key skips the analyst branch silently.
+        """
+        return bool(self.enable_ai_analyst and self.anthropic_api_key)
+
+    @property
+    def price_provider_licensed(self) -> bool:
+        """
+        Whether the price feed is licensed for production use.
+
+        yfinance and the Yahoo chart API are licensed for personal and
+        development use only. This is a legal question wearing the clothes of a
+        configuration one, which is why it is answered here rather than by a
+        badge hardcoded in a component.
+        """
+        return (self.price_provider or "yahoo").lower() != "yahoo"
+
     @property
     def email_from(self) -> str:
         return self.smtp_from or self.smtp_username

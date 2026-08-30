@@ -120,6 +120,7 @@ async def _ensure_indexes() -> None:
     note there on why an index failure must not be fatal.
     """
     db = await get_db()
+    await db[COLL_SOURCE_HEALTH].create_index("source", unique=True, background=True)
     await db[COLL_SIGNALS].create_index("ticker", unique=True, background=True)
     await db[COLL_SIGNAL_HISTORY].create_index("ticker", background=True)
     await db[COLL_SIGNAL_HISTORY].create_index("generated_at", background=True)
@@ -225,3 +226,9 @@ COLL_FUNDAMENTALS_CACHE = "stocks_fundamentals"  # per-ticker provider snapshot
 COLL_STATEMENTS     = "financial_statements"     # accumulated statement history
 COLL_EARNINGS       = "earnings_history"         # estimate vs actual, per ticker
 COLL_DOSSIERS       = "research_dossiers"        # deep-research output per ticker
+#: One document per data source plus one per subsystem — never per ticker, so it
+#: is bounded at a handful of rows forever and does not grow with the watchlist,
+#: the user count or time. Current state only; this is deliberately not a time
+#: series, because an uptime history is a different feature with a retention
+#: policy attached.
+COLL_SOURCE_HEALTH  = "system_health"            # last known state per source

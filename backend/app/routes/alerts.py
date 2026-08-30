@@ -31,6 +31,13 @@ class AlertSettings(BaseModel):
     # when it happened, not when you tried" is a reasonable thing to want, and
     # one switch could not express it.
     notify_on_fill: bool = True
+    # Sent when a data source stops working, or starts again. Gated separately
+    # from the trade notifications for the same reason those are gated
+    # separately from each other: "tell me when the engine loses an input" and
+    # "tell me when it places an order" are different appetites, and one switch
+    # could not express both. Defaults on — a silent degradation is the whole
+    # failure mode this exists to close.
+    notify_on_degraded: bool = True
     # Optional override; blank sends to the account email.
     trade_email: Optional[str] = None
 
@@ -46,6 +53,7 @@ async def get_alert_settings(current_user: dict = Depends(get_current_user)) -> 
         notify_on_high_conviction=prefs.get("notify_on_high_conviction", True),
         daily_digest=prefs.get("daily_digest", False),
         notify_on_trade=prefs.get("notify_on_trade", True),
+        notify_on_degraded=prefs.get("notify_on_degraded", True),
         notify_on_fill=prefs.get("notify_on_fill", True),
         trade_email=prefs.get("trade_email"),
     )
@@ -65,6 +73,7 @@ async def update_alert_settings(
         "notify_on_high_conviction": body.notify_on_high_conviction,
         "daily_digest": body.daily_digest,
         "notify_on_trade": body.notify_on_trade,
+        "notify_on_degraded": body.notify_on_degraded,
         "notify_on_fill": body.notify_on_fill,
         "trade_email": (body.trade_email or "").strip() or None,
     }

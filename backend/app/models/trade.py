@@ -126,6 +126,12 @@ class TradeRecord(BaseModel):
     #: the number. Distinct from `reason`, which says why an order was *not*
     #: placed or how its size was adjusted.
     entry_reason: Optional[str] = None
+    #: How much of the score behind this entry came from measured data, 0–1,
+    #: by the weights it was actually sized on. Frozen at entry for the same
+    #: reason `size_basis_equity` is: read live it would describe today's data
+    #: rather than the data the decision was made on. `None` on a manual order
+    #: (no score decided it) and on any entry taken before this was recorded.
+    input_completeness: Optional[float] = None
     entry_price: Optional[float] = None
     exit_price: Optional[float] = None
     pnl: Optional[float] = None
@@ -166,6 +172,7 @@ class TradeResponse(BaseModel):
     signal_score: Optional[float] = None
     signal_type: Optional[str] = None
     entry_reason: Optional[str] = None
+    input_completeness: Optional[float] = None
     entry_price: Optional[float] = None
     exit_price: Optional[float] = None
     pnl: Optional[float] = None

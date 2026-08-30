@@ -248,6 +248,23 @@ async def _rationale_context(user_id, ticker: str) -> tuple[dict | None, dict | 
         return None, None
 
 
+def _input_completeness(feat: dict | None, user_weights: dict | None) -> float | None:
+    """
+    How much of this score was measured, by the weights it was sized on.
+
+    `None` whenever it cannot be computed — a feature document written before
+    the field existed, or no document at all. Never a default: claiming an
+    entry was taken on complete data when nothing recorded that is exactly the
+    kind of flattering guess `commission_paid` and `alpha` both refuse.
+    """
+    if not feat or not feat.get("inputs"):
+        return None
+    from app.services.input_quality import completeness
+    from app.services.scoring import effective_weights
+
+    return completeness(feat["inputs"], effective_weights(user_weights))
+
+
 async def _get_user_settings(user_id) -> AutoTradeSettings | None:
     """
     Load auto-trade settings from the users collection.
@@ -1083,6 +1100,11 @@ async def _submit_entry(
         signal_score=signal_score, feat=feat, user_weights=user_weights,
         conviction=conviction, source=signal_type, is_add=plan.is_add,
     )
+    # Frozen at entry, like `size_basis_equity` and for the same reason: read
+    # back live it would report how complete the data is *now*, not how
+    # complete it was when this position was taken — which is the only version
+    # of the question a closed trade can be judged on.
+    completeness = _input_completeness(feat, user_weights)
 
     if plan.is_add:
         return await _submit_add(
@@ -1101,6 +1123,7 @@ async def _submit_entry(
         # reason that lives in a log line is not available to the person
         # reading their order history six weeks later.
         "entry_reason": reason,
+        "input_completeness": completeness,
         # Reflects the gateway session actually in use, not the user's
         # preference — the server's TRADING_MODE decides which account is hit.
         "is_paper": is_paper,
@@ -1339,6 +1362,7 @@ async def execute_entry(
                     user_weights=user_weights, conviction=conviction,
                     source="BUY",
                 ),
+                "input_completeness": _input_completeness(feat, user_weights),
                 "reason": (
                     f"{settings.mode.value} mode — awaiting your approval"
                     + (f" (conviction {conviction} below "

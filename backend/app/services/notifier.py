@@ -155,6 +155,53 @@ async def send_broker_alert(
         await _whatsapp_send(whatsapp_phone, whatsapp_apikey, text)
 
 
+async def send_capability_alert(
+    webhook_url: str | None,
+    *,
+    degraded: list[tuple[str, str]],
+    recovered: list[str],
+    summary: str,
+    whatsapp_phone: str | None = None,
+    whatsapp_apikey: str | None = None,
+) -> None:
+    """
+    Tell the user a data source stopped working, or started again.
+
+    Worth sending for the same reason the broker alert is: the failure is
+    otherwise silent. Scoring continues, the UI works, verdicts keep publishing
+    — they are just built on a neutral placeholder where a factor used to be.
+    Nothing about the screen looks different, which is precisely the problem.
+
+    Each degraded entry carries what it *costs*, not just that it happened. "FRED
+    is failing" is not actionable on a phone; "the macro factor is pinned to 0.50
+    on every score" tells you how much to discount what you are looking at.
+
+    Never mentions a source that is merely unconfigured. A key you chose not to
+    set is not news, and a channel that pages about settled configuration is one
+    people mute.
+    """
+    if not degraded and not recovered:
+        return
+
+    lines: list[str] = []
+    if degraded:
+        lines.append("⚠️ Data source degraded")
+        for label, impact in degraded:
+            lines.append(f"{label} — {impact}")
+    if recovered:
+        lines.append("✅ Recovered: " + ", ".join(recovered))
+    lines.append(summary)
+    lines.append("Full picture: sta.samsbpm.com/status")
+    lines.append("SAMSBPM Trading - sta.samsbpm.com")
+
+    text = "\n".join(lines)
+
+    if webhook_url:
+        await _slack_post(webhook_url, text)
+    if whatsapp_phone and whatsapp_apikey:
+        await _whatsapp_send(whatsapp_phone, whatsapp_apikey, text)
+
+
 async def send_daily_digest(
     webhook_url: str | None,
     display_name: str,

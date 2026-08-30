@@ -12,7 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_SIGNALS, get_db
 from app.dependencies import get_current_user
-from app.models.stock import AnalyzeResponse, ScoreBreakdown, SignalGate
+from app.models.stock import (
+    AnalyzeResponse, FactorInput, ScoreBreakdown, SignalGate, SignalInputs,
+)
 from app.services.pipeline import run_pipeline
 from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.services.scoring import compute_personalized_score, explain_score
@@ -124,7 +126,13 @@ async def _personalized_response(doc: dict, current_user: dict, db) -> AnalyzeRe
         doc = {**doc, "score": score, "signal": signal}
 
     breakdown = explain_score(feat, user_weights) if feat else None
-    return _doc_to_response(doc, breakdown=breakdown)
+    # The feature document is the live one; the signal document may be a cached
+    # analyst verdict from up to an hour ago. Input provenance describes *the
+    # score in front of the reader*, so it comes from whichever of the two
+    # carries it — preferring the signal, which is what was actually published.
+    if not doc.get("inputs") and feat and feat.get("inputs"):
+        doc = {**doc, "inputs": feat["inputs"]}
+    return _doc_to_response(doc, breakdown=breakdown, user_weights=user_weights)
 
 
 def _build_gate(doc: dict) -> SignalGate:
@@ -146,7 +154,47 @@ def _build_gate(doc: dict) -> SignalGate:
     )
 
 
-def _doc_to_response(doc: dict, breakdown: Optional[dict] = None) -> AnalyzeResponse:
+def _build_inputs(doc: dict, user_weights: dict | None) -> Optional[SignalInputs]:
+    """
+    What this score was made of, weighted by the caller's own weights.
+
+    Returns None for a signal generated before this was recorded. A missing
+    completeness figure must stay missing rather than defaulting to 1.0, which
+    would claim every historical verdict was built on complete data — the same
+    rule alpha follows when it cannot be computed.
+    """
+    stored = doc.get("inputs")
+    if not stored or not stored.get("factors"):
+        return None
+
+    from app.services.input_quality import completeness, fallback_factors
+    from app.services.scoring import ALT_FACTOR, FACTORS, effective_weights
+
+    weights = effective_weights(user_weights)
+    labels = {key: label for key, _feature_key, label in FACTORS}
+    labels[ALT_FACTOR[0]] = ALT_FACTOR[2]
+
+    factors = [
+        FactorInput(
+            key=key, label=labels.get(key, key),
+            state=entry.get("state", "fallback"),
+            coverage=float(entry.get("coverage", 0.0)),
+        )
+        for key, entry in (stored.get("factors") or {}).items()
+        if key in labels
+    ]
+    return SignalInputs(
+        factors=factors,
+        completeness=completeness(stored, weights),
+        fallback_factors=fallback_factors(stored, weights),
+    )
+
+
+def _doc_to_response(
+    doc: dict,
+    breakdown: Optional[dict] = None,
+    user_weights: dict | None = None,
+) -> AnalyzeResponse:
     risk = doc.get("risk", {})
     generated_at = doc.get("generated_at", datetime.now(tz=timezone.utc))
     if isinstance(generated_at, datetime) and generated_at.tzinfo is None:
@@ -180,6 +228,8 @@ def _doc_to_response(doc: dict, breakdown: Optional[dict] = None) -> AnalyzeResp
         pending_signal=(doc.get(STABILITY_FIELD) or {}).get("pending_signal"),
         breakdown=ScoreBreakdown(**breakdown) if breakdown else None,
         gate=_build_gate(doc),
+        data_sources=doc.get("data_sources"),
+        inputs=_build_inputs(doc, user_weights),
     )
 
 

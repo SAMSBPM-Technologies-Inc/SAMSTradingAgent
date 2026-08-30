@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
+  Activity,
   BarChart2,
   BookOpen,
   LineChart,
@@ -40,6 +41,7 @@ const primaryNav = [
 const overflowNav = [
   { to: '/performance', label: 'Performance', icon: BarChart2 },
   { to: '/calibration', label: 'Calibration', icon: Target },
+  { to: '/status', label: 'System status', icon: Activity },
   { to: '/search', label: 'Search tickers', icon: Search },
   { to: '/guide', label: 'IB Gateway guide', icon: BookOpen },
 ]

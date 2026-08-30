@@ -78,6 +78,49 @@ class FactorContribution(BaseModel):
     )
 
 
+class FactorInput(BaseModel):
+    """
+    What one factor of a score was built from.
+
+    `coverage` is the share of that factor's own inputs that arrived, and
+    `state` is the reading of it: `measured` (all of it), `partial` (some, with
+    the rest already blended toward 0.5 by the sub-score itself), `fallback`
+    (none — the factor is the flat neutral and says nothing about the company).
+    """
+    key: str
+    label: str
+    state: Literal["measured", "partial", "fallback"]
+    coverage: float = Field(..., ge=0.0, le=1.0)
+
+
+class SignalInputs(BaseModel):
+    """
+    How much of this score was measured, and how much of it is a placeholder.
+
+    Every external source degrades to a neutral 0.5 rather than failing the
+    cycle. That is the right trade — a verdict on four factors beats no verdict
+    — but it meant a composite assembled from three fallbacks was
+    indistinguishable in the API from one assembled from live data. This is
+    that distinction, and it is the only thing that makes the six-factor
+    breakdown beside it readable: a 0.50 sub-score can mean "measured, and
+    genuinely neutral" or "we never found out", and those are not the same fact.
+
+    `completeness` is weighted by *the caller's* weights, because a factor
+    weighted at zero is not part of their score and its coverage is not part of
+    their completeness. Coverage figures are weight-independent facts and are
+    the same for everyone.
+    """
+    factors: list[FactorInput] = []
+    completeness: Optional[float] = Field(
+        default=None, ge=0.0, le=1.0,
+        description="Weighted share of the composite that came from measured "
+                    "data. None for signals generated before this was recorded "
+                    "— an absent figure, never a flattering default.",
+    )
+    #: Weighted factors carrying no measured data at all, heaviest first.
+    fallback_factors: list[str] = []
+
+
 class ScoreBreakdown(BaseModel):
     """
     Where the composite came from. The sub-scores were always computed and
@@ -176,6 +219,11 @@ class AnalyzeResponse(BaseModel):
     # features it was built from), and a missing breakdown is not an error.
     breakdown: Optional[ScoreBreakdown] = None
     gate: Optional[SignalGate] = None
+    # Which provider actually supplied each input, and how much of each factor
+    # was measured. `data_sources` has been written to every signal document
+    # since the pipeline was built and returned by no endpoint until now.
+    data_sources: Optional[dict] = None
+    inputs: Optional[SignalInputs] = None
 
 
 class AnalystReport(BaseModel):
@@ -640,7 +688,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.15.0"
+    version: str = "1.16.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

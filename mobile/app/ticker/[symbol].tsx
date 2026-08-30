@@ -9,7 +9,7 @@ import {
 } from 'lucide-react-native'
 import Svg, { Path } from 'react-native-svg'
 import { analyzeApi } from '../../src/lib/api'
-import type { AnalyzeResponse, AlternativeData } from '../../src/types'
+import type { AnalyzeResponse, AlternativeData, SignalInputs } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
@@ -327,6 +327,42 @@ function buildExportText(data: AnalyzeResponse): string {
 
 // ── Ticker Screen ─────────────────────────────────────────────────────────────
 
+/**
+ * Source badge vocabulary, mirroring the web panel exactly.
+ *
+ * Every row used to be a literal, so this list claimed Finnhub and FRED were
+ * "Live" on a server that might hold neither key. `dev` survives as its own
+ * state and is never derived from health: it is a *licensing* statement about
+ * yfinance, and a source can be working perfectly and still unlicensed for
+ * production.
+ */
+type SourceBadge = 'live' | 'dev' | 'thin' | 'off' | 'planned'
+
+function stateBadge(
+  inputs: SignalInputs | null | undefined,
+  key: string,
+  whenMeasured: SourceBadge = 'live',
+): SourceBadge {
+  const factor = inputs?.factors?.find((f) => f.key === key)
+  if (!factor) return whenMeasured
+  if (factor.state === 'fallback') return 'off'
+  if (factor.state === 'partial') return 'thin'
+  return whenMeasured
+}
+
+/** The note a factor's own coverage earns, appended to the editorial prose. */
+function stateNote(inputs: SignalInputs | null | undefined, key: string): string {
+  const factor = inputs?.factors?.find((f) => f.key === key)
+  if (!factor) return ''
+  if (factor.state === 'fallback') {
+    return '. Not available for this report — the factor sits at a neutral 0.50 and says nothing about this company'
+  }
+  if (factor.state === 'partial') {
+    return `. Partial for this report (${Math.round(factor.coverage * 100)}% of its inputs); the rest is blended toward neutral`
+  }
+  return ''
+}
+
 export default function TickerScreen() {
   const C = usePalette()
   const card = cardStyle(C)
@@ -529,7 +565,7 @@ export default function TickerScreen() {
         {/* Why this score, and why this verdict. */}
         {data.breakdown && (
           <Section title="Score Breakdown">
-            <FactorBreakdown breakdown={data.breakdown} />
+            <FactorBreakdown breakdown={data.breakdown} inputs={data.inputs} />
           </Section>
         )}
         {data.risk && (
@@ -642,15 +678,22 @@ export default function TickerScreen() {
           </Text>
           <View style={{ gap: 10 }}>
             {([
-              { label: 'Price & Market Data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', status: 'dev' },
-              { label: 'Financial Statements', value: 'Massive (Polygon.io) — up to 12 annual and 12 quarterly filings, accumulated so margin trends and CAGRs are computable', status: 'live' },
-              { label: 'Company Profile & Ratios', value: 'Alpha Vantage OVERVIEW — business description, forward P/E, EV/EBITDA, margins, ROE/ROA, beta, analyst consensus', status: 'live' },
-              { label: 'Earnings Record', value: 'Alpha Vantage EARNINGS — reported vs estimated EPS, surprise history, next report date', status: 'live' },
-              { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines with publisher, date and link, scored with VADER. Headline text only', status: 'live' },
-              { label: 'Macro Environment', value: 'FRED — Fed funds rate, Treasuries, CPI, unemployment, VIX', status: 'live' },
-              { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call volume ratio only', status: 'dev' },
+              {
+                label: 'Price & Market Data',
+                value: (data.data_sources?.price === 'polygon'
+                  ? 'Polygon (via Massive)'
+                  : 'Yahoo Finance')
+                  + ' — 90 days OHLCV, current price, day change. The one input that can stop a cycle',
+                status: data.data_sources?.price === 'polygon' ? 'live' : 'dev',
+              },
+              { label: 'Financial Statements', value: 'Massive (Polygon.io) — up to 12 annual and 12 quarterly filings, accumulated so margin trends and CAGRs are computable' + stateNote(data.inputs, 'fundamental'), status: stateBadge(data.inputs, 'fundamental') },
+              { label: 'Company Profile & Ratios', value: 'Alpha Vantage OVERVIEW — business description, forward P/E, EV/EBITDA, margins, ROE/ROA, beta, analyst consensus', status: stateBadge(data.inputs, 'fundamental') },
+              { label: 'Earnings Record', value: 'Alpha Vantage EARNINGS — reported vs estimated EPS, surprise history, next report date', status: stateBadge(data.inputs, 'catalyst') },
+              { label: 'News & Sentiment', value: 'Finnhub API — last 7 days of headlines with publisher, date and link, scored with VADER. Headline text only' + stateNote(data.inputs, 'sentiment'), status: stateBadge(data.inputs, 'sentiment') },
+              { label: 'Macro Environment', value: 'FRED — Fed funds rate, Treasuries, CPI, unemployment, VIX' + stateNote(data.inputs, 'macro'), status: stateBadge(data.inputs, 'macro') },
+              { label: 'Options Flow', value: 'Yahoo Finance — nearest-expiry put/call volume ratio only' + stateNote(data.inputs, 'alternative_data'), status: stateBadge(data.inputs, 'alternative_data', 'dev') },
               { label: 'Short Interest', value: 'Yahoo Finance — % of float shorted. Usually unavailable from this host', status: 'dev' },
-              { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — counts over the most recent filed transactions, not a date-bounded window', status: 'dev' },
+              { label: 'Insider Activity', value: 'Yahoo Finance (Form 4) — counts over the most recent filed transactions, not a date-bounded window', status: stateBadge(data.inputs, 'alternative_data', 'dev') },
               // Model name comes from the response, not a literal — the old
               // hardcoded string had drifted from what the server calls.
               data.analyst_model
@@ -670,10 +713,16 @@ export default function TickerScreen() {
               { label: 'SEC Filings', value: 'EDGAR — 10-K/10-Q risk factors, and document-level citations', status: 'planned' },
               { label: 'Peer Screening', value: 'A real comparable universe. Research peers come from your watchlist plus a small static map', status: 'planned' },
               { label: 'ML Scoring Model', value: 'XGBoost — trained on signal history', status: 'planned' },
-            ] as { label: string; value: string; status: 'live' | 'dev' | 'planned' }[]).map(({ label, value, status }) => {
+            ] as { label: string; value: string; status: SourceBadge }[]).map(({ label, value, status }) => {
               const badge = {
                 live: { bg: `${C.green}1f`, fg: C.green, text: 'Live' },
                 dev: { bg: `${C.amber}1f`, fg: C.amber, text: 'Dev data' },
+                // Answered with less than it should. Warning-toned: it is a
+                // real fact about the score above it.
+                thin: { bg: `${C.amber}1f`, fg: C.amber, text: 'Thin' },
+                // Not configured. Deliberately not the sell tone — an absent
+                // key is a choice, not a fault.
+                off: { bg: `${C.border}80`, fg: C.fgMuted, text: 'Off' },
                 planned: { bg: `${C.border}80`, fg: C.fgMuted, text: 'Soon' },
               }[status]
               return (

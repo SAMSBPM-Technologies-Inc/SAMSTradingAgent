@@ -19,7 +19,7 @@ import ta
 
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, get_db
-from app.services.catalyst import compute_catalyst_score
+from app.services.catalyst import compute_catalyst
 from app.utils.helpers import clamp, utcnow
 from app.utils.logger import get_logger
 
@@ -64,7 +64,7 @@ async def compute_features(ticker: str) -> dict:
     sentiment_score = clamp(float(sentiment_raw.get("score", 0.5)))
 
     fundamentals    = raw_doc.get("fundamentals", {})
-    fundamental_score = _fundamental_score(fundamentals)
+    fundamental_score, fundamental_coverage = _fundamental_score(fundamentals)
 
     macro           = raw_doc.get("macro", {})
     # Sector and realised volatility scale the market-wide reading to this
@@ -87,9 +87,10 @@ async def compute_features(ticker: str) -> dict:
         "volume_anomaly": tech["volume_anomaly"],
         "current_price": current_price,
     }
-    catalyst_score = compute_catalyst_score(raw_doc, _partial_feat)
+    catalyst_score, catalyst_coverage = compute_catalyst(raw_doc, _partial_feat)
 
     from app.services.alternative_data import compute_alternative_score
+    from app.services.input_quality import build_inputs
     alt_data = raw_doc.get("alternative_data") or {}
     alternative_data_score = compute_alternative_score(alt_data)
 
@@ -131,6 +132,17 @@ async def compute_features(ticker: str) -> dict:
         "volatility_score":   round(volatility_score,  4),
         "catalyst_score":            round(catalyst_score,          4),
         "alternative_data_score":    round(alternative_data_score,  4),
+        # ── What the score was made of ───────────────────────────────────────
+        # Every source here degrades to 0.5 rather than failing the cycle, so a
+        # composite assembled from four fallbacks looked identical to one
+        # assembled from live data. This records the difference. It changes no
+        # score — see services/input_quality.py.
+        "inputs": build_inputs(
+            raw_doc,
+            fundamental_coverage=fundamental_coverage,
+            catalyst_coverage=catalyst_coverage,
+            has_long_ma=tech["ma_50"] is not None,
+        ),
         # composite_score is set by scoring.py
     }
 
@@ -415,10 +427,17 @@ def _technical_score(tech: dict, price: float) -> float:
     return clamp(score)
 
 
-def _fundamental_score(fund: dict) -> float:
+def _fundamental_score(fund: dict) -> tuple[float, float]:
     """
-    Derive a 0–1 fundamental health score from yfinance data.
-    Returns 0.5 (neutral) when data is absent.
+    Derive a 0–1 fundamental health score from the cached provider snapshot.
+
+    Returns `(score, coverage)`. Coverage is the share of the five components
+    that had data, and it is the number that tells a thin read from a mediocre
+    company: CBRS scores ~0.73 on 55% coverage and a genuinely middling name
+    scores ~0.73 on all five, and until now nothing downstream could tell you
+    which one you were looking at.
+
+    Returns 0.5 (neutral) at zero coverage when data is absent.
 
     Components:
       Analyst recommendation   30 %
@@ -428,7 +447,7 @@ def _fundamental_score(fund: dict) -> float:
       Debt/equity              10 %
     """
     if not fund or "error" in fund:
-        return 0.5
+        return 0.5, 0.0
 
     components: list[tuple[float, float]] = []
 
@@ -467,7 +486,7 @@ def _fundamental_score(fund: dict) -> float:
         components.append((de_score, 0.10))
 
     if not components:
-        return 0.5
+        return 0.5, 0.0
 
     # Blend toward neutral in proportion to what is MISSING, rather than
     # re-normalising over whatever happens to be present.
@@ -488,7 +507,7 @@ def _fundamental_score(fund: dict) -> float:
     coverage = sum(w for _, w in components)          # 0..1; 1.0 = all five
     raw = sum(s * w for s, w in components) / coverage
     score = raw * coverage + 0.5 * (1.0 - coverage)
-    return clamp(score)
+    return clamp(score), coverage
 
 
 #: How hard each sector reacts to the macro regime, as a multiplier on the

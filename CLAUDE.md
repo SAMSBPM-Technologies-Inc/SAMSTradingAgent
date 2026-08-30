@@ -460,6 +460,38 @@ The web client draws from `GET /chart/{ticker}/series` with `lightweight-charts`
 lazy-loaded so the library stays off pages that have no chart. SMA-20/50 are
 computed server-side so the PNG and the interactive chart cannot disagree.
 
+**Health is observed, never probed — and "no key" is not "broken".** Two
+invariants, and the next well-meaning change will break both.
+`services/source_health.py` reads the `source` sentinel every fetch already
+writes into `stocks_raw` (`finnhub+vader+finlex`, `no_api_key`, `error`,
+`massive+alphavantage`, `pending`) and remembers it; `services/system_status.py`
+turns those into `GET /system/status`. **A probe endpoint would spend the Alpha
+Vantage budget it is reporting on** — 22 calls against a cap of 25 — and would
+answer the wrong question: "can this container reach FRED now" is not "did FRED
+build the macro factor behind that BUY". Passive health *is* provenance. The one
+exception is the broker session, which is process state rather than a past fetch
+and already has `GET /trading/broker/status`; compose the two client-side rather
+than duplicating it.
+
+`configured` (a key exists) is a separate field from the working `state`, and a
+source with no key reports `not_configured`, never `failed` — the same
+distinction `ResearchVetoStatus` draws between `enabled` and `would_block`.
+Painting a deliberate absence red is how a status page becomes something nobody
+opens twice. Every capability carries an `impact` line saying what its absence
+costs; that table in `system_status.py` is the single source the page renders and
+`docs/12-how-a-trade-is-judged.md` quotes, so the two cannot drift.
+
+Two granularities, and they must not be confused. **"Is FRED up now" is global**
+and comes from the health records. **"Was *this* verdict built on complete
+inputs" is per-signal**, lives in `inputs` on the feature document, and is what
+the ticker page shows — a source that failed at 09:35 and recovered at 10:00 is
+still absent from the 09:35 report. Coverage is weight-independent and stored;
+completeness weights it by *the reader's* weights and is computed at read time.
+A completeness that cannot be computed stays `None`, never 1.0 — the
+`commission_paid` rule. Freshness is judged against `is_market_hours()`: the
+pipeline does not run overnight, and reporting that as an outage is the fastest
+way to build a page nobody believes.
+
 **Every order says why it was taken, and nothing says it that cannot be
 checked.** `services/trade_rationale.py` writes the one line a trade record
 carries to justify itself — entries, adds, proposals and score-driven exits

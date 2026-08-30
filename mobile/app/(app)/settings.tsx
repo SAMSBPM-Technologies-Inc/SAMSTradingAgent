@@ -5,7 +5,7 @@ import {
 import Slider from '@react-native-community/slider'
 import {
   AlertTriangle, BarChart2, Bell, Bot, Check, ExternalLink, LogOut,
-  Pencil, Target, User, Wifi, WifiOff, X, BookOpen,
+  Activity, Pencil, Target, User, Wifi, WifiOff, X, BookOpen,
   Sun,
   Moon,
 } from 'lucide-react-native'
@@ -799,6 +799,7 @@ export default function SettingsScreen() {
           {([
             { icon: BarChart2, label: 'Performance', note: 'Signal accuracy and win rate', to: '/(app)/performance' },
             { icon: Target, label: 'Calibration', note: 'Do the thresholds hold up?', to: '/(app)/calibration' },
+            { icon: Activity, label: 'System status', note: 'What is working, and what each gap costs', to: '/(app)/status' },
             { icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' },
           ] as const).map(({ icon: Icon, label, note, to }) => (
             <Pressable

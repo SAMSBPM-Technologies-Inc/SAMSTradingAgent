@@ -519,23 +519,62 @@ are marked stale in the UI and ignored by the veto past
 `RESEARCH_VETO_MAX_AGE_HOURS=48`. Fundamentals carry a cache age. Broker
 disconnection is detected and alerts after 15 minutes (deliberately longer than
 the 300s reconnect backoff ceiling, so a routine blip that self-heals pages
-nobody). [GAP] There is **no staleness check on the price feed itself** — if
+nobody). Since 1.16 each data source carries a last-success timestamp and
+the analysis cycle itself carries a last-run time, both readable at
+`GET /system/status` and judged against the market clock rather than wall
+time, so a quiet overnight is not reported as an outage.
+
+[GAP] There is still **no staleness check on the price feed itself**. Health
+recording observes whether a fetch *succeeded*, which is a different question
+from whether the bar it returned was fresh — if
 Yahoo returned a cached or frozen bar, nothing would currently notice.
 
 **6.6 If a feed becomes unavailable.**
 Each source degrades independently: no Finnhub key → neutral sentiment; no FRED
 → neutral macro; no fundamentals → 0.5 fallback; no Anthropic key → the
 rule-based signal path. Trading does not stop for a data outage, and that is
-the deliberate choice — but note the consequence: **a degraded score still
-produces a verdict**, and a composite assembled from three fallbacks at 0.5
-looks identical in the API to one assembled from live data, except in the
-factor breakdown. [GAP] There is no aggregate "input completeness" figure on a
-signal. This is a worthwhile addition and is listed in Section 13.
+the deliberate choice. The consequence — **a degraded score still produces a
+verdict** — remains true and always will; what changed in 1.16 is that the
+degradation is no longer invisible.
+
+Every signal now carries an **input completeness** figure: the weighted share
+of the composite that came from measured data, plus the names of the factors
+sitting at a neutral placeholder. It is returned by `GET /analyze`, shown above
+the factor breakdown on both clients, and frozen onto every trade the agent
+takes, so a closed position can be judged on the data it was actually opened
+on. Coverage is weight-independent and stored once; completeness is weighted by
+the reader's own weights, because a factor weighted at zero is not part of
+their score. A figure that cannot be computed — a signal generated before this
+existed — stays **absent** rather than defaulting to 1.0, which would claim
+every historical verdict was built on complete data.
+
+Two consequences of the old blindness were found while writing
+[`12-how-a-trade-is-judged.md`](12-how-a-trade-is-judged.md) and fixed in the
+same release. A missing Finnhub key fed `article_count: 0` into the catalyst
+factor, which read it as *genuine news silence* and scored it 0.40 — so an
+unconfigured provider dragged the composite down rather than leaving it
+neutral. And `data_sources.fundamentals` inferred the provider from whether a
+P/E was present, naming a provider (`yfinance`) that had been removed from the
+chain and reporting `"none"` for every Massive-only refresh that carried real
+cash-flow and balance-sheet data.
+
+The remaining honest limitation is stated in §6.5: completeness measures
+whether an input *arrived*, not whether it was fresh.
 
 **6.7 Data lineage.**
 Yes within the research path — the evidence ledger *is* lineage, id by id, with
-source and date. [GAP] The fast pipeline does not carry lineage: a feature
-document records values, not which provider supplied them or when.
+source and date. The fast pipeline now carries provider-level lineage: every
+signal records which provider answered for price, sentiment, macro,
+fundamentals (with a staleness flag) and alternative data, read from the
+sentinel each fetch writes rather than inferred from the payload. It is
+versioned (`data_sources_version`), and historical rows are **not**
+backfilled — the provider that really answered on a given day is not
+recoverable, and a guess written into a provenance field is worse than a gap
+in one.
+
+[GAP] It remains *provider*-level, not fact-level: the fast path still cannot
+say which of two providers supplied a particular ratio, the way the research
+ledger can for a particular claim.
 
 **6.8 Corrections and revisions tracked?**
 For filings, yes: `financial_statements` is **append-only** per
@@ -766,8 +805,17 @@ placed / filled / exited, a daily digest, and a broker disconnection alert
 after 15 minutes. Mail failures are deliberately swallowed
 everywhere except the contact form, so an SMTP outage never stops trading —
 which also means a silent notification channel would not be noticed.
-[GAP] Nothing alerts the operator on: pipeline cycle failures, provider quota
-exhaustion, a frozen price feed, database growth, disk, or memory.
+Since 1.16 there is also a user-facing **System status** screen and a
+transition alert on the same channels: when a data source starts failing, or
+recovers, one message goes out naming what it costs the score. It fires on the
+*change* only, requires two consecutive bad cycles before it speaks, and never
+mentions a key the operator simply chose not to set.
+
+[GAP] That is still not operational monitoring. It is passive — every row is
+what a source did on the last pipeline cycle, never a probe — and it is read
+through the app rather than by an external checker, so it cannot report that
+the app itself is down. Nothing alerts on: a frozen price feed, provider quota
+exhaustion, database growth, disk, or memory.
 
 **10.4 Disaster recovery.** [GAP] **No DR procedure exists.** No backups
 (confirmed: no `mongodump`, no snapshot job, no backup tooling anywhere in the
@@ -1158,12 +1206,12 @@ Effort is engineering-days for the current single engineer.
 | 5 | **No MFA on an account that can place orders** | 9.5 | High | 2–3 |
 | 6 | Production defaults to an unlicensed price source | 6.1 | High | 0.5 + vendor cost |
 | 7 | Bus factor of one | 1.3 | High | Hiring |
-| 8 | No uptime/error monitoring or alerting on system health | 10.1, 10.3 | High | 1–2 |
+| 8 | No *external* uptime monitoring. A status screen and degrade/recover alerts ship in 1.16, but both run inside the app and cannot report that the app is down | 10.1, 10.3 | High | 1 |
 | 9 | Signals do not record the weights/model version in force | 2.8, 2.9 | Medium | 0.5 |
 | 10 | No sector/correlation/concentration limits | 7.2 | Medium | 2 |
 | 11 | Kill switch is realised-only; no unrealised-drawdown halt | 8 | Medium | 1 |
 | 12 | No price-feed staleness detection | 6.5 | Medium | 1 |
-| 13 | No input-completeness figure on a signal | 6.6 | Medium | 1 |
+| ~~13~~ | ~~No input-completeness figure on a signal~~ — **closed in 1.16** | 6.6 | — | done |
 | 14 | Scheduler and rate limiters are in-process — cannot scale out | 13C | Medium | 3–5 |
 | 15 | No end-to-end tests against real Mongo + paper gateway | 13C | Medium | 3 |
 | 16 | Factor correlations never measured | 2.7 | Medium | 2 |
@@ -1174,7 +1222,7 @@ Effort is engineering-days for the current single engineer.
 | 21 | Citation rejection rate not aggregated across dossiers | 5.6 | Low | 0.5 |
 | 22 | Risk-agent disagreement rate not measured | 5.10 | Low | 0.5 |
 | 23 | No deep links from evidence to source documents | 5.8 | Low | 1–2 |
-| 24 | No fast-path data lineage (which provider, when) | 6.7 | Low | 2 |
+| 24 | Fast-path lineage is provider-level, not fact-level (shipped 1.16); it cannot say which provider supplied a particular ratio | 6.7 | Low | 1 |
 | 25 | No single-command rollback / canary | 10.7 | Low | 1 |
 | 26 | Mobile screens hardcode a light-only palette | — | Low | 1 |
 
