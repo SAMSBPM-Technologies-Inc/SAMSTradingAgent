@@ -13,6 +13,7 @@ import {
 import type {
   AnalyzeResponse,
   Holding,
+  SignalInputs,
   TradeRecord,
   WatchlistItem,
 } from '../../types'
@@ -513,7 +514,7 @@ export function TickerAnalysis({
         <section className="min-w-0 bg-[var(--color-bg)] px-[18px] py-3.5">
           {data.breakdown ? (
             <Collapsible title="How the score was built" defaultOpen>
-              <FactorBreakdown breakdown={data.breakdown} />
+              <FactorBreakdown breakdown={data.breakdown} inputs={data.inputs} />
             </Collapsible>
           ) : (
             <>
@@ -651,14 +652,54 @@ export function TickerAnalysis({
 // data pipeline this deployment does not have, which is a licensing question
 // rather than a cosmetic one.
 
-type SourceStatus = 'live' | 'dev' | 'planned'
+type SourceStatus = 'live' | 'dev' | 'thin' | 'off' | 'planned'
 
-const STATUS_LABEL: Record<SourceStatus, string> = { live: 'Live', dev: 'Dev data', planned: 'Soon' }
+const STATUS_LABEL: Record<SourceStatus, string> = {
+  live: 'Live', dev: 'Dev data', thin: 'Thin', off: 'Off', planned: 'Soon',
+}
 
 const STATUS_TONE: Record<SourceStatus, { bg: string; fg: string }> = {
   live: { bg: 'var(--tint-buy)', fg: 'var(--accent-buy)' },
   dev: { bg: 'var(--tint-hold)', fg: 'var(--accent-hold)' },
+  // A source that answered with less than it should. Warning-toned, because it
+  // is a real fact about the number above it.
+  thin: { bg: 'var(--tint-hold)', fg: 'var(--accent-hold)' },
+  // Not configured. Deliberately NOT the sell tone: an absent key is a choice,
+  // not a fault, and painting it red is how a panel like this stops being read.
+  off: { bg: 'var(--color-hover)', fg: 'var(--color-fg-muted)' },
   planned: { bg: 'var(--color-hover)', fg: 'var(--color-fg-muted)' },
+}
+
+/**
+ * How a factor's measured share reads as a badge.
+ *
+ * `dev` survives as its own state and is not derived from health at all: it is
+ * a *licensing* statement about yfinance, not an availability one, and a source
+ * can be simultaneously working perfectly and unlicensed for production.
+ */
+function stateBadge(
+  inputs: SignalInputs | null | undefined,
+  key: string,
+  whenMeasured: SourceStatus = 'live',
+): SourceStatus {
+  const factor = inputs?.factors?.find((f) => f.key === key)
+  if (!factor) return whenMeasured
+  if (factor.state === 'fallback') return 'off'
+  if (factor.state === 'partial') return 'thin'
+  return whenMeasured
+}
+
+/** The note a factor's own coverage earns, appended to the editorial prose. */
+function stateNote(inputs: SignalInputs | null | undefined, key: string): string {
+  const factor = inputs?.factors?.find((f) => f.key === key)
+  if (!factor) return ''
+  if (factor.state === 'fallback') {
+    return ' Not available for this report — the factor sits at a neutral 0.50 and says nothing about this company.'
+  }
+  if (factor.state === 'partial') {
+    return ` Partial for this report (${Math.round(factor.coverage * 100)}% of its inputs); the rest is blended toward neutral.`
+  }
+  return ''
 }
 
 function analystSource(data: AnalyzeResponse): { label: string; value: string; status: SourceStatus } {
@@ -679,17 +720,50 @@ function analystSource(data: AnalyzeResponse): { label: string; value: string; s
   }
 }
 
+/**
+ * Where the inputs came from — reported, not asserted.
+ *
+ * Every row here used to be a literal, so the panel claimed Finnhub and FRED
+ * were "Live" on a server that might hold neither key, and would have gone on
+ * calling the price feed "Dev data" after a switch to a licensed provider. It
+ * was an active falsehood sitting directly beneath the score it described.
+ *
+ * The editorial prose stays hardcoded — it is a description of what a provider
+ * supplies and no server field should own it. What the *server* now decides is
+ * the badge and the per-report note, read from `data.inputs`.
+ *
+ * Deliberately driven by the per-signal payload rather than `/system/status`:
+ * this panel sits under "where the inputs came from" for *this report*, and a
+ * cached analyst verdict from an hour ago was built on the data of an hour ago.
+ * A source that failed at 09:35 and recovered at 10:00 must still read as
+ * absent on the 09:35 report, which is exactly what a global status view would
+ * get wrong.
+ *
+ * `planned` rows stay literal: they describe things that do not exist, and no
+ * server field can say anything about them.
+ */
 function SourcesPanel({ data }: { data: AnalyzeResponse }) {
+  const inputs = data.inputs
+  const priceLive: SourceStatus =
+    data.data_sources?.price === 'polygon' ? 'live' : 'dev'
+
   const sources: { label: string; value: string; status: SourceStatus }[] = [
-    { label: 'Price & market data', value: 'Yahoo Finance — 90 days OHLCV, current price, day change', status: 'dev' },
-    { label: 'Financial statements', value: 'Massive (Polygon.io) — up to 12 annual and 12 quarterly filings per ticker, accumulated over time so margin trends and CAGRs are computable', status: 'live' },
-    { label: 'Company profile & ratios', value: 'Alpha Vantage OVERVIEW — business description, sector, forward P/E, EV/EBITDA, margins, ROE/ROA, beta, 52-week range, analyst consensus', status: 'live' },
-    { label: 'Earnings record', value: 'Alpha Vantage EARNINGS — reported vs estimated EPS by quarter, surprise history, and the next scheduled report date', status: 'live' },
-    { label: 'News & sentiment', value: 'Finnhub — last 7 days of headlines with publisher, date and link, scored locally with VADER NLP. Headline text only; article bodies are not retrieved', status: 'live' },
-    { label: 'Macro environment', value: 'FRED — Fed funds rate, 10Y/2Y Treasuries, CPI, unemployment, VIX', status: 'live' },
-    { label: 'Options flow', value: 'Yahoo Finance — nearest-expiry put/call volume ratio only, not open interest', status: 'dev' },
+    {
+      label: 'Price & market data',
+      value: (priceLive === 'dev'
+        ? 'Yahoo Finance — 90 days OHLCV, current price, day change'
+        : 'Polygon (via Massive) — 90 days OHLCV, current price, day change')
+        + '. The one input that can stop a cycle: without bars there is no score and no order.',
+      status: priceLive,
+    },
+    { label: 'Financial statements', value: 'Massive (Polygon.io) — up to 12 annual and 12 quarterly filings per ticker, accumulated over time so margin trends and CAGRs are computable' + stateNote(inputs, 'fundamental'), status: stateBadge(inputs, 'fundamental') },
+    { label: 'Company profile & ratios', value: 'Alpha Vantage OVERVIEW — business description, sector, forward P/E, EV/EBITDA, margins, ROE/ROA, beta, 52-week range, analyst consensus', status: stateBadge(inputs, 'fundamental') },
+    { label: 'Earnings record', value: 'Alpha Vantage EARNINGS — reported vs estimated EPS by quarter, surprise history, and the next scheduled report date', status: stateBadge(inputs, 'catalyst') },
+    { label: 'News & sentiment', value: 'Finnhub — last 7 days of headlines with publisher, date and link, scored locally with VADER NLP. Headline text only; article bodies are not retrieved' + stateNote(inputs, 'sentiment'), status: stateBadge(inputs, 'sentiment') },
+    { label: 'Macro environment', value: 'FRED — Fed funds rate, 10Y/2Y Treasuries, CPI, unemployment, VIX' + stateNote(inputs, 'macro'), status: stateBadge(inputs, 'macro') },
+    { label: 'Options flow', value: 'Yahoo Finance — nearest-expiry put/call volume ratio only, not open interest' + stateNote(inputs, 'alternative_data'), status: stateBadge(inputs, 'alternative_data', 'dev') },
     { label: 'Short interest', value: 'Yahoo Finance — % of float shorted and days-to-cover. Usually unavailable from this host', status: 'dev' },
-    { label: 'Insider activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over the most recent filed transactions. Not a date-bounded window and not dollar-weighted', status: 'dev' },
+    { label: 'Insider activity', value: 'Yahoo Finance (Form 4) — buy/sell counts over the most recent filed transactions. Not a date-bounded window and not dollar-weighted', status: stateBadge(inputs, 'alternative_data', 'dev') },
     analystSource(data),
     { label: 'Deep research agents', value: 'Four scoped analysts over one sourced evidence ledger, merged by a fifth. Every claim it makes cites a dated fact; uncited claims are deleted before storage', status: 'live' },
     { label: 'Institutional ownership', value: '13F holdings and ownership changes — not carried by any configured provider', status: 'planned' },

@@ -303,6 +303,10 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
                 ),
                 "stop_loss": t.get("stop_loss"),
                 "take_profit": t.get("take_profit"),
+                # Both halves of the story on one closed row: why it was
+                # bought, and why it was sold. A realised result read without
+                # the thesis behind it teaches nothing about the thesis.
+                "entry_reason": t.get("entry_reason"),
                 "exit_reason": t.get("exit_reason"),
                 # The code behind the sentence, so the client can mark an exit
                 # the agent chose differently from one a stop fired.

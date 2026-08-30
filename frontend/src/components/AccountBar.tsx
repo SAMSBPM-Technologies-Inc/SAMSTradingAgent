@@ -1,3 +1,6 @@
+import { Link } from 'react-router-dom'
+import { AlertTriangle } from 'lucide-react'
+import { useSystemStatus } from '../lib/system-status'
 import { useTradingSettings } from '../lib/trading-context'
 
 /**
@@ -65,6 +68,39 @@ function Bar({ children }: { children: React.ReactNode }) {
   )
 }
 
+/**
+ * A degraded-inputs chip, and nothing at all when everything is working.
+ *
+ * Deliberately silent in the nominal case. A green dot that is always green
+ * teaches people to stop seeing the strip it lives in, and the strip is where
+ * the account balances are — the last place worth training someone to ignore.
+ *
+ * It never says "not trading" outside market hours: the pipeline is not
+ * scheduled then, and the summary it renders is composed on the server, which
+ * knows the market clock.
+ */
+function InputsChip() {
+  const { status } = useSystemStatus()
+  if (!status || status.overall === 'ok') return null
+
+  const halted = status.overall === 'halted'
+  return (
+    <Link
+      to="/status"
+      title={status.summary}
+      className="ml-auto flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap rounded
+                 px-1.5 py-0.5 text-[10.5px] font-semibold"
+      style={{
+        background: halted ? 'var(--tint-sell)' : 'var(--tint-hold)',
+        color: halted ? 'var(--accent-sell)' : 'var(--accent-hold)',
+      }}
+    >
+      <AlertTriangle className="h-3 w-3" aria-hidden="true" />
+      {halted ? 'Trading paused' : 'Inputs degraded'}
+    </Link>
+  )
+}
+
 export default function AccountBar() {
   // Reads the shared copy rather than fetching and polling its own. The order
   // ticket sizes from the same object, so the equity shown here and the equity
@@ -88,6 +124,7 @@ export default function AccountBar() {
           <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-[var(--color-fg-muted)]" />
           Broker disconnected — balances unavailable
         </span>
+        <InputsChip />
       </Bar>
     )
   }
@@ -112,6 +149,8 @@ export default function AccountBar() {
 
       {/* Net liquidation is the least volatile figure — it drops out first on a
           narrow viewport, keeping the strip to the numbers that move intraday. */}
+      <InputsChip />
+
       <div className="ml-auto hidden flex-shrink-0 items-baseline gap-1.5 whitespace-nowrap min-[1000px]:flex">
         <span className="text-[10px] uppercase tracking-[0.11em] text-[var(--color-fg-muted)]">Net liq</span>
         <Value>{money(account.net_liquidation)}</Value>

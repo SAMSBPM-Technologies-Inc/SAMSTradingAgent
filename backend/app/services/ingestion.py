@@ -16,6 +16,7 @@ from app.db import COLL_RAW, get_db
 from app.services.fundamentals import fetch_fundamentals
 from app.services.macro import fetch_macro_data
 from app.services.news import fetch_news_sentiment, fetch_recent_headlines
+from app.services.price_providers import fetch_price_history, get_price_provider
 from app.utils.helpers import safe_float, utcnow
 from app.utils.logger import get_logger
 
@@ -67,6 +68,11 @@ async def ingest_ticker(ticker: str) -> dict:
     doc = {
         "ticker": ticker,
         "ingested_at": utcnow(),
+        # Which provider these bars came from. Recorded because it is the one
+        # input that can stop a cycle outright, and because `yahoo` carries a
+        # licensing statement that `polygon` does not — a reader of a signal
+        # deserves to know which one produced the prices behind it.
+        "price_source": get_price_provider().name,
         "bars": bars,
         "current_price": current_price,
         "day_change_pct": round(day_change_pct, 4),
@@ -160,6 +166,4 @@ async def _fetch_price_history(ticker: str) -> pd.DataFrame:
     development source with a licensed one is a `PRICE_PROVIDER` change rather
     than an edit to the ingestion path.
     """
-    from app.services.price_providers import fetch_price_history
-
     return await fetch_price_history(ticker, HISTORY_DAYS)

@@ -765,6 +765,12 @@ function AlertsCard() {
           note="An order executed, or a position closed with its realised P&L."
         />
         <Toggle
+          checked={settings.notify_on_degraded ?? false}
+          onChange={(v) => set('notify_on_degraded', v)}
+          label="Input degraded"
+          note="A data source stopped working, or started again. Sent on the change only, never while the condition persists — and never about a key you simply have not set."
+        />
+        <Toggle
           checked={settings.daily_digest}
           onChange={(v) => set('daily_digest', v)}
           label="Daily digest"

@@ -128,6 +128,15 @@ export const chartApi = {
     }),
 }
 
+export const systemApi = {
+  /**
+   * What is working right now. Nothing is probed on the server — every row is
+   * what the source actually did on the last pipeline cycle, so this is cheap
+   * to poll and, unlike a probe, describes the data behind the score on screen.
+   */
+  status: () => api.get<import('../types').SystemStatus>('/system/status'),
+}
+
 export const alertsApi = {
   getSettings: () => api.get<import('../types').AlertSettings>('/alerts/settings'),
   updateSettings: (data: import('../types').AlertSettings) => api.put<import('../types').AlertSettings>('/alerts/settings', data),

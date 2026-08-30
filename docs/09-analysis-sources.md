@@ -85,6 +85,13 @@ When `ENABLE_ML_MODEL=true` and a model file is present, a 14-feature XGBoost mo
 
 ---
 
+For what each of these is *worth to a trading decision* — what happens when a
+key is absent, when the ML path fails, when a provider is rate-limited — see
+[`12-how-a-trade-is-judged.md`](12-how-a-trade-is-judged.md). Whether any of
+them is working right now is on the **System status** screen in the app.
+
+---
+
 ## Known Limitations & Caveats
 
 | Issue | Impact | Fix (see roadmap) |

@@ -1,7 +1,7 @@
 import React from 'react'
 import { Text, View } from 'react-native'
 import { Check, Info, ShieldAlert, X } from 'lucide-react-native'
-import type { RiskAssessment, ScoreBreakdown, Signal, SignalGate } from '../types'
+import type { RiskAssessment, ScoreBreakdown, Signal, SignalGate, SignalInputs } from '../types'
 import { usePalette, type Palette } from '../lib/palette'
 
 /**
@@ -46,7 +46,47 @@ function Bar({ fraction, color, height = 6 }: {
 
 // ── Factor breakdown ──────────────────────────────────────────────────────────
 
-export function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdown }) {
+/**
+ * How much of this score was measured, stated above the factors themselves.
+ *
+ * A 0.50 sub-score in the rows below is ambiguous in a way nothing else on the
+ * panel resolves: it means either "measured, and genuinely neutral" or "we
+ * never found out". Renders nothing at full completeness — a banner that is
+ * always there stops being read.
+ */
+function InputCompleteness({ inputs }: { inputs: SignalInputs }) {
+  const C = usePalette()
+  if (inputs.completeness == null || inputs.completeness >= 0.999) return null
+
+  const measured = Math.round(inputs.completeness * 100)
+  const named = inputs.fallback_factors
+  return (
+    <View style={{
+      flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+      backgroundColor: `${C.border}60`, borderRadius: 8, padding: 10,
+    }}>
+      <Info size={13} color={C.fgMuted} style={{ marginTop: 2 }} />
+      <Text style={{ flex: 1, fontSize: 11, lineHeight: 16, color: C.fgMuted }}>
+        <Text style={{ fontWeight: '700', color: C.fg }}>
+          {measured}% of this score came from measured data.
+        </Text>
+        {named.length > 0
+          ? ` ${named.join(' and ')} ${named.length === 1 ? 'was' : 'were'} unavailable, so `
+            + `${named.length === 1 ? 'it sits' : 'they sit'} at a neutral 0.50 and `
+            + `${named.length === 1 ? 'says' : 'say'} nothing about this company.`
+          : ' Some factors were built from partial data and are blended toward neutral.'}
+      </Text>
+    </View>
+  )
+}
+
+export function FactorBreakdown({
+  breakdown,
+  inputs,
+}: {
+  breakdown: ScoreBreakdown
+  inputs?: SignalInputs | null
+}) {
   const C = usePalette()
   // The ML path did not compute this score from these weights, so a weighted
   // decomposition beside it would be a fabrication.
@@ -71,6 +111,7 @@ export function FactorBreakdown({ breakdown }: { breakdown: ScoreBreakdown }) {
 
   return (
     <View style={{ gap: 10 }}>
+      {inputs ? <InputCompleteness inputs={inputs} /> : null}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
         <Text style={{
           fontSize: 9, color: C.fgMuted, textTransform: 'uppercase', letterSpacing: 1,

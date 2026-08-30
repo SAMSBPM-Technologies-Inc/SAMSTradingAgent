@@ -52,6 +52,8 @@ def _trade_to_response(doc: dict) -> TradeResponse:
         reason=doc.get("reason"),
         signal_score=doc.get("signal_score"),
         signal_type=doc.get("signal_type"),
+        entry_reason=doc.get("entry_reason"),
+        input_completeness=doc.get("input_completeness"),
         entry_price=doc.get("entry_price"),
         exit_price=doc.get("exit_price"),
         pnl=doc.get("pnl"),
@@ -440,6 +442,7 @@ async def place_order(
                 take_profit=prior.get("take_profit"),
                 is_paper=prior.get("is_paper", True),
                 trade_id=str(prior["_id"]),
+                entry_reason=prior.get("entry_reason"),
                 reason="Already submitted — returning the original order.",
                 duplicate=True,
             )
@@ -505,6 +508,7 @@ async def list_proposals(current_user: dict = Depends(get_current_user)) -> list
             signal_score=d.get("signal_score"),
             conviction=d.get("conviction"),
             reason=d.get("reason"),
+            entry_reason=d.get("entry_reason"),
             proposed_at=d.get("opened_at", datetime.utcnow()),
             is_paper=d.get("is_paper", True),
         )

@@ -21,6 +21,67 @@ Tokens are obtained by registering a new account or logging in. The default toke
 
 ## Endpoints
 
+### GET /system/status
+
+Which data sources and subsystems are working, and what each one costs the
+judgement. **Authenticated** — unlike `/health`, it names environment
+variables and provider error text.
+
+Nothing is probed. Every capability row is what that source actually did on
+the last pipeline cycle, read from records the fetches themselves wrote. A
+probe would spend the Alpha Vantage daily budget it was reporting on, and
+would answer "can we reach FRED now" when the question is "did FRED build the
+macro factor behind this score".
+
+```json
+{
+  "overall": "ok",
+  "summary": "Everything configured is working. Macro environment is switched off on this server, so the factor it feeds sits at neutral.",
+  "checked_at": "2026-08-31T14:32:00Z",
+  "market_open": true,
+  "cycle": {
+    "last_run_at": "2026-08-31T14:30:00Z",
+    "age_minutes": 2,
+    "stale": false,
+    "tickers_ok": 13,
+    "tickers_total": 13,
+    "failed_tickers": [],
+    "last_error": null
+  },
+  "capabilities": [
+    {
+      "id": "macro",
+      "label": "Macro environment",
+      "tier": "quiet",
+      "required_key": "FRED_API_KEY",
+      "impact": "The macro factor is pinned to 0.50 market-wide, and the VIX spike that would otherwise force a fresh analyst read never fires.",
+      "feeds": "Macro (0.15 of the composite by default)",
+      "configured": false,
+      "state": "not_configured",
+      "detail": "Not configured on this server — set FRED_API_KEY to switch it on.",
+      "last_success_at": null,
+      "last_error": null,
+      "last_error_at": null,
+      "consecutive_failures": 0
+    }
+  ]
+}
+```
+
+`tier` groups by what the absence costs: `stops` (trading pauses), `behaviour`
+(a different decision path runs), `quiet` (a factor goes neutral and the
+verdict still publishes).
+
+**`configured` and `state` are separate, and must stay separate.** A source
+with no key reports `not_configured`, never `failed` — an absent key is a
+deliberate choice rather than a fault, the same distinction
+`ResearchVetoStatus` draws between `enabled` and `would_block`.
+
+`cycle.stale` is judged against the market clock. The pipeline does not run
+outside trading hours, so a quiet overnight is the design, not an outage.
+
+---
+
 ### GET /health
 
 **Description:** Returns the current health status of the API and its database connection. Useful for load balancer health checks and uptime monitoring.

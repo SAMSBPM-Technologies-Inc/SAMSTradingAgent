@@ -182,8 +182,15 @@ async def score_ticker(ticker: str) -> dict:
     settings = get_settings()
 
     if settings.enable_ml_model:
-        composite = _ml_score(feat)
-        method = "xgboost"
+        # The method is whatever actually ran, not whatever the flag asked for.
+        # This used to read `method = "xgboost"` beside the call, which made the
+        # feature document claim a model produced a number the weighted path
+        # produced — the model file is gitignored and never reaches a deployed
+        # box, so on a box with ENABLE_ML_MODEL=true that claim was false every
+        # single cycle. `explain_score` reads this field and refuses to
+        # decompose an "xgboost" score, so the mislabel silently withheld a
+        # factor breakdown that was not merely available but exactly correct.
+        composite, method = _ml_score(feat)
     else:
         composite = _weighted_score(feat, settings)
         method = "weighted"
@@ -221,9 +228,15 @@ def _weighted_score(feat: dict, settings) -> float:
     return base + alt_modifier
 
 
-def _ml_score(feat: dict) -> float:
+def _ml_score(feat: dict) -> tuple[float, str]:
     """
-    XGBoost inference path.
+    XGBoost inference path. Returns (score, method_that_actually_ran).
+
+    Every failure here falls back to the weighted path and **says so in the
+    returned method**. A fallback the caller cannot detect is worse than the
+    failure it recovers from: the score is fine either way, but a document
+    labelled "xgboost" tells `explain_score` to withhold an attribution that
+    would have been true.
     Feature vector must match training schema in scripts/train_xgb.py.
 
     NOTE: fundamental_score and sentiment_score are frozen at 0.5 to match
@@ -249,7 +262,7 @@ def _ml_score(feat: dict) -> float:
                 hint="model/*.json is gitignored and never ships; set "
                      "ENABLE_ML_MODEL=false or commit and retrain the model",
             )
-            return _weighted_score(feat, get_settings())
+            return _weighted_score(feat, get_settings()), "weighted"
         try:
             import xgboost as xgb
             _xgb_model = xgb.XGBRegressor()
@@ -257,7 +270,7 @@ def _ml_score(feat: dict) -> float:
             logger.info("xgb_model_loaded", path=_MODEL_PATH)
         except Exception as exc:
             logger.error("xgb_model_load_failed", error=str(exc))
-            return _weighted_score(feat, get_settings())
+            return _weighted_score(feat, get_settings()), "weighted"
 
     import numpy as np
 
@@ -280,5 +293,14 @@ def _ml_score(feat: dict) -> float:
             float(feat.get("vix") or 20.0),  # read from feat directly (Fix 1)
         ]]
     )
-    prediction = float(_xgb_model.predict(feature_vector)[0])
-    return clamp(prediction)
+    try:
+        prediction = float(_xgb_model.predict(feature_vector)[0])
+    except Exception as exc:
+        # Inference used to be the one XGBoost path with no handler, so a
+        # malformed vector or a schema drift took the whole ticker down for the
+        # cycle — no score, no signal, no trade evaluation — when a perfectly
+        # good weighted score was one line away. A model that cannot answer is
+        # a reason to score without it, not a reason to stop.
+        logger.error("xgb_predict_failed_scoring_weighted_instead", error=str(exc))
+        return _weighted_score(feat, get_settings()), "weighted"
+    return clamp(prediction), "xgboost"

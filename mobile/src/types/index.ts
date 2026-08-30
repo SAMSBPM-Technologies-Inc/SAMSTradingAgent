@@ -121,6 +121,28 @@ export interface SignalGate {
   risk_passes_buy: boolean
 }
 
+/** One factor's share of measured input. */
+export interface FactorInput {
+  key: string
+  label: string
+  state: 'measured' | 'partial' | 'fallback'
+  coverage: number
+}
+
+/**
+ * How much of a score was measured.
+ *
+ * Every source degrades to a neutral 0.5 rather than failing the cycle, so a
+ * composite built on three fallbacks used to look identical to one built on
+ * live data. This is that distinction.
+ */
+export interface SignalInputs {
+  factors: FactorInput[]
+  /** Weighted by *your* weights. Null for signals from before this existed. */
+  completeness: number | null
+  fallback_factors: string[]
+}
+
 export interface AnalyzeResponse {
   ticker: string
   score: number
@@ -150,6 +172,10 @@ export interface AnalyzeResponse {
   analyst_used?: boolean
   /** The model this server is configured to call. Null when the analyst is disabled. */
   analyst_model?: string | null
+  /** Which provider actually supplied each input to this score. */
+  data_sources?: Record<string, string | number | boolean> | null
+  /** How much of this score was measured, and how much is a placeholder. */
+  inputs?: SignalInputs | null
 }
 
 export interface PerformanceResponse {
@@ -262,6 +288,8 @@ export interface OrderPlacementResponse {
   trade_id?: string | null
   /** Why it wasn't placed, or how the quantity was adjusted. */
   reason?: string | null
+  /** Why it was taken. Same words the order history will show. */
+  entry_reason?: string | null
   /** True when this matched an earlier request and no new order was sent. */
   duplicate: boolean
 }
@@ -352,6 +380,11 @@ export interface Proposal {
   signal_score?: number | null
   conviction?: Conviction | null
   reason?: string | null
+  /** Why the order was taken, in the few words a person reads: the score
+   *  against the bar it had to clear, the factors that actually moved it, and
+   *  the analyst's conviction. Distinct from `reason`, which says why an order
+   *  was *not* placed or how its size was adjusted. */
+  entry_reason?: string | null
   proposed_at: string
   is_paper: boolean
 }
@@ -383,6 +416,11 @@ export interface TradeRecord {
   reason?: string
   signal_score?: number
   signal_type?: string
+  /** Why the order was taken, in the few words a person reads: the score
+   *  against the bar it had to clear, the factors that actually moved it, and
+   *  the analyst's conviction. Distinct from `reason`, which says why an order
+   *  was *not* placed or how its size was adjusted. */
+  entry_reason?: string | null
   entry_price?: number
   exit_price?: number
   pnl?: number
@@ -399,6 +437,51 @@ export interface TradeRecord {
   exit_trigger?: string | null
   /** True while exit_price and pnl are the levels we asked for, not a fill. */
   exit_price_estimated?: boolean | null
+}
+
+// ── System status ─────────────────────────────────────────────────────────────
+
+export type SourceState =
+  | 'ok' | 'stale' | 'degraded' | 'failed' | 'not_configured' | 'never_run'
+
+export type CapabilityTier = 'stops' | 'behaviour' | 'quiet'
+
+export interface CapabilityStatus {
+  id: string
+  label: string
+  tier: CapabilityTier
+  required_key: string | null
+  /** What the system does without it — the reason the row is worth reading. */
+  impact: string
+  feeds: string | null
+  /** Whether this deployment switched it on. Separate from whether it works. */
+  configured: boolean
+  state: SourceState
+  detail: string
+  last_success_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+  consecutive_failures: number
+}
+
+export interface CycleStatus {
+  last_run_at: string | null
+  age_minutes: number | null
+  stale: boolean
+  tickers_ok: number | null
+  tickers_total: number | null
+  failed_tickers: string[]
+  last_error: string | null
+}
+
+export interface SystemStatus {
+  overall: 'ok' | 'degraded' | 'halted'
+  /** Composed on the server so web and mobile cannot word it differently. */
+  summary: string
+  checked_at: string
+  market_open: boolean
+  cycle: CycleStatus
+  capabilities: CapabilityStatus[]
 }
 
 export interface AuthResponse {

@@ -60,6 +60,7 @@ export default function AppLayout() {
       {/* Off the tab bar, still routed. Linked from Settings. */}
       <Tabs.Screen name="performance" options={{ href: null }} />
       <Tabs.Screen name="calibration" options={{ href: null }} />
+      <Tabs.Screen name="status" options={{ href: null }} />
       <Tabs.Screen name="guide" options={{ href: null }} />
     </Tabs>
   )

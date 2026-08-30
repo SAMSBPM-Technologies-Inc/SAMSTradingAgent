@@ -42,6 +42,40 @@ function shortRef(id: string): string {
   return id.slice(-8).toUpperCase()
 }
 
+/**
+ * Why one order happened, in the order the questions get asked.
+ *
+ * A record can carry up to three different sentences and they answer different
+ * questions, so they are not interchangeable and none of them may be dropped:
+ *
+ *   - `entry_reason` — why the position was opened. Present on every order the
+ *     agent or the user actually sent.
+ *   - `exit_reason` — why it closed. Only on a closed record.
+ *   - `reason` — why an order was *refused*, or how its size was adjusted. On
+ *     a SKIPPED row this is the whole story, which is why it leads.
+ *
+ * Rendered as separate lines rather than joined with a separator: they are
+ * three facts about one row, and running them together reads as one sentence
+ * that contradicts itself.
+ */
+function OrderWhy({ order }: { order: TradeRecord }) {
+  const exit = exitReasonLabel(order.exit_reason)
+  const lines = [order.reason, order.entry_reason, exit].filter(Boolean) as string[]
+  if (lines.length === 0) return null
+  return (
+    <span className="block">
+      {lines.map((line, i) => (
+        <span
+          key={line}
+          className={`block ${i === 0 ? '' : 'mt-0.5 text-[var(--color-fg-muted)]'}`}
+        >
+          {line}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 /** Broker-statement convention, matching AccountBar and the position table. */
 function Pnl({ value }: { value: number | null | undefined }) {
   if (value == null) return <span className="text-[var(--color-fg-muted)]">—</span>
@@ -393,7 +427,7 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                     value: <span className="font-mono" title={o.id}>{shortRef(o.id)}</span>,
                   },
                 ]}
-                note={o.reason ?? exitReasonLabel(o.exit_reason)}
+                note={<OrderWhy order={o} />}
               />
             ))
           )}
@@ -406,7 +440,7 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
         className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]"
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[48rem]">
+          <table className="w-full text-sm min-w-[62rem]">
             <thead>
               {/* Status has no funnel of its own — the tab above already is that filter. */}
               <tr className="border-b border-[var(--color-border)] text-[10.5px]
@@ -602,12 +636,15 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                   </div>
                 </th>
                 <th scope="col" className="text-left font-semibold px-4 py-2.5">Status</th>
+                {/* Last, and unfiltered: it is the column you read after the
+                    numbers have made you ask a question, not one you sort by. */}
+                <th scope="col" className="text-left font-semibold px-3 py-2.5">Why</th>
               </tr>
             </thead>
             <tbody>
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
+                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
                     {hasActiveFilters
                       ? 'No orders match these filters.'
                       : `No ${activeTabLabel.toLowerCase()} orders.`}
@@ -647,14 +684,24 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                     <td className="px-3 py-3 text-right"><Pnl value={o.pnl} /></td>
                     <td className="px-3 py-3"><SourceLabel signalType={o.signal_type} /></td>
                     <td className="px-4 py-3">
-                      <div className="flex flex-col gap-0.5">
-                        <StatusPill status={o.status} />
-                        {o.reason && (
-                          <span className="text-[0.6rem] text-[var(--color-fg-muted)] max-w-[16rem]">
-                            {o.reason}
-                          </span>
-                        )}
-                      </div>
+                      <StatusPill status={o.status} />
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      {/* Capped rather than wrapped free: one long reason must
+                          not set the row height for the fifty rows around it.
+                          The full text is one hover away, and the card view
+                          below `lg` shows it whole. */}
+                      <span
+                        className="block max-w-[22rem] text-[11px] leading-snug
+                                   text-[var(--color-fg)]"
+                        title={
+                          [o.reason, o.entry_reason, o.exit_reason]
+                            .filter(Boolean)
+                            .join(' — ') || undefined
+                        }
+                      >
+                        <OrderWhy order={o} />
+                      </span>
                     </td>
                   </tr>
                 ))

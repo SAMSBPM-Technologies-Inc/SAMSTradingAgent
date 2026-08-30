@@ -184,6 +184,12 @@ that a truncated run has already covered the names carrying money.
 
 ## Providers, limits, and what a trader actually feels
 
+The **If it fails** column says what a failure *means*. Whether it is
+happening right now is a different question, answered by the System status
+screen and `GET /system/status` — every row there is what the source actually
+did on the last cycle. What each failure costs a *judgement* is set out in
+[`12-how-a-trade-is-judged.md`](12-how-a-trade-is-judged.md).
+
 | Provider | Supplies | Limit | Cached | If it fails |
 |---|---|---|---|---|
 | Yahoo | OHLCV bars | Informal; 429s under load | 30 min via signals cache | **Hard failure** — no bars, no analysis |

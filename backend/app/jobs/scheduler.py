@@ -28,10 +28,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import get_settings
 from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
+from app.services import source_health
 from app.services.benchmark import (
     alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
 )
 from app.services.pipeline import run_pipeline_all
+from app.utils.helpers import is_market_hours
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,12 +57,10 @@ def get_scheduler() -> AsyncIOScheduler:
 
 def _is_market_hours() -> bool:
     """Return True if the NYSE is currently open (approximate)."""
-    now = datetime.now(tz=ET)
-    if now.weekday() >= 5:   # Saturday=5, Sunday=6
-        return False
-    market_open  = now.replace(hour=9,  minute=30, second=0, microsecond=0)
-    market_close = now.replace(hour=16, minute=0,  second=0, microsecond=0)
-    return market_open <= now <= market_close
+    # Imported, not restated. The status page judges cycle staleness against
+    # the same clock, and two copies of a market calendar is how they end up
+    # disagreeing about whether a quiet Sunday is an outage.
+    return is_market_hours()
 
 
 def _is_reconcile_window() -> bool:
@@ -333,6 +333,11 @@ async def _premarket_sweep_job() -> None:
 #: When the session was first seen down, or None while it is healthy. Process
 #: state deliberately — a restart re-arms the alert, which is the safe
 #: direction: better a duplicate notification than a silent outage.
+#:
+#: The *observed* state is separately written to `system_health` so the status
+#: page can still answer "is the broker up" after a deploy. Recording a fact
+#: and arming an alert are different jobs, and only the second one wants to
+#: forget on restart.
 _broker_down_since: datetime | None = None
 #: Set once per outage so a long one does not notify every five minutes.
 _broker_alert_sent = False
@@ -358,7 +363,16 @@ async def _broker_watch_job() -> None:
                 logger.info("broker_recovered", down_minutes=minutes)
             _broker_down_since = None
             _broker_alert_sent = False
+            await source_health.record_subsystem(
+                "broker", source_health.OK, last_success_at=now, down_since=None,
+            )
             return
+
+        await source_health.record_subsystem(
+            "broker", source_health.FAILED,
+            down_since=_broker_down_since or now,
+            last_error="Broker session not connected",
+        )
 
         if _broker_down_since is None:
             _broker_down_since = now
@@ -404,6 +418,117 @@ async def _notify_broker(*, down_minutes: int, recovered: bool) -> None:
             )
         except Exception as exc:
             logger.warning("broker_alert_send_failed", user_id=str(user.get("_id")), error=str(exc))
+
+
+# ── Capability watch ──────────────────────────────────────────────────────────
+#
+# The same idea as the broker watch, applied to the data sources. A dead FRED is
+# quieter than a dead broker: the broker at least refuses orders, while a failed
+# macro fetch simply pins one factor to 0.50 and lets every verdict publish
+# looking exactly as it always did.
+
+#: The last state each capability was *reported* in, so only a change is news.
+#: Process state, like the broker watch above and for the same reason: a restart
+#: re-arms, which risks one duplicate notification rather than a silent outage.
+_capability_states: dict[str, str] = {}
+
+#: How many consecutive cycles a capability must stay down before it is worth
+#: waking someone for. The pipeline runs every 5 minutes, so two readings is
+#: roughly ten minutes — long enough that a single transient 429 on one cycle,
+#: which the next cycle recovers from, never reaches a phone.
+_DEGRADED_CONFIRMATIONS = 2
+
+
+async def _capability_watch_job() -> None:
+    """
+    Notify when a data source degrades or recovers. Transitions only.
+
+    Three rules keep this from becoming noise:
+
+      * **Only changes are sent.** A source that has been failing for six hours
+        is not news six hours later; it was news once.
+      * **Only confirmed failures.** A capability must be down for
+        `_DEGRADED_CONFIRMATIONS` consecutive readings, the same instinct as the
+        signal stability layer — one bad cycle is not a condition.
+      * **Never about configuration.** A key you chose not to set is settled
+        fact, not an event, and a channel that pages about it gets muted.
+    """
+    try:
+        from app.services import source_health, system_status
+
+        settings = get_settings()
+        health = await source_health.read_all()
+        status = system_status.build_status(settings, health)
+
+        degraded: list[tuple[str, str]] = []
+        recovered: list[str] = []
+
+        for row in status["capabilities"]:
+            state = row["state"]
+            # Configuration is not an event. Neither is a source nothing has
+            # reached yet — that is a fresh deployment, not a failure.
+            if state in ("not_configured", "never_run"):
+                _capability_states.pop(row["id"], None)
+                continue
+
+            unhealthy = state in ("failed", "degraded")
+            confirmed = (
+                row["consecutive_failures"] >= _DEGRADED_CONFIRMATIONS
+                if state == "failed" else unhealthy
+            )
+            previous = _capability_states.get(row["id"], "ok")
+
+            if confirmed and previous == "ok":
+                degraded.append((row["label"], row["impact"]))
+                _capability_states[row["id"]] = state
+            elif not unhealthy and previous != "ok":
+                recovered.append(row["label"])
+                _capability_states[row["id"]] = "ok"
+
+        if not degraded and not recovered:
+            return
+
+        await _notify_capabilities(
+            degraded=degraded, recovered=recovered, summary=status["summary"],
+        )
+        logger.warning(
+            "capability_alert_sent",
+            degraded=[label for label, _impact in degraded], recovered=recovered,
+        )
+    except Exception as exc:
+        logger.error("capability_watch_job_failed", error=str(exc))
+
+
+async def _notify_capabilities(
+    *, degraded: list[tuple[str, str]], recovered: list[str], summary: str,
+) -> None:
+    """Fan a capability alert out to every user who wants one."""
+    from app.services.notifier import send_capability_alert
+
+    db = await get_db()
+    users = await db[COLL_USERS].find(
+        {"$or": [
+            {"alert_settings.slack_webhook_url": {"$exists": True, "$ne": None}},
+            {"alert_settings.whatsapp_phone": {"$exists": True, "$ne": None}},
+        ]},
+    ).to_list(length=2000)
+
+    for user in users:
+        prefs = user.get("alert_settings") or {}
+        if not prefs.get("notify_on_degraded", True):
+            continue
+        try:
+            await send_capability_alert(
+                prefs.get("slack_webhook_url"),
+                degraded=degraded, recovered=recovered, summary=summary,
+                whatsapp_phone=prefs.get("whatsapp_phone"),
+                whatsapp_apikey=prefs.get("whatsapp_apikey"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "capability_alert_send_failed",
+                user_id=str(user.get("_id")), error=str(exc),
+            )
 
 
 async def _daily_digest_job() -> None:
@@ -706,6 +831,20 @@ def start_scheduler() -> None:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=120,
+    )
+
+    # 9. Capability watch — the same job for the data sources.
+    #    Runs on a longer interval than the pipeline that feeds it: it reads
+    #    records rather than providers, and a source that just degraded is
+    #    equally degraded ten minutes later. Nothing is fetched here.
+    scheduler.add_job(
+        _capability_watch_job,
+        trigger=IntervalTrigger(minutes=10),
+        id="capability_watch",
+        name="Data source health watch",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
     )
 
     scheduler.start()

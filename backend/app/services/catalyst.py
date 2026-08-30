@@ -108,6 +108,17 @@ def _volume_component(va: Optional[float]) -> Optional[float]:
     return clamp(0.4 + 0.1 * clamp(va, 0.0, 1.0))
 
 
+#: Sentiment `source` values that mean the headline count was never observed.
+#:
+#: The neutral stub `news.py` returns on these carries `article_count: 0`, which
+#: is indistinguishable at this layer from a real week in which Finnhub answered
+#: and there was genuinely nothing. The two must not be scored alike: silence
+#: that was *measured* is evidence, and silence that means "we never looked" is
+#: the absence of evidence. `no_articles` is deliberately NOT in this set — that
+#: is Finnhub answering with zero, which is the measured case.
+_UNOBSERVED_NEWS_SOURCES = frozenset({"no_api_key", "error", "exception"})
+
+
 def _news_component(article_count: Optional[int]) -> Optional[float]:
     """
     News flow as an attention proxy, independent of whether the news is good.
@@ -115,6 +126,9 @@ def _news_component(article_count: Optional[int]) -> Optional[float]:
     Direction is sentiment's job; this asks only whether the market is paying
     unusual attention. Three articles over the lookback is an ordinary week for
     a covered name, so that sits at neutral; ten or more is a story.
+
+    `None` means the count was not observed, and the caller drops the component
+    rather than scoring it — see `_UNOBSERVED_NEWS_SOURCES`.
     """
     if article_count is None:
         return None
@@ -175,8 +189,19 @@ def _earnings_component(next_earnings_date: Optional[str]) -> Optional[float]:
 
 
 def compute_catalyst_score(raw_doc: dict, feat_doc: dict) -> float:
+    """The catalyst score alone — see `compute_catalyst` for its coverage."""
+    return compute_catalyst(raw_doc, feat_doc)[0]
+
+
+def compute_catalyst(raw_doc: dict, feat_doc: dict) -> tuple[float, float]:
     """
     Derive a catalyst score in [0, 1] from volume, news flow and analyst upside.
+
+    Returns `(score, coverage)`. Coverage is the share of the factor's inputs
+    that were actually measured; it was computed here from the first version
+    and thrown away, which meant a score pulled toward neutral by *thin data*
+    and one pulled there by *mixed evidence* were the same number to every
+    reader. It is now reported so the two can be told apart.
 
     Returns 0.5 when nothing is available. Partial data lands nearer neutral
     than complete data would, so the score never claims more evidence than it
@@ -191,7 +216,15 @@ def compute_catalyst_score(raw_doc: dict, feat_doc: dict) -> float:
     if volume is not None:
         components.append((volume, _W_VOLUME))
 
-    news = _news_component(sentiment.get("article_count"))
+    # A missing Finnhub key must not read as a quiet tape. The neutral stub
+    # `news.py` returns carries `article_count: 0`, and 0 articles scores 0.40
+    # here — so an absent key did not merely neutralise the sentiment factor,
+    # it fed a mild negative into 30% of this one and dragged the composite
+    # down. An unconfigured provider is not a bearish fact about the company.
+    # Dropping the component instead lets coverage weighting pull the score
+    # toward 0.5, which is what "we do not know" is supposed to look like.
+    news_observed = sentiment.get("source") not in _UNOBSERVED_NEWS_SOURCES
+    news = _news_component(sentiment.get("article_count") if news_observed else None)
     if news is not None:
         components.append((news, _W_NEWS))
 
@@ -203,7 +236,7 @@ def compute_catalyst_score(raw_doc: dict, feat_doc: dict) -> float:
         components.append((upside, _W_UPSIDE))
 
     if not components:
-        return 0.5
+        return 0.5, 0.0
 
     # Coverage weighting — see _fundamental_score for the reasoning.
     coverage = sum(w for _, w in components)
@@ -227,4 +260,4 @@ def compute_catalyst_score(raw_doc: dict, feat_doc: dict) -> float:
         coverage=round(coverage, 4),
         score=round(score, 4),
     )
-    return score
+    return score, coverage
