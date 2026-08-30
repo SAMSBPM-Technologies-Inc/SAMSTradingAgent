@@ -1,8 +1,10 @@
 """
 GET /analyze?ticker=PLTR  — run or return cached analysis for a ticker
+GET /quote/{ticker}       — one live price, no pipeline
 GET /ticker/search?q=     — search ticker symbols via Finnhub
 GET /backtest             — backtest stub
 """
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -10,10 +12,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import get_settings
-from app.db import COLL_FEATURES, COLL_SIGNALS, get_db
+from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
 from app.dependencies import get_current_user
 from app.models.stock import (
-    AnalyzeResponse, FactorInput, ScoreBreakdown, SignalGate, SignalInputs,
+    AnalyzeResponse, FactorInput, QuoteResponse, ScoreBreakdown, SignalGate,
+    SignalInputs,
 )
 from app.services.pipeline import run_pipeline
 from app.services.risk_engine import RISK_MAX_FOR_BUY
@@ -26,6 +29,21 @@ router = APIRouter(tags=["analysis"])
 logger = get_logger(__name__)
 
 _CACHE_TTL_MINUTES = 30
+
+
+#: Query parameters that carry a credential. httpx renders the full request URL
+#: into `HTTPStatusError`, so `str(exc)` on a failed provider call writes the key
+#: straight into the log — where it outlives the process, gets shipped off the
+#: box, and ends up pasted into an issue.
+_SECRET_PARAMS = ("token", "apikey", "api_key")
+_SECRET_RE = re.compile(
+    r"(?i)\b(" + "|".join(_SECRET_PARAMS) + r")=[^&\s\"']+"
+)
+
+
+def _safe_error(exc: Exception) -> str:
+    """The exception message with any credential in it masked, not dropped."""
+    return _SECRET_RE.sub(r"\1=***", str(exc))
 
 
 @router.get("/ticker/search", summary="Search ticker symbols")
@@ -43,7 +61,7 @@ async def ticker_search(
             resp.raise_for_status()
             results = resp.json().get("result", [])
     except Exception as exc:
-        logger.warning("ticker_search_failed", query=q, error=str(exc))
+        logger.warning("ticker_search_failed", query=q, error=_safe_error(exc))
         raise HTTPException(status_code=502, detail="Ticker search temporarily unavailable")
 
     # Filter to US common stocks only and return clean shape
@@ -55,15 +73,149 @@ async def ticker_search(
     return filtered[:10]
 
 
+@router.get("/quote/{ticker}", response_model=QuoteResponse, summary="Live price for one ticker")
+async def quote(
+    ticker: str,
+    current_user: dict = Depends(get_current_user),
+) -> QuoteResponse:
+    """
+    One price, fetched now, costing one HTTP call.
+
+    This exists so the ticker page can separate two things that were welded
+    together: what the engine concluded, which is a stored judgement that may be
+    hours old and is still worth reading, and what the stock is worth, which is
+    only worth reading if it is current. Before this, seeing a fresh price meant
+    re-running the whole pipeline.
+
+    Not a health probe, and not a violation of the "observed, never probed" rule
+    in CLAUDE.md — that rule protects the Alpha Vantage daily cap and answers
+    "did this source build the score". This is one user-initiated Finnhub call
+    per ticker view, on a different budget, answering "what is it worth now".
+
+    It never raises. No key, an error, or a timeout falls back to the price the
+    pipeline last wrote and says so in `source`, because a quote provider being
+    down must not blank the page.
+    """
+    ticker = ticker.upper().strip()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+
+    settings = get_settings()
+    if settings.finnhub_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                resp = await client.get(
+                    "https://finnhub.io/api/v1/quote",
+                    params={"symbol": ticker, "token": settings.finnhub_api_key},
+                )
+                resp.raise_for_status()
+                q = resp.json()
+            # Finnhub answers an unknown symbol with a 200 and a body of zeros,
+            # so a zero price is "no such ticker", not a stock worth nothing.
+            price = _positive(q.get("c"))
+            if price is not None:
+                return QuoteResponse(
+                    ticker=ticker,
+                    price=price,
+                    day_change_pct=_number(q.get("dp")),
+                    open=_positive(q.get("o")),
+                    high=_positive(q.get("h")),
+                    low=_positive(q.get("l")),
+                    prev_close=_positive(q.get("pc")),
+                    as_of=_quote_time(q.get("t")),
+                    source="live",
+                )
+            note = "No live quote for this symbol"
+        except Exception as exc:
+            logger.warning("quote_failed", ticker=ticker, error=_safe_error(exc))
+            note = "Live quote unavailable"
+    else:
+        note = "No Finnhub API key configured"
+
+    return await _stored_quote(ticker, note)
+
+
+async def _stored_quote(ticker: str, note: str) -> QuoteResponse:
+    """The last price the pipeline wrote, labelled as such."""
+    db = await get_db()
+    raw = await db[COLL_RAW].find_one(
+        {"ticker": ticker},
+        {"current_price": 1, "day_change_pct": 1, "ingested_at": 1},
+    )
+    if not raw or raw.get("current_price") is None:
+        return QuoteResponse(ticker=ticker, source="unavailable", note=note)
+
+    as_of = raw.get("ingested_at")
+    if isinstance(as_of, datetime) and as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=timezone.utc)
+    return QuoteResponse(
+        ticker=ticker,
+        price=_number(raw.get("current_price")),
+        day_change_pct=_number(raw.get("day_change_pct")),
+        as_of=as_of if isinstance(as_of, datetime) else None,
+        source="stored",
+        note=note,
+    )
+
+
+def _number(v) -> Optional[float]:
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _positive(v) -> Optional[float]:
+    """A price of zero is Finnhub's way of saying it has no idea."""
+    n = _number(v)
+    return n if n is not None and n > 0 else None
+
+
+def _quote_time(v) -> Optional[datetime]:
+    """Finnhub's `t` is a Unix second stamp; 0 means it did not say."""
+    n = _number(v)
+    if not n:
+        return None
+    try:
+        return datetime.fromtimestamp(n, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
 @router.get("/analyze", response_model=AnalyzeResponse, summary="Analyse a stock ticker")
 async def analyze(
     ticker: str = Query(..., description="Stock ticker symbol, e.g. PLTR"),
     force_refresh: bool = Query(False),
+    stored_only: bool = Query(
+        False,
+        description="Return the stored analysis whatever its age, and never run the pipeline.",
+    ),
     current_user: dict = Depends(get_current_user),
 ) -> AnalyzeResponse:
+    """
+    Three modes, and the difference between them is what a caller is willing to
+    wait for.
+
+    `stored_only` reads the last analysis and returns it at any age. It is the
+    one mode that cannot start a pipeline run, which is what makes it safe to
+    call on every ticker click: a full run is yfinance, Finnhub, FRED,
+    fundamentals and an LLM call, and someone glancing at a name did not ask for
+    any of that. Nothing stored is a 404 the client renders as an empty state,
+    not an error — the same GET-reads-stored / explicit-rebuild split
+    `/research/{ticker}` already draws.
+
+    `force_refresh` is the explicit run. Plain `/analyze` keeps its original
+    behaviour — stored if fresh, rebuild if not — because the report export and
+    the watchlist warm-up still want it.
+    """
     ticker = ticker.upper().strip()
     if not ticker:
         raise HTTPException(status_code=400, detail="ticker is required")
+    if stored_only and force_refresh:
+        raise HTTPException(
+            status_code=400,
+            detail="stored_only and force_refresh ask for opposite things",
+        )
 
     db = await get_db()
 
@@ -71,18 +223,27 @@ async def analyze(
         cached = await db[COLL_SIGNALS].find_one({"ticker": ticker})
         if cached:
             generated_at = cached.get("generated_at")
+            # Age only decides anything when the caller is willing to rebuild.
+            if stored_only:
+                logger.info("stored_read", ticker=ticker)
+                return await _personalized_response(cached, current_user, db)
             if isinstance(generated_at, datetime):
                 age = datetime.now(tz=timezone.utc) - generated_at.replace(tzinfo=timezone.utc)
                 if age < timedelta(minutes=_CACHE_TTL_MINUTES):
                     logger.info("cache_hit", ticker=ticker, age_seconds=age.seconds)
                     return await _personalized_response(cached, current_user, db)
+        if stored_only:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No stored analysis for {ticker}",
+            )
 
     try:
         signal_doc = await run_pipeline(ticker)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
-        logger.error("analyze_error", ticker=ticker, error=str(exc))
+        logger.error("analyze_error", ticker=ticker, error=_safe_error(exc))
         raise HTTPException(status_code=500, detail=f"Analysis failed: {exc}")
 
     return await _personalized_response(signal_doc, current_user, db)

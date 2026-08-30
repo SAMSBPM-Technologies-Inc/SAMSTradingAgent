@@ -8,8 +8,10 @@ import {
   RefreshCw, Share2, Shield, Target, TrendingDown, TrendingUp, Users, Zap,
 } from 'lucide-react-native'
 import Svg, { Path } from 'react-native-svg'
-import { analyzeApi } from '../../src/lib/api'
-import type { AnalyzeResponse, AlternativeData, SignalInputs } from '../../src/types'
+import { analyzeApi, tradingApi } from '../../src/lib/api'
+import type {
+  AnalyzeResponse, AlternativeData, Quote, SignalInputs, TradeRecord,
+} from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import ConvictionBadge from '../../src/components/ConvictionBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
@@ -18,6 +20,7 @@ import ResearchPanel from '../../src/components/ResearchPanel'
 import OrderTicket from '../../src/components/OrderTicket'
 import PriceChart from '../../src/components/PriceChart'
 import { FactorBreakdown, RiskPanel } from '../../src/components/ScorePanels'
+import ActivityList from '../../src/components/ActivityList'
 import { useNow } from '../../src/lib/use-refresh'
 import { usePalette, type Palette } from '../../src/lib/palette'
 
@@ -363,13 +366,121 @@ function stateNote(inputs: SignalInputs | null | undefined, key: string): string
   return ''
 }
 
+/**
+ * The price, and where it came from.
+ *
+ * Always the quote's, never the analysis's. `data.current_price` is whatever
+ * the price was when the pipeline last ran, which on a stored read is by
+ * definition not now — and the point of separating the two steps was that a
+ * stale verdict should not drag a stale price along with it.
+ *
+ * A price that is not live says so. A stored figure shown unlabelled is the one
+ * number on this screen someone would act on without checking.
+ */
+function LivePrice({ quote, fallback }: { quote: Quote | null; fallback?: AnalyzeResponse | null }) {
+  const C = usePalette()
+  const price = quote?.price ?? fallback?.current_price ?? null
+  const chg = quote?.price != null ? quote.day_change_pct : fallback?.day_change_pct
+
+  return (
+    <View>
+      <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8 }}>
+        <Text style={{ fontSize: 22, fontWeight: '700', color: C.fg }}>
+          {price != null ? `$${price.toFixed(2)}` : '—'}
+        </Text>
+        {chg != null && (
+          <Text style={{ fontSize: 13, fontWeight: '600', color: chg >= 0 ? C.green : C.red }}>
+            {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
+          </Text>
+        )}
+      </View>
+      <Text style={{ fontSize: 10, color: C.fgMuted, marginTop: 2 }}>
+        {quote?.source === 'live'
+          ? 'Live'
+          : quote?.source === 'stored'
+            ? `Last recorded price — ${quote.note ?? 'no live quote'}`
+            : quote?.source === 'unavailable'
+              ? quote.note ?? 'No price available'
+              : 'Fetching price…'}
+      </Text>
+    </View>
+  )
+}
+
+/** The only control on this client that starts a pipeline run. */
+function RunAnalysisButton({ analysing, hasData, onPress }: {
+  analysing: boolean
+  hasData: boolean
+  onPress: () => void
+}) {
+  const C = usePalette()
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={analysing}
+      accessibilityRole="button"
+      style={({ pressed }) => ({
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+        marginTop: 12, paddingHorizontal: 14, paddingVertical: 11, borderRadius: 9,
+        backgroundColor: C.brand, opacity: analysing ? 0.5 : pressed ? 0.8 : 1,
+      })}
+    >
+      {analysing ? <LoadingSpinner size="sm" /> : <RefreshCw size={14} color="#fff" />}
+      <Text style={{ fontSize: 13, fontWeight: '700', color: '#fff' }}>
+        {analysing ? 'Analysing…' : hasData ? 'Run full analysis again' : 'Run full analysis'}
+      </Text>
+    </Pressable>
+  )
+}
+
+/**
+ * What has been traded on this name.
+ *
+ * The web client puts this in the side rail beside the analysis; a phone has no
+ * rail, so it is a section. Same content either way: what was bought, sold,
+ * proposed or refused on *this* ticker, which is the context that turns a
+ * verdict into a decision.
+ */
+function TickerTransactions({ ticker, orders, onChanged }: {
+  ticker: string
+  orders: TradeRecord[]
+  onChanged: () => void
+}) {
+  const C = usePalette()
+  return (
+    <View style={{ marginTop: 18, gap: 10 }}>
+      <Text style={{
+        fontSize: 11, fontWeight: '700', color: C.fgMuted,
+        textTransform: 'uppercase', letterSpacing: 1,
+      }}>
+        {`Transactions — ${ticker}`}
+      </Text>
+      <ActivityList
+        orders={orders}
+        onProposalsChanged={onChanged}
+        showTicker={false}
+        emptyNote={`Nothing has been traded on ${ticker}.`}
+      />
+    </View>
+  )
+}
+
 export default function TickerScreen() {
   const C = usePalette()
   const card = cardStyle(C)
   const { symbol } = useLocalSearchParams<{ symbol: string }>()
+  const ticker = symbol?.toUpperCase() ?? ''
   const [data, setData] = useState<AnalyzeResponse | null>(null)
+  const [quote, setQuote] = useState<Quote | null>(null)
+  const [orders, setOrders] = useState<TradeRecord[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  // Separate from `isLoading` on purpose. Reading the stored analysis is a
+  // Mongo lookup; running one is the whole pipeline plus an analyst call. Only
+  // the second is something the user asked for.
+  const [analysing, setAnalysing] = useState(false)
+  // Nothing has ever been analysed for this ticker. Not an error — an empty
+  // state with a button.
+  const [neverAnalysed, setNeverAnalysed] = useState(false)
 
   // Ticks so the age below stays true while the screen sits in the background.
   // The threshold is the server's own `_CACHE_TTL_MINUTES`: past it `/analyze`
@@ -378,24 +489,79 @@ export default function TickerScreen() {
   const now = useNow()
   const [error, setError] = useState<string | null>(null)
 
-  const fetchData = useCallback(async (force = false) => {
-    if (!symbol) return
-    if (force) setIsRefreshing(true)
-    else setIsLoading(true)
+  /**
+   * Read what is stored. Never runs the pipeline.
+   *
+   * Opening a ticker used to call plain `/analyze`, which rebuilds anything
+   * older than thirty minutes — yfinance, Finnhub, FRED, fundamentals and a
+   * Claude call. On a phone, on mobile data, that is a blank screen for tens of
+   * seconds of work nobody asked for.
+   */
+  const loadStored = useCallback(async () => {
+    if (!ticker) return
+    setIsLoading(true)
     setError(null)
+    setNeverAnalysed(false)
     try {
-      const res = await analyzeApi.get(symbol.toUpperCase(), force)
+      const res = await analyzeApi.get(ticker)
       setData(res.data)
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to load analysis.')
+      const status = (err as { response?: { status?: number } })?.response?.status
+      setData(null)
+      if (status === 404) setNeverAnalysed(true)
+      else {
+        const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        setError(msg ?? 'Failed to load the stored analysis.')
+      }
     } finally {
       setIsLoading(false)
-      setIsRefreshing(false)
     }
-  }, [symbol])
+  }, [ticker])
 
-  useEffect(() => { fetchData(false) }, [fetchData])
+  /** The live price, independently of the analysis. Cheap, and always current. */
+  const loadQuote = useCallback(async () => {
+    if (!ticker) return
+    try {
+      setQuote((await analyzeApi.quote(ticker)).data)
+    } catch {
+      setQuote(null)
+    }
+  }, [ticker])
+
+  /** This ticker's own audit trail, for the section under the analysis. */
+  const loadOrders = useCallback(async () => {
+    if (!ticker) return
+    try {
+      setOrders((await tradingApi.getOrders(ticker, 100)).data)
+    } catch {
+      setOrders([])
+    }
+  }, [ticker])
+
+  /** The explicit run — the only path on this client that starts a pipeline. */
+  const runAnalysis = useCallback(async () => {
+    if (!ticker) return
+    setAnalysing(true)
+    setError(null)
+    try {
+      const res = await analyzeApi.run(ticker)
+      setData(res.data)
+      setNeverAnalysed(false)
+      void loadQuote()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? 'The analysis could not be completed.')
+    } finally {
+      setAnalysing(false)
+    }
+  }, [ticker, loadQuote])
+
+  // All three start together. None of them can run the pipeline.
+  useEffect(() => {
+    void loadStored()
+    void loadQuote()
+    void loadOrders()
+  }, [loadStored, loadQuote, loadOrders])
 
   const handleShare = async () => {
     if (!data) return
@@ -413,13 +579,13 @@ export default function TickerScreen() {
     )
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <View style={{ flex: 1, backgroundColor: C.bg, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16 }}>
         <AlertCircle size={40} color={C.red} />
         <Text style={{ fontSize: 14, color: C.fgMuted, textAlign: 'center' }}>{error}</Text>
         <Pressable
-          onPress={() => fetchData(false)}
+          onPress={() => void loadStored()}
           style={{ paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, borderWidth: 1, borderColor: C.border }}
         >
           <Text style={{ fontSize: 14, fontWeight: '600', color: C.fg }}>Try again</Text>
@@ -428,7 +594,41 @@ export default function TickerScreen() {
     )
   }
 
-  if (!data) return null
+  /**
+   * A name with no stored verdict is still a page worth painting.
+   *
+   * That is the whole of the two-step change: the price is live and the
+   * transaction history is real, so the screen shows those and offers the
+   * analysis as a button rather than starting one on arrival.
+   */
+  if (!data) {
+    return (
+      <ScrollView
+        style={{ flex: 1, backgroundColor: C.bg }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: 100 }}
+      >
+        <View style={card}>
+          <Text style={{ fontSize: 36, fontWeight: '300', color: C.fg, marginBottom: 4 }}>
+            {ticker}
+          </Text>
+          <LivePrice quote={quote} />
+          <Text style={{ fontSize: 12, color: C.fgMuted, marginTop: 12, lineHeight: 17 }}>
+            {neverAnalysed
+              ? `No in-depth analysis has been run for ${ticker}. Scoring the name means fetching prices, news, fundamentals and macro data and putting an analyst over the result — tens of seconds of work, so it happens when you ask for it.`
+              : (error ?? 'The stored analysis could not be read.')}
+          </Text>
+          <RunAnalysisButton analysing={analysing} hasData={false} onPress={() => void runAnalysis()} />
+        </View>
+
+        <TickerTransactions
+          ticker={ticker}
+          orders={orders}
+          onChanged={() => { void loadOrders() }}
+        />
+        <Disclaimer />
+      </ScrollView>
+    )
+  }
 
   /** Mirrors `_CACHE_TTL_MINUTES` in backend/app/routes/analysis.py. */
   const generatedMs = Date.parse(data.generated_at)
@@ -449,21 +649,9 @@ export default function TickerScreen() {
               <Text style={{ fontSize: 36, fontWeight: '300', color: C.fg, marginBottom: 4 }}>
                 {data.ticker}
               </Text>
-              {data.current_price != null && (
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-                  <Text style={{ fontSize: 22, fontWeight: '700', color: C.fg }}>
-                    ${data.current_price.toFixed(2)}
-                  </Text>
-                  {data.day_change_pct != null && (
-                    <Text style={{
-                      fontSize: 13, fontWeight: '600',
-                      color: data.day_change_pct >= 0 ? C.green : C.red,
-                    }}>
-                      {data.day_change_pct >= 0 ? '+' : ''}{data.day_change_pct.toFixed(2)}%
-                    </Text>
-                  )}
-                </View>
-              )}
+              <View style={{ marginBottom: 8 }}>
+                <LivePrice quote={quote} fallback={data} />
+              </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <SignalBadge signal={data.signal} size="lg" />
                 {data.conviction && <ConvictionBadge conviction={data.conviction} size="lg" />}
@@ -486,8 +674,12 @@ export default function TickerScreen() {
           }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
               <Calendar size={12} color={C.fgMuted} />
+              {/* Named and dated outright rather than left as a bare
+                  timestamp. This is now the one line that says whether the
+                  verdict above is from ten minutes ago or from Tuesday, because
+                  nothing on this screen re-runs on its own any more. */}
               <Text style={{ fontSize: 10, color: C.fgMuted }}>
-                {new Date(data.generated_at).toLocaleString()}
+                Last in-depth analysis {new Date(data.generated_at).toLocaleString()}
               </Text>
               {/* Past the server's own cache window this analysis is older than
                   anything `/analyze` would still serve, so say so rather than
@@ -506,21 +698,6 @@ export default function TickerScreen() {
             </View>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Pressable
-                onPress={() => fetchData(true)}
-                disabled={isRefreshing}
-                style={({ pressed }) => ({
-                  flexDirection: 'row', alignItems: 'center', gap: 5,
-                  paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8,
-                  backgroundColor: C.surface, borderWidth: 1, borderColor: C.border,
-                  opacity: pressed ? 0.7 : 1,
-                })}
-              >
-                {isRefreshing ? <LoadingSpinner size="sm" /> : <RefreshCw size={13} color={C.fgMuted} />}
-                <Text style={{ fontSize: 12, fontWeight: '600', color: C.fgMuted }}>
-                  {isRefreshing ? 'Refreshing…' : 'Refresh'}
-                </Text>
-              </Pressable>
-              <Pressable
                 onPress={handleShare}
                 style={({ pressed }) => ({
                   flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -534,6 +711,11 @@ export default function TickerScreen() {
               </Pressable>
             </View>
           </View>
+
+          <RunAnalysisButton analysing={analysing} hasData onPress={() => void runAnalysis()} />
+          {error && (
+            <Text style={{ fontSize: 11, color: C.red, marginTop: 8, lineHeight: 16 }}>{error}</Text>
+          )}
         </View>
 
         {/* Stats grid */}
@@ -754,6 +936,13 @@ export default function TickerScreen() {
             and development use only. Production requires a commercial data provider.
           </Text>
         </View>
+
+        <TickerTransactions
+          ticker={ticker}
+          orders={orders}
+          onChanged={() => { void loadOrders() }}
+        />
+
         <Disclaimer />
       </ScrollView>
     </View>

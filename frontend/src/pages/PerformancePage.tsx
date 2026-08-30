@@ -763,17 +763,20 @@ export default function PerformancePage() {
             <div className="grid gap-3 sm:grid-cols-3">
               <TradeStatsBlock
                 title="Agent"
-                note="Placed unattended from its own signals — the only clean read of the engine."
+                note="The tool decided and acted without you — the only clean read of the engine."
                 stats={trades.signal_driven}
               />
+              {/* "Semi" here and "approved" in the API are the same bucket. The
+                  label follows the activity table's vocabulary; the key follows
+                  the backend's. See lib/trade-source.ts. */}
               <TradeStatsBlock
-                title="Approved"
-                note="The agent proposed, you accepted. Biased by what you declined — measures the pair."
+                title="Semi"
+                note="The tool recommended it, you actioned it. Biased by what you declined — measures the pair."
                 stats={trades.approved}
               />
               <TradeStatsBlock
                 title="Manual"
-                note="You chose the ticker. Not evidence about the signals."
+                note="You chose the ticker, without a tool recommendation. Not evidence about the signals."
                 stats={trades.manual}
               />
             </div>

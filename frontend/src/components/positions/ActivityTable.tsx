@@ -4,26 +4,31 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { Filter as FilterIcon, Inbox } from 'lucide-react'
 import { dateKey, formatDate, formatTime } from '../../lib/format'
-import { SOURCE_LABEL, tradeSource, type TradeSource } from '../../lib/trade-source'
+import { SOURCE_LABEL, displaySource, type TradeSource } from '../../lib/trade-source'
 import { exitReasonLabel } from '../../lib/exit-reason'
 import { useIsCompact } from '../../lib/use-media-query'
+import { ProposalRowActions } from '../trade/ProposalActions'
 import { RecordCard } from './RecordCard'
 import type { TradeRecord } from '../../types'
 
 /**
- * Every order the agent or the user ever sent, including the refusals.
+ * Activity — every action taken on this account, pending ones first.
  *
- * Lifted out of OrdersPage when the 1.7 redesign merged that screen into
- * Positions. The tab-per-status structure and the funnel column filters are
- * carried over unchanged — they shipped in 1.6.2/1.6.3 and a redesign is not a
- * reason to make someone re-learn a table they just learned.
+ * This was two tables. "Agent positions" listed the agent's currently open
+ * entries and "Order history" listed everything else, which split one audit
+ * trail along a line that answered no question anybody asks: the interesting
+ * question is *what has been happening*, and a proposal waiting on you, a guard
+ * refusing an order, and a filled entry are all answers to it.
  *
- * One thing did change: source classification now comes from the shared
- * `tradeSource` helper. The copy that lived here treated *any* non-MANUAL,
- * non-PROPOSAL_APPROVED signal_type as agent-placed, while the backend counts
- * only BUY/SELL/EXIT_ALERT as agent and everything else as manual — so an
- * unusual signal_type was labelled "Agent" on this table and folded into
- * `manual` on the performance page. Same record, two answers.
+ * So: one table, grouped by what a status means rather than by the status
+ * itself, with the proposal queue's Approve/Reject brought into the row. A row
+ * opens the transaction, which carries the full record and the rest of that
+ * ticker's history.
+ *
+ * The funnel filters, the compact card fallback and the status pills are
+ * carried over from the order history table unchanged — they shipped in
+ * 1.6.2/1.6.3 and a restructure is not a reason to make someone re-learn a
+ * table they already know.
  */
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
@@ -36,9 +41,9 @@ function money(v: number | null | undefined): string {
  * The same id that identifies this trade in every email, Slack and WhatsApp
  * message about it — see notifier.py's "Reference" row. Shown short here
  * because a table row has no room for the full 24-character id; the full
- * value is still one hover (desktop) or the record itself away via `title`.
+ * value is still one hover (desktop) or the transaction page away.
  */
-function shortRef(id: string): string {
+export function shortRef(id: string): string {
   return id.slice(-8).toUpperCase()
 }
 
@@ -58,7 +63,7 @@ function shortRef(id: string): string {
  * three facts about one row, and running them together reads as one sentence
  * that contradicts itself.
  */
-function OrderWhy({ order }: { order: TradeRecord }) {
+export function OrderWhy({ order }: { order: TradeRecord }) {
   const exit = exitReasonLabel(order.exit_reason)
   const lines = [order.reason, order.entry_reason, exit].filter(Boolean) as string[]
   if (lines.length === 0) return null
@@ -113,30 +118,44 @@ export function StatusPill({ status }: { status: string }) {
   )
 }
 
-function SourceLabel({ signalType }: { signalType?: string | null }) {
+function SourceLabel({ order }: { order: TradeRecord }) {
   return (
     <span className="text-[0.65rem] text-[var(--color-fg-muted)]">
-      {signalType ? SOURCE_LABEL[tradeSource(signalType)] : '—'}
+      {SOURCE_LABEL[displaySource(order)]}
     </span>
   )
 }
 
-// One status per tab rather than one "All" table with a status filter, because
-// the ten possible statuses (see TradeStatus in the backend) span three
-// different questions — is it open, is it a proposal awaiting you, is it a
-// guard's refusal — and a single sorted list buries that distinction. Filled
-// is the default: it's the tab that answers "what did the agent actually do".
-const STATUS_TABS: { key: string; label: string }[] = [
-  { key: 'FILLED', label: 'Filled' },
-  { key: 'PARTIAL', label: 'Partial' },
-  { key: 'PENDING', label: 'Pending' },
-  { key: 'PROPOSED', label: 'Proposed' },
-  { key: 'CLOSED', label: 'Closed' },
-  { key: 'CANCELLED', label: 'Cancelled' },
-  { key: 'SKIPPED', label: 'Skipped' },
-  { key: 'DECLINED', label: 'Declined' },
-  { key: 'REJECTED', label: 'Rejected' },
-  { key: 'UNRECONCILED', label: 'Unreconciled' },
+function scoreOf(o: TradeRecord): string {
+  return o.signal_score != null ? String(Math.round(o.signal_score * 100)) : '—'
+}
+
+/**
+ * Groups, not statuses.
+ *
+ * There are ten statuses and they answer three different questions — is this
+ * waiting on me, is it live, is it over — so one tab per status buried the
+ * distinction under a row of near-identical chips. These are the questions.
+ *
+ * `Waiting on you` leads and is the default whenever it has anything in it:
+ * it is the only group on the screen where nothing happens until the reader
+ * acts.
+ */
+export interface ActivityGroup {
+  key: string
+  label: string
+  statuses: string[] | null   // null = everything
+  /** Hidden at zero. Waiting-on-you and Active always show. */
+  alwaysShow?: boolean
+}
+
+const GROUPS: ActivityGroup[] = [
+  { key: 'waiting', label: 'Waiting on you', statuses: ['PROPOSED'], alwaysShow: true },
+  { key: 'active', label: 'Active', statuses: ['PENDING', 'PARTIAL', 'FILLED'], alwaysShow: true },
+  { key: 'closed', label: 'Closed', statuses: ['CLOSED'] },
+  { key: 'not_taken', label: 'Not taken', statuses: ['SKIPPED', 'DECLINED', 'CANCELLED', 'REJECTED'] },
+  { key: 'unreconciled', label: 'Unreconciled', statuses: ['UNRECONCILED'] },
+  { key: 'all', label: 'All', statuses: null, alwaysShow: true },
 ]
 
 interface OrderFilters {
@@ -176,7 +195,7 @@ function matchesOrderFilters(o: TradeRecord, f: OrderFilters): boolean {
   if (f.pnl === 'gain' && !(o.pnl != null && o.pnl > 0.005)) return false
   if (f.pnl === 'loss' && !(o.pnl != null && o.pnl < -0.005)) return false
 
-  if (f.source && tradeSource(o.signal_type) !== f.source) return false
+  if (f.source && displaySource(o) !== f.source) return false
 
   return true
 }
@@ -287,9 +306,26 @@ function ColumnFilterMenu({
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
+export default function ActivityTable({
+  orders,
+  onProposalsChanged,
+  /** Set on the transaction page, where the surrounding context is one name. */
+  scopedTicker,
+  /** The row the reader came from, marked so it is findable in its own history. */
+  highlightId,
+  /** Ticker links are pointless on a single-ticker list. */
+  showTicker = true,
+  emptyNote,
+}: {
+  orders: TradeRecord[]
+  onProposalsChanged: () => void
+  scopedTicker?: string
+  highlightId?: string
+  showTicker?: boolean
+  emptyNote?: string
+}) {
   const navigate = useNavigate()
-  const [activeStatus, setActiveStatus] = useState<string>('FILLED')
+  const [activeGroup, setActiveGroup] = useState<string | null>(null)
   const [orderFilters, setOrderFilters] = useState<OrderFilters>(EMPTY_ORDER_FILTERS)
 
   const setOrderFilter = (key: keyof OrderFilters, value: string) =>
@@ -298,28 +334,44 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
   const clearOrderFilters = () => setOrderFilters(EMPTY_ORDER_FILTERS)
   const compact = useIsCompact()
 
-  // Tab counts reflect the full history regardless of the column filters, so
-  // switching tabs never hides a status because a filter from a different one
-  // is still applied. Filled always shows even at zero — it's the default.
-  const statusCounts = useMemo(() => {
+  const openTransaction = (id: string) => navigate(`/transaction/${id}`)
+
+  // Group counts reflect the full history regardless of the column filters, so
+  // switching groups never hides one because a filter from a different group is
+  // still applied.
+  const groupCounts = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const o of orders) counts[o.status] = (counts[o.status] ?? 0) + 1
+    for (const g of GROUPS) {
+      counts[g.key] = g.statuses == null
+        ? orders.length
+        : orders.filter((o) => g.statuses!.includes(o.status)).length
+    }
     return counts
   }, [orders])
-  const visibleTabs = STATUS_TABS.filter((t) => t.key === 'FILLED' || (statusCounts[t.key] ?? 0) > 0)
-  const activeTabLabel = STATUS_TABS.find((t) => t.key === activeStatus)?.label ?? activeStatus
+
+  const visibleGroups = GROUPS.filter((g) => g.alwaysShow || (groupCounts[g.key] ?? 0) > 0)
+
+  // Waiting-on-you wins the default whenever there is anything in it — it is
+  // the only group where nothing moves until the reader acts. Chosen on each
+  // render rather than stored, so a proposal arriving on the 60-second poll
+  // surfaces itself; an explicit click pins the choice.
+  const defaultGroup = (groupCounts.waiting ?? 0) > 0 ? 'waiting' : 'active'
+  const group = activeGroup ?? defaultGroup
+  const activeDef = GROUPS.find((g) => g.key === group) ?? GROUPS[1]
 
   const sideOptions = useMemo(
     () => Array.from(new Set(orders.map((o) => o.action))).sort(),
     [orders],
   )
-  const ordersInTab = useMemo(
-    () => orders.filter((o) => o.status === activeStatus),
-    [orders, activeStatus],
+  const ordersInGroup = useMemo(
+    () => (activeDef.statuses == null
+      ? orders
+      : orders.filter((o) => activeDef.statuses!.includes(o.status))),
+    [orders, activeDef],
   )
   const filteredOrders = useMemo(
-    () => ordersInTab.filter((o) => matchesOrderFilters(o, orderFilters)),
-    [ordersInTab, orderFilters],
+    () => ordersInGroup.filter((o) => matchesOrderFilters(o, orderFilters)),
+    [ordersInGroup, orderFilters],
   )
 
   const dateFilterActive = orderFilters.dateFrom !== '' || orderFilters.dateTo !== ''
@@ -332,35 +384,47 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                       bg-[var(--color-surface)] p-10 text-center">
         <Inbox className="h-8 w-8 text-[var(--color-fg-muted)]" aria-hidden="true" />
         <p className="text-sm text-[var(--color-fg-muted)]">
-          No orders yet. Open a ticker on Trade and use <strong>Buy</strong>, or let the
-          agent propose one.
+          {emptyNote ?? (scopedTicker
+            ? `No transactions recorded for ${scopedTicker}.`
+            : 'No activity yet. Open a ticker and use Buy, or let the agent propose one.')}
         </p>
       </div>
     )
   }
 
+  const rowActions = (o: TradeRecord) =>
+    o.status === 'PROPOSED' ? (
+      <ProposalRowActions
+        id={o.id}
+        ticker={o.ticker}
+        isPaper={o.is_paper}
+        onResolved={onProposalsChanged}
+        onNeedsConfirmation={() => openTransaction(o.id)}
+      />
+    ) : null
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div role="tablist" aria-label="Order status" className="flex items-center gap-1 flex-wrap">
-          {visibleTabs.map((t) => (
+        <div role="tablist" aria-label="Activity" className="flex items-center gap-1 flex-wrap">
+          {visibleGroups.map((g) => (
             <button
-              key={t.key}
+              key={g.key}
               role="tab"
-              id={`order-tab-${t.key}`}
-              aria-selected={activeStatus === t.key}
-              aria-controls="order-history-panel"
-              onClick={() => setActiveStatus(t.key)}
+              id={`activity-tab-${g.key}`}
+              aria-selected={group === g.key}
+              aria-controls="activity-panel"
+              onClick={() => setActiveGroup(g.key)}
               className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors
                 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
-                activeStatus === t.key
+                group === g.key
                   ? 'bg-brand-500 text-white'
                   : 'bg-[var(--color-border)]/50 text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]'
               }`}
             >
-              {t.label}
-              <span className={`ml-1.5 num ${activeStatus === t.key ? 'opacity-80' : 'opacity-60'}`}>
-                {statusCounts[t.key] ?? 0}
+              {g.label}
+              <span className={`ml-1.5 num ${group === g.key ? 'opacity-80' : 'opacity-60'}`}>
+                {groupCounts[g.key] ?? 0}
               </span>
             </button>
           ))}
@@ -376,39 +440,48 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
         )}
       </div>
 
-      {/* Below md this table is 48rem wide in a 356px column — Price, P&L,
+      {/* Below md this table is wider than the column it sits in — Price, P&L,
           Source and Status all fall off the right edge with nothing to say they
-          are there. Cards carry the same eight fields vertically. Rendered
-          instead of the table, never alongside it. */}
+          are there. Cards carry the same fields vertically. Rendered instead of
+          the table, never alongside it. */}
       {compact ? (
         <div
-          id="order-history-panel"
+          id="activity-panel"
           role="tabpanel"
-          aria-labelledby={`order-tab-${activeStatus}`}
+          aria-labelledby={`activity-tab-${group}`}
           className="overflow-hidden rounded-lg border border-[var(--color-border)]
                      bg-[var(--color-surface)]"
         >
           {filteredOrders.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
               {hasActiveFilters
-                ? 'No orders match these filters.'
-                : `No ${activeTabLabel.toLowerCase()} orders.`}
+                ? 'No transactions match these filters.'
+                : `Nothing under ${activeDef.label.toLowerCase()}.`}
             </p>
           ) : (
             filteredOrders.map((o) => (
               <RecordCard
                 key={o.id}
-                title={o.ticker}
-                onTitleClick={() => navigate(`/ticker/${o.ticker}`)}
+                title={showTicker ? o.ticker : shortRef(o.id)}
+                onTitleClick={() => openTransaction(o.id)}
                 badges={
                   <>
                     <StatusPill status={o.status} />
-                    <SourceLabel signalType={o.signal_type} />
+                    <SourceLabel order={o} />
+                    {o.id === highlightId && (
+                      <span className="rounded bg-brand-500/10 px-1.5 py-0.5 text-[10px] text-brand-500">
+                        This one
+                      </span>
+                    )}
                   </>
                 }
                 fields={[
                   {
-                    label: 'Date (ET)',
+                    label: 'Transaction',
+                    value: <span className="font-mono" title={o.id}>{shortRef(o.id)}</span>,
+                  },
+                  {
+                    label: 'Time of action',
                     value: (
                       <>
                         {formatDate(o.opened_at)}{' '}
@@ -418,39 +491,38 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                       </>
                     ),
                   },
-                  { label: 'Side', value: o.action },
-                  { label: 'Qty', value: o.qty || '—' },
+                  { label: 'Action', value: o.action },
+                  { label: 'Qty', value: (o.filled_qty ?? o.qty) || '—' },
                   { label: 'Price', value: money(o.entry_price ?? o.limit_price ?? null) },
+                  { label: 'Score', value: scoreOf(o) },
                   { label: 'P&L', value: <Pnl value={o.pnl} /> },
-                  {
-                    label: 'Ref',
-                    value: <span className="font-mono" title={o.id}>{shortRef(o.id)}</span>,
-                  },
                 ]}
                 note={<OrderWhy order={o} />}
+                action={rowActions(o)}
               />
             ))
           )}
         </div>
       ) : (
       <div
-        id="order-history-panel"
+        id="activity-panel"
         role="tabpanel"
-        aria-labelledby={`order-tab-${activeStatus}`}
+        aria-labelledby={`activity-tab-${group}`}
         className="overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]"
       >
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[62rem]">
+          <table className="w-full text-sm min-w-[68rem]">
             <thead>
-              {/* Status has no funnel of its own — the tab above already is that filter. */}
+              {/* Status has no funnel of its own — the group above already is
+                  that filter. */}
               <tr className="border-b border-[var(--color-border)] text-[10.5px]
                              uppercase tracking-widest text-[var(--color-fg-muted)]">
                 <th scope="col" className="text-left font-semibold px-3 py-2.5" title="Same id as in email/Slack/WhatsApp for this trade">
-                  Ref
+                  Transaction
                 </th>
                 <th scope="col" className="text-left font-semibold px-4 py-2.5">
                   <div className="flex items-center gap-1">
-                    <span>Date (ET)</span>
+                    <span>Time of action</span>
                     <ColumnFilterMenu label="Filter by date" active={dateFilterActive}>
                       <label className={filterLabelCls}>
                         From
@@ -482,36 +554,38 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                     </ColumnFilterMenu>
                   </div>
                 </th>
+                {showTicker && (
+                  <th scope="col" className="text-left font-semibold px-3 py-2.5">
+                    <div className="flex items-center gap-1">
+                      <span>Ticker</span>
+                      <ColumnFilterMenu label="Filter by ticker" active={orderFilters.ticker !== ''}>
+                        <input
+                          type="text"
+                          aria-label="Ticker"
+                          placeholder="Ticker"
+                          value={orderFilters.ticker}
+                          onChange={(e) => setOrderFilter('ticker', e.target.value)}
+                          className={filterInputCls}
+                        />
+                        {orderFilters.ticker !== '' && (
+                          <button
+                            onClick={() => setOrderFilter('ticker', '')}
+                            className="self-start text-[11px] text-[var(--color-fg-muted)]
+                                       hover:text-[var(--color-fg)] underline underline-offset-2"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </ColumnFilterMenu>
+                    </div>
+                  </th>
+                )}
                 <th scope="col" className="text-left font-semibold px-3 py-2.5">
                   <div className="flex items-center gap-1">
-                    <span>Ticker</span>
-                    <ColumnFilterMenu label="Filter by ticker" active={orderFilters.ticker !== ''}>
-                      <input
-                        type="text"
-                        aria-label="Ticker"
-                        placeholder="Ticker"
-                        value={orderFilters.ticker}
-                        onChange={(e) => setOrderFilter('ticker', e.target.value)}
-                        className={filterInputCls}
-                      />
-                      {orderFilters.ticker !== '' && (
-                        <button
-                          onClick={() => setOrderFilter('ticker', '')}
-                          className="self-start text-[11px] text-[var(--color-fg-muted)]
-                                     hover:text-[var(--color-fg)] underline underline-offset-2"
-                        >
-                          Clear
-                        </button>
-                      )}
-                    </ColumnFilterMenu>
-                  </div>
-                </th>
-                <th scope="col" className="text-left font-semibold px-3 py-2.5">
-                  <div className="flex items-center gap-1">
-                    <span>Side</span>
-                    <ColumnFilterMenu label="Filter by side" active={orderFilters.side !== ''}>
+                    <span>Action</span>
+                    <ColumnFilterMenu label="Filter by action" active={orderFilters.side !== ''}>
                       <select
-                        aria-label="Side"
+                        aria-label="Action"
                         value={orderFilters.side}
                         onChange={(e) => setOrderFilter('side', e.target.value)}
                         className={filterInputCls}
@@ -598,6 +672,12 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                     <span>Price</span>
                   </div>
                 </th>
+                {/* The score the agent was working from when it acted. A dash
+                    means nobody scored it — a manual order has no signal behind
+                    it, and saying 0 would read as a terrible one. */}
+                <th scope="col" className="text-right font-semibold px-3 py-2.5" title="Composite score at the time of the action, out of 100">
+                  Score
+                </th>
                 <th scope="col" className="text-right font-semibold px-3 py-2.5">
                   <div className="flex items-center justify-end gap-1">
                     <ColumnFilterMenu label="Filter by profit or loss" active={orderFilters.pnl !== ''} align="right">
@@ -627,10 +707,10 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                       >
                         <option value="">All</option>
                         {/* Values are the TradeSource keys, not display text —
-                            they are compared against tradeSource() output. */}
+                            they are compared against displaySource() output. */}
                         <option value="agent">Agent</option>
-                        <option value="approved">Approved</option>
-                        <option value="manual">You</option>
+                        <option value="approved">Semi</option>
+                        <option value="manual">Manual</option>
                       </select>
                     </ColumnFilterMenu>
                   </div>
@@ -639,25 +719,40 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                 {/* Last, and unfiltered: it is the column you read after the
                     numbers have made you ask a question, not one you sort by. */}
                 <th scope="col" className="text-left font-semibold px-3 py-2.5">Why</th>
+                <th scope="col" className="text-right font-semibold px-3 py-2.5">
+                  <span className="sr-only">Actions</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {filteredOrders.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
+                  <td colSpan={showTicker ? 12 : 11} className="px-4 py-10 text-center text-sm text-[var(--color-fg-muted)]">
                     {hasActiveFilters
-                      ? 'No orders match these filters.'
-                      : `No ${activeTabLabel.toLowerCase()} orders.`}
+                      ? 'No transactions match these filters.'
+                      : `Nothing under ${activeDef.label.toLowerCase()}.`}
                   </td>
                 </tr>
               ) : (
                 filteredOrders.map((o) => (
-                  <tr key={o.id} className="border-b border-[var(--color-border)]/50 last:border-0">
-                    <td
-                      className="px-3 py-3 text-[10px] font-mono text-[var(--color-fg-muted)] whitespace-nowrap"
-                      title={o.id}
-                    >
-                      {shortRef(o.id)}
+                  <tr
+                    key={o.id}
+                    className={`border-b border-[var(--color-border)]/50 last:border-0
+                                ${o.id === highlightId ? 'bg-brand-500/5' : ''}`}
+                  >
+                    <td className="px-3 py-3 text-[10px] whitespace-nowrap">
+                      {/* The id is the row's own link. The whole row is not
+                          clickable: it carries a ticker link and two action
+                          buttons, and a row-level handler would swallow or
+                          duplicate them. */}
+                      <button
+                        onClick={() => openTransaction(o.id)}
+                        title={o.id}
+                        className="font-mono text-[var(--color-fg-muted)] underline
+                                   underline-offset-2 hover:text-brand-500"
+                      >
+                        {shortRef(o.id)}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-xs text-[var(--color-fg-muted)] whitespace-nowrap">
                       {/* Several orders can land in one session, so the
@@ -665,24 +760,29 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                       <div className="text-[var(--color-fg)]">{formatDate(o.opened_at)}</div>
                       <div className="num">{formatTime(o.opened_at)}</div>
                     </td>
-                    <td className="px-3 py-3">
-                      <button
-                        onClick={() => navigate(`/ticker/${o.ticker}`)}
-                        className="font-semibold text-[var(--color-fg)] hover:text-brand-500"
-                        style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
-                      >
-                        {o.ticker}
-                      </button>
-                    </td>
+                    {showTicker && (
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={() => navigate(`/ticker/${o.ticker}`)}
+                          className="font-semibold text-[var(--color-fg)] hover:text-brand-500"
+                          style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
+                        >
+                          {o.ticker}
+                        </button>
+                      </td>
+                    )}
                     <td className="px-3 py-3 text-xs text-[var(--color-fg)]">{o.action}</td>
                     <td className="px-3 py-3 text-right num text-[var(--color-fg)]">
-                      {o.qty || '—'}
+                      {(o.filled_qty ?? o.qty) || '—'}
                     </td>
                     <td className="px-3 py-3 text-right num text-[var(--color-fg-muted)]">
                       {money(o.entry_price ?? o.limit_price ?? null)}
                     </td>
+                    <td className="px-3 py-3 text-right num text-[var(--color-fg-muted)]">
+                      {scoreOf(o)}
+                    </td>
                     <td className="px-3 py-3 text-right"><Pnl value={o.pnl} /></td>
-                    <td className="px-3 py-3"><SourceLabel signalType={o.signal_type} /></td>
+                    <td className="px-3 py-3"><SourceLabel order={o} /></td>
                     <td className="px-4 py-3">
                       <StatusPill status={o.status} />
                     </td>
@@ -703,6 +803,7 @@ export default function OrderHistory({ orders }: { orders: TradeRecord[] }) {
                         <OrderWhy order={o} />
                       </span>
                     </td>
+                    <td className="px-3 py-3 text-right whitespace-nowrap">{rowActions(o)}</td>
                   </tr>
                 ))
               )}

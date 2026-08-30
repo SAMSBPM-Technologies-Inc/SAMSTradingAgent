@@ -689,6 +689,9 @@ export interface TradeRecord {
   reason?: string
   signal_score?: number
   signal_type?: string
+  /** The analyst's HIGH/MEDIUM/LOW at the time. Present on agent-originated
+   *  records; a manual order has none, because nothing was asked. */
+  conviction?: string | null
   /** Why the order was taken, in the few words a person reads: the score
    *  against the bar it had to clear, the factors that actually moved it, and
    *  the analyst's conviction. Written from the same arithmetic that produced
@@ -702,6 +705,11 @@ export interface TradeRecord {
   opened_at: string
   closed_at?: string
   filled_qty?: number
+  filled_at?: string
+  /** Share of the score built on measured rather than fallback inputs, frozen
+   *  at entry. Missing stays missing — 1.0 would claim a completeness nobody
+   *  measured. */
+  input_completeness?: number | null
   stop_loss?: number
   take_profit?: number
   /** Why the position closed, in the words a person reads. */
@@ -711,6 +719,29 @@ export interface TradeRecord {
   exit_trigger?: string | null
   /** True while exit_price and pnl are the levels we asked for, not a fill. */
   exit_price_estimated?: boolean | null
+}
+
+/**
+ * One live price, and where it came from.
+ *
+ * Deliberately separate from `AnalyzeResponse`: the analysis is a stored
+ * judgement that can be hours old and still worth reading, while a price is
+ * only worth reading if it is current. `source` says which the reader is
+ * looking at — a quote provider being down shows the last stored price,
+ * labelled, rather than blanking the page.
+ */
+export interface Quote {
+  ticker: string
+  price?: number | null
+  day_change_pct?: number | null
+  open?: number | null
+  high?: number | null
+  low?: number | null
+  prev_close?: number | null
+  as_of?: string | null
+  source: 'live' | 'stored' | 'unavailable'
+  /** Why the live quote was not used, when it was not. */
+  note?: string | null
 }
 
 // ── System status ─────────────────────────────────────────────────────────────

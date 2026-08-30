@@ -5,13 +5,14 @@ GET  /trading/settings          — get current user's auto-trade settings
 PUT  /trading/settings          — update settings
 GET  /trading/account           — live IBKR account summary
 GET  /trading/positions         — open positions tracked in the trades collection
-GET  /trading/orders            — order history (all trades for this user)
+GET  /trading/orders            — order history (all trades, or one ticker)
 POST /trading/close/{ticker}    — manually close an open position
 """
 from datetime import datetime
+from typing import Optional
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 # Aliased: this module defines a route handler called `get_settings` (the
 # auto-trade settings endpoint), which shadows the config accessor otherwise.
@@ -52,6 +53,7 @@ def _trade_to_response(doc: dict) -> TradeResponse:
         reason=doc.get("reason"),
         signal_score=doc.get("signal_score"),
         signal_type=doc.get("signal_type"),
+        conviction=doc.get("conviction"),
         entry_reason=doc.get("entry_reason"),
         input_completeness=doc.get("input_completeness"),
         entry_price=doc.get("entry_price"),
@@ -252,12 +254,24 @@ async def get_positions(current_user: dict = Depends(get_current_user)) -> list[
 
 
 @router.get("/orders", response_model=list[TradeResponse], summary="Full trade history")
-async def get_orders(current_user: dict = Depends(get_current_user)) -> list[TradeResponse]:
+async def get_orders(
+    ticker: Optional[str] = Query(None, description="Restrict to one symbol"),
+    limit: int = Query(200, ge=1, le=1000),
+    current_user: dict = Depends(get_current_user),
+) -> list[TradeResponse]:
+    """
+    Every order this user ever sent, newest first, refusals included.
+
+    `ticker` exists so a per-symbol audit trail does not depend on the global
+    row cap happening to reach far enough back — an active desk fills 200 rows
+    across all names long before it fills them on one. The (user_id, ticker)
+    index already covers it.
+    """
     db = await get_db()
-    user_id = str(current_user["_id"])
-    docs = await db[COLL_TRADES].find(
-        {"user_id": user_id}
-    ).sort("opened_at", -1).limit(200).to_list(length=200)
+    query: dict = {"user_id": str(current_user["_id"])}
+    if ticker:
+        query["ticker"] = ticker.upper().strip()
+    docs = await db[COLL_TRADES].find(query).sort("opened_at", -1).limit(limit).to_list(length=limit)
     return [_trade_to_response(d) for d in docs]
 
 

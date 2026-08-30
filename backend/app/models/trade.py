@@ -171,6 +171,11 @@ class TradeResponse(BaseModel):
     reason: Optional[str] = None
     signal_score: Optional[float] = None
     signal_type: Optional[str] = None
+    #: The analyst's HIGH/MEDIUM/LOW, written to the document by both the entry
+    #: and the proposal path. `ProposalResponse` has always exposed it and this
+    #: model did not, so a proposal read through /trading/orders lost the one
+    #: field that says how strongly the agent felt about it.
+    conviction: Optional[str] = None
     entry_reason: Optional[str] = None
     input_completeness: Optional[float] = None
     entry_price: Optional[float] = None

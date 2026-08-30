@@ -107,13 +107,27 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
-      {/* `/ticker/:symbol` is the dashboard with the analysis open over it, so
-          a selection stays deep-linkable and Back closes it. `/analysis/:symbol`
-          is the same report with no dashboard behind it — what the overlay's
-          "New window" control opens, and the only form worth having two of on
-          screen at once. */}
+      {/* Three routes, one screen. The centre column is what changes: the
+          dashboard on `/`, one name's analysis on `/ticker/:symbol`, one order's
+          record on `/transaction/:id`. Each is a real URL, so a selection is
+          deep-linkable and Back walks what you looked at.
+
+          None of them is a modal. An audit trail read through a backdrop puts
+          the reader's context behind the thing they opened to compare it with.
+
+          `/analysis/:symbol` is the same report with no dashboard around it —
+          what the "New window" control opens, and the only form worth having
+          two of on screen at once. */}
       <Route
         path="/ticker/:symbol"
+        element={
+          <ProtectedRoute>
+            <TradePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/transaction/:id"
         element={
           <ProtectedRoute>
             <TradePage />

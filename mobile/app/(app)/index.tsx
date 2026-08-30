@@ -400,7 +400,11 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
       setValue('')
       onAdded()
       setAnalyzingTicker(t)
-      analyzeApi.get(t, true)
+      // The one implicit run left, and not a contradiction of the two-step
+      // change: adding a name to the watchlist *is* asking the engine to cover
+      // it. Without this the row sits blank until the five-minute cycle reaches
+      // it, which reads as a broken add.
+      analyzeApi.run(t)
         .then(() => onAdded())
         .catch(() => {})
         .finally(() => setAnalyzingTicker(null))

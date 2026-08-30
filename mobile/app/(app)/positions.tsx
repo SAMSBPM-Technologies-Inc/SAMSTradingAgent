@@ -1,93 +1,43 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import {
-  ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, TextInput, View,
+  ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { router } from 'expo-router'
-import { AlertCircle, Check, Inbox, X } from 'lucide-react-native'
+import { AlertCircle } from 'lucide-react-native'
 import { tradingApi } from '../../src/lib/api'
 import { useToast } from '../../src/lib/toast-context'
-import { formatDate, formatTime } from '../../src/lib/format'
-import { SOURCE_LABEL, tradeSource } from '../../src/lib/trade-source'
-import { exitReasonLabel } from '../../src/lib/exit-reason'
 import { useRefreshOnFocus } from '../../src/lib/use-refresh'
-import type { Holding, Proposal, TradeRecord } from '../../src/types'
-import SignalBadge from '../../src/components/SignalBadge'
+import type { Holding, TradeRecord } from '../../src/types'
+import ActivityList, { Pnl } from '../../src/components/ActivityList'
 import Disclaimer from '../../src/components/Disclaimer'
-import { usePalette, type Palette } from '../../src/lib/palette'
+import { usePalette } from '../../src/lib/palette'
 import AppHeader from '../../src/components/AppHeader'
 
 /**
- * Positions — holdings, the proposal queue, and every order ever sent.
+ * Positions — what is held, and everything that has happened.
  *
- * The phone counterpart of the web `PositionsPage`, and merged along the same
- * line: Holdings asked the broker what it holds, Orders asked our records what
- * we sent, and "am I up or down" needed both. On a phone that mattered more
- * than on a desktop — it was two taps and a lost scroll position.
+ * The phone counterpart of the web Trade dashboard, and restructured along the
+ * same line. It used to carry three lists: a proposal queue, the agent's own
+ * tracked positions, and an order history. Those are one audit trail split into
+ * three, and on a phone the split cost the most — the thing waiting on you and
+ * the thing that explains it were two scrolls apart.
  *
- * Broker holdings load on mount here rather than on demand as the old Holdings
- * tab did. That tab existed to be visited deliberately; this one is where you
- * land, and a screen called Positions that shows no positions until you press
- * a button reads as broken.
+ * Now: holdings, which is the broker's authority on what is owned, and Activity,
+ * which is every action ever taken with the pending ones at the top. Tapping any
+ * row opens the transaction, which carries the full record and the rest of that
+ * ticker's history.
+ *
+ * Broker holdings load on mount rather than on demand as the old Holdings tab
+ * did. That tab existed to be visited deliberately; this one is where you land,
+ * and a screen called Positions that shows no positions until you press a
+ * button reads as broken.
  */
-
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
 function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
-}
-
-/** Same id carried by every email/Slack/WhatsApp message about this trade. */
-function shortRef(id: string): string {
-  return id.slice(-8).toUpperCase()
-}
-
-/** Broker-statement convention: gains green, losses red in parentheses. */
-function Pnl({ value }: { value: number | null | undefined }) {
-  const C = usePalette()
-  if (value == null) return <Text style={{ color: C.fgMuted, fontSize: 12 }}>—</Text>
-  const loss = value < -0.005
-  const gain = value > 0.005
-  return (
-    <Text style={{
-      fontSize: 12, fontVariant: ['tabular-nums'],
-      color: loss ? C.red : gain ? C.green : C.fg,
-    }}>
-      {loss ? `(${usd.format(Math.abs(value))})` : usd.format(value)}
-    </Text>
-  )
-}
-
-/** Tint is the accent at low alpha, so the pair flips with the theme together. */
-function statusTone(C: Palette): Record<string, { bg: string; fg: string }> {
-  return {
-    FILLED: { bg: `${C.green}20`, fg: C.green },
-    PENDING: { bg: `${C.amber}20`, fg: C.amber },
-    PARTIAL: { bg: `${C.amber}20`, fg: C.amber },
-    PROPOSED: { bg: `${C.brand}20`, fg: C.brand },
-    REJECTED: { bg: `${C.red}20`, fg: C.red },
-    UNRECONCILED: { bg: `${C.red}20`, fg: C.red },
-  }
-}
-const statusDefault = (C: Palette) => ({ bg: `${C.border}90`, fg: C.fgMuted })
-
-function StatusPill({ status }: { status: string }) {
-  const C = usePalette()
-  const tone = statusTone(C)[status] ?? statusDefault(C)
-  return (
-    <View style={{
-      paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
-      backgroundColor: tone.bg, alignSelf: 'flex-start',
-    }}>
-      <Text style={{ fontSize: 9, fontWeight: '700', color: tone.fg }}>{status}</Text>
-    </View>
-  )
-}
-
-/** Who decided — the distinction the performance split rests on. */
-function sourceLabel(signalType?: string | null): string {
-  return signalType ? SOURCE_LABEL[tradeSource(signalType)] : '—'
 }
 
 function SectionTitle({ children, note }: { children: string; note?: string }) {
@@ -109,181 +59,11 @@ function SectionTitle({ children, note }: { children: string; note?: string }) {
   )
 }
 
-// ── Proposal card ─────────────────────────────────────────────────────────────
-
-function ProposalCard({ proposal, onResolved }: {
-  proposal: Proposal
-  onResolved: () => void
-}) {
-  const C = usePalette()
-  const { toast } = useToast()
-  const [busy, setBusy] = useState<'approve' | 'decline' | null>(null)
-  // A live-money proposal must not be approvable in one tap. The order ticket
-  // asks the user to type the ticker; approving is the same act.
-  const [confirmLive, setConfirmLive] = useState('')
-  const needsConfirm = !proposal.is_paper
-  const liveConfirmed =
-    !needsConfirm || confirmLive.trim().toUpperCase() === proposal.ticker.toUpperCase()
-
-  const approve = async () => {
-    if (!liveConfirmed) return
-    setBusy('approve')
-    try {
-      const { data } = await tradingApi.approveProposal(proposal.id, needsConfirm)
-      toast(
-        data.placed
-          ? `Order placed: ${data.qty} ${data.ticker} at ${usd.format(data.limit_price)}`
-            + (data.trade_id ? ` — Ref ${data.trade_id.slice(-8).toUpperCase()}` : '')
-          : data.reason ?? 'The order could not be placed.',
-        data.placed ? 'success' : 'error',
-      )
-      onResolved()
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })
-        ?.response?.data?.detail
-      toast(detail ?? 'Could not approve this proposal.', 'error')
-      onResolved()
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  const decline = async () => {
-    setBusy('decline')
-    try {
-      await tradingApi.declineProposal(proposal.id)
-      toast(`Declined ${proposal.ticker}.`, 'info')
-      onResolved()
-    } catch {
-      toast('Could not decline this proposal.', 'error')
-    } finally {
-      setBusy(null)
-    }
-  }
-
-  return (
-    <View style={{
-      backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
-      borderColor: C.border, padding: 14, gap: 12, marginBottom: 10,
-    }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10 }}>
-        <View style={{ flex: 1 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Text style={{ fontSize: 15, fontWeight: '700', color: C.fg }}>
-              {proposal.ticker}
-            </Text>
-            <SignalBadge signal="BUY" />
-            {proposal.conviction && (
-              <Text style={{ fontSize: 10, color: C.fgMuted }}>
-                {proposal.conviction} conviction
-              </Text>
-            )}
-          </View>
-          {/* Why the agent wants this, above why it is asking. A card that
-              says only "MANUAL mode — awaiting your approval" explains the
-              queue, not the trade, and the queue is not what has to be
-              decided about here. */}
-          {proposal.entry_reason && (
-            <Text style={{ fontSize: 11, color: C.fg, marginTop: 4, lineHeight: 16 }}>
-              {proposal.entry_reason}
-            </Text>
-          )}
-          {proposal.reason && (
-            <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 4, lineHeight: 16 }}>
-              {proposal.reason}
-            </Text>
-          )}
-        </View>
-        {proposal.is_paper && (
-          <View style={{
-            paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
-            backgroundColor: `${C.border}90`, alignSelf: 'flex-start',
-          }}>
-            <Text style={{ fontSize: 9, fontWeight: '700', color: C.fgMuted }}>PAPER</Text>
-          </View>
-        )}
-      </View>
-
-      {/* The arithmetic is already done — show it rather than asking for trust. */}
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-        {([
-          ['Quantity', String(proposal.qty), C.fg],
-          ['Limit', money(proposal.limit_price), C.fg],
-          ['Stop', money(proposal.stop_loss), C.red],
-          ['Target', money(proposal.take_profit), C.green],
-        ] as const).map(([label, value, tone]) => (
-          <View key={label} style={{ width: '50%', paddingVertical: 3 }}>
-            <Text style={{ fontSize: 10, color: C.fgMuted }}>{label}</Text>
-            <Text style={{ fontSize: 13, color: tone, fontVariant: ['tabular-nums'] }}>
-              {value}
-            </Text>
-          </View>
-        ))}
-      </View>
-
-      {needsConfirm && (
-        <View style={{ gap: 4 }}>
-          <Text style={{ fontSize: 11, color: C.red }}>
-            Live money — type {proposal.ticker} to approve
-          </Text>
-          <TextInput
-            value={confirmLive}
-            onChangeText={setConfirmLive}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            accessibilityLabel="Type the ticker to confirm a live approval"
-            style={{
-              borderWidth: 1, borderColor: C.red, borderRadius: 8,
-              paddingHorizontal: 12, paddingVertical: 9, fontSize: 14,
-              color: C.fg, backgroundColor: C.bg,
-            }}
-          />
-        </View>
-      )}
-
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Pressable
-          onPress={approve}
-          disabled={busy !== null || !liveConfirmed}
-          accessibilityRole="button"
-          style={{
-            flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-            gap: 6, backgroundColor: C.brand, borderRadius: 9, paddingVertical: 11,
-            opacity: busy !== null || !liveConfirmed ? 0.4 : 1,
-          }}
-        >
-          {busy === 'approve'
-            ? <ActivityIndicator size="small" color="#fff" />
-            : <Check size={15} color="#fff" />}
-          <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Approve</Text>
-        </Pressable>
-        <Pressable
-          onPress={decline}
-          disabled={busy !== null}
-          accessibilityRole="button"
-          style={{
-            flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-            gap: 6, backgroundColor: C.surface, borderRadius: 9, paddingVertical: 11,
-            borderWidth: 1, borderColor: C.border, opacity: busy !== null ? 0.4 : 1,
-          }}
-        >
-          {busy === 'decline'
-            ? <ActivityIndicator size="small" color={C.fgMuted} />
-            : <X size={15} color={C.fgMuted} />}
-          <Text style={{ color: C.fgMuted, fontWeight: '600', fontSize: 13 }}>Decline</Text>
-        </Pressable>
-      </View>
-    </View>
-  )
-}
-
 // ── Screen ────────────────────────────────────────────────────────────────────
 
 export default function PositionsScreen() {
   const C = usePalette()
   const { toast, toastWithUndo } = useToast()
-  const [proposals, setProposals] = useState<Proposal[]>([])
-  const [positions, setPositions] = useState<TradeRecord[]>([])
   const [orders, setOrders] = useState<TradeRecord[]>([])
   const [holdings, setHoldings] = useState<Holding[]>([])
   const [brokerConnected, setBrokerConnected] = useState(false)
@@ -291,17 +71,22 @@ export default function PositionsScreen() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  /**
+   * One read, not three.
+   *
+   * `/trading/orders` already returns proposals — a PROPOSED record is a trade
+   * row like any other — so the separate `/trading/proposals` call this screen
+   * used to make was asking the server for a subset of what it had just been
+   * given, and left two lists that could disagree about the same proposal for
+   * as long as one of them was stale.
+   */
   const load = useCallback(async () => {
     setError(null)
     try {
-      const [p, pos, ord, hold] = await Promise.all([
-        tradingApi.getProposals().catch(() => ({ data: [] as Proposal[] })),
-        tradingApi.getPositions(),
+      const [ord, hold] = await Promise.all([
         tradingApi.getOrders(),
         tradingApi.getHoldings().catch(() => null),
       ])
-      setProposals(p.data)
-      setPositions(pos.data)
       setOrders(ord.data)
       setBrokerConnected(hold?.data.connected ?? false)
       setHoldings(hold?.data.connected ? hold.data.holdings.filter((h) => h.qty !== 0) : [])
@@ -340,6 +125,8 @@ export default function PositionsScreen() {
     )
   }
 
+  const waiting = orders.filter((o) => o.status === 'PROPOSED').length
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>
       <ScrollView
@@ -374,26 +161,28 @@ export default function PositionsScreen() {
           </View>
         ) : (
           <>
-            {/* ── Proposals ────────────────────────────────────────────── */}
-            {proposals.length > 0 && (
-              <View style={{ marginBottom: 28 }}>
-                <SectionTitle note="Entries the agent wanted to take but your trading mode does not let it take alone. Nothing here is committed.">
-                  {`Awaiting your approval (${proposals.length})`}
-                </SectionTitle>
-                {proposals.map((p) => (
-                  <ProposalCard key={p.id} proposal={p} onResolved={load} />
-                ))}
-              </View>
-            )}
+            {/* ── Activity ─────────────────────────────────────────────────
+                First, because the top of it is the part waiting on the
+                reader. Holdings answer "what do I own"; this answers "what has
+                been happening", which is the question that has an action
+                attached to it. */}
+            <View style={{ marginBottom: 28 }}>
+              <SectionTitle note="Every attempt, including the ones the risk guards refused — a skip is a decision worth seeing. Proposed and Rejected never held a position: a proposal commits nothing until you accept it. Tap a row for the full record and that ticker's history.">
+                {waiting > 0 ? `Activity — ${waiting} waiting on you` : 'Activity'}
+              </SectionTitle>
+              <ActivityList orders={orders} onProposalsChanged={load} />
+            </View>
 
             {/* ── Holdings ─────────────────────────────────────────────────
-                What the broker says is held, which is the authority. The block
-                below it is our own record of *why* each one exists — they are
-                different questions and can legitimately disagree, so they are
-                shown as two lists rather than silently reconciled here. */}
-            <View style={{ marginBottom: 28 }}>
+                What the broker says is held, which is the authority. Our own
+                records above say *why* each one exists — they are different
+                questions and can legitimately disagree, so they are shown as
+                two lists rather than silently reconciled here. */}
+            <View style={{ marginBottom: 8 }}>
               <SectionTitle
-                note={brokerConnected ? undefined : 'Broker disconnected'}
+                note={brokerConnected
+                  ? 'Quantities come from the broker, not our records: if the two disagree, the broker is right.'
+                  : 'Broker disconnected'}
               >
                 {`Holdings (${holdings.length})`}
               </SectionTitle>
@@ -414,178 +203,45 @@ export default function PositionsScreen() {
                   borderColor: C.border, overflow: 'hidden',
                 }}>
                   {holdings.map((h, i) => (
-                    <Pressable
+                    <View
                       key={h.ticker}
-                      onPress={() => router.push(`/ticker/${h.ticker}`)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${h.ticker}, ${h.qty} shares`}
                       style={{
-                        paddingHorizontal: 14, paddingVertical: 12, gap: 6,
+                        paddingHorizontal: 14, paddingVertical: 12, gap: 8,
                         borderTopWidth: i === 0 ? 0 : 1, borderTopColor: `${C.border}80`,
                       }}
                     >
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Text style={{ fontSize: 14, fontWeight: '700', color: C.fg }}>{h.ticker}</Text>
-                        <Pnl value={h.unrealized_pnl} />
-                      </View>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ fontSize: 11, color: C.fgMuted, fontVariant: ['tabular-nums'] }}>
-                          {h.qty.toLocaleString()} @ {money(h.avg_cost)}
-                        </Text>
-                        <Text style={{ fontSize: 11, color: C.fg, fontVariant: ['tabular-nums'] }}>
-                          {money(h.market_value)}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  ))}
-                </View>
-              )}
-            </View>
-
-            {/* ── Open positions ───────────────────────────────────────── */}
-            <View style={{ marginBottom: 28 }}>
-              <SectionTitle note="the agent's own record, with its bracket levels">
-                {`Tracked positions (${positions.length})`}
-              </SectionTitle>
-              {positions.length === 0 ? (
-                <View style={{
-                  backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
-                  borderColor: C.border, padding: 24, alignItems: 'center',
-                }}>
-                  <Text style={{ fontSize: 13, color: C.fgMuted }}>
-                    No open positions tracked by the agent.
-                  </Text>
-                </View>
-              ) : positions.map((p) => (
-                <View
-                  key={p.id}
-                  style={{
-                    backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
-                    borderColor: C.border, padding: 14, marginBottom: 10, gap: 10,
-                  }}
-                >
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Pressable onPress={() => router.push(`/ticker/${p.ticker}`)}>
-                      <Text style={{ fontSize: 15, fontWeight: '700', color: C.fg }}>
-                        {p.ticker}
-                      </Text>
-                    </Pressable>
-                    <StatusPill status={p.status} />
-                  </View>
-
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                    {([
-                      ['Qty', String(p.filled_qty ?? p.qty), C.fg],
-                      ['Entry', money(p.entry_price ?? p.limit_price), C.fg],
-                      ['Stop', money(p.stop_loss), C.red],
-                      ['Target', money(p.take_profit), C.green],
-                    ] as const).map(([label, value, tone]) => (
-                      <View key={label} style={{ width: '50%', paddingVertical: 3 }}>
-                        <Text style={{ fontSize: 10, color: C.fgMuted }}>{label}</Text>
-                        <Text style={{ fontSize: 13, color: tone, fontVariant: ['tabular-nums'] }}>
-                          {value}
-                        </Text>
-                      </View>
-                    ))}
-                  </View>
-
-                  <Pressable
-                    onPress={() => closePosition(p.ticker)}
-                    accessibilityRole="button"
-                    style={{
-                      alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 8,
-                      borderRadius: 8, borderWidth: 1, borderColor: C.border,
-                    }}
-                  >
-                    <Text style={{ fontSize: 12, fontWeight: '600', color: C.fgMuted }}>
-                      Close position
-                    </Text>
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-
-            {/* ── Order history ────────────────────────────────────────── */}
-            <View style={{ marginBottom: 8 }}>
-              <SectionTitle note="Every attempt, including the ones the risk guards refused — a skip is a decision worth seeing.">
-                Order history
-              </SectionTitle>
-              {orders.length === 0 ? (
-                <View style={{
-                  backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
-                  borderColor: C.border, padding: 28, alignItems: 'center', gap: 10,
-                }}>
-                  <Inbox size={26} color={C.fgMuted} />
-                  <Text style={{ fontSize: 13, color: C.fgMuted, textAlign: 'center', lineHeight: 19 }}>
-                    No orders yet. Open a ticker and tap Buy, or let the agent propose one.
-                  </Text>
-                </View>
-              ) : (
-                <View style={{
-                  backgroundColor: C.surface, borderRadius: 12, borderWidth: 1,
-                  borderColor: C.border, overflow: 'hidden',
-                }}>
-                  {orders.map((o, i) => (
-                    <View
-                      key={o.id}
-                      style={{
-                        padding: 14, gap: 6,
-                        borderTopWidth: i === 0 ? 0 : 1, borderTopColor: C.border,
-                      }}
-                    >
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                          <Pressable onPress={() => router.push(`/ticker/${o.ticker}`)}>
-                            <Text style={{ fontSize: 14, fontWeight: '700', color: C.fg }}>
-                              {o.ticker}
-                            </Text>
-                          </Pressable>
-                          <Text style={{ fontSize: 11, color: C.fgMuted }}>
-                            {o.action} · {sourceLabel(o.signal_type)}
+                      <Pressable
+                        onPress={() => router.push(`/ticker/${h.ticker}`)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${h.ticker}, ${h.qty} shares`}
+                        style={{ gap: 6 }}
+                      >
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ fontSize: 14, fontWeight: '700', color: C.fg }}>{h.ticker}</Text>
+                          <Pnl value={h.unrealized_pnl} />
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ fontSize: 11, color: C.fgMuted, fontVariant: ['tabular-nums'] }}>
+                            {h.qty.toLocaleString()} @ {money(h.avg_cost)}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: C.fg, fontVariant: ['tabular-nums'] }}>
+                            {money(h.market_value)}
                           </Text>
                         </View>
-                        <StatusPill status={o.status} />
-                      </View>
+                      </Pressable>
 
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ fontSize: 11, color: C.fgMuted }}>
-                          {o.qty ? `${o.qty} @ ${money(o.entry_price ?? o.limit_price)}` : '—'}
-                          {'  ·  '}
-                          {formatDate(o.opened_at)} · {formatTime(o.opened_at)} ET
+                      <Pressable
+                        onPress={() => closePosition(h.ticker)}
+                        accessibilityRole="button"
+                        style={{
+                          alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 8,
+                          borderRadius: 8, borderWidth: 1, borderColor: C.border,
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: C.fgMuted }}>
+                          Close {h.ticker}
                         </Text>
-                        {/* An estimate from the limit we asked for is not a
-                            result. Until settlement replaces it with the real
-                            fill, say the sale is working rather than show a P&L
-                            that may not be what happened. */}
-                        {o.closed_at && o.exit_price_estimated ? (
-                          <Text style={{ fontSize: 11, color: C.fgMuted }}>sale working</Text>
-                        ) : (
-                          <Pnl value={o.pnl} />
-                        )}
-                      </View>
-
-                      {/* Three different sentences answering three different
-                          questions, so none of them substitutes for another:
-                          `reason` is a guard's refusal or a size adjustment,
-                          `entry_reason` is why the position was opened, and
-                          `exit_reason` is why it ended. Web shows the same
-                          three, in the same order. */}
-                      {[o.reason, o.entry_reason, exitReasonLabel(o.exit_reason)]
-                        .filter(Boolean)
-                        .map((line, n) => (
-                          <Text
-                            key={line as string}
-                            style={{
-                              fontSize: 10, lineHeight: 14,
-                              color: n === 0 ? C.fg : C.fgMuted,
-                            }}
-                          >
-                            {line}
-                          </Text>
-                        ))}
-                      <Text style={{ fontSize: 9, color: C.fgMuted, fontFamily: 'monospace' }}>
-                        Ref {shortRef(o.id)}
-                      </Text>
+                      </Pressable>
                     </View>
                   ))}
                 </View>
@@ -594,10 +250,11 @@ export default function PositionsScreen() {
 
             <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 15, marginTop: 12 }}>
               <Text style={{ fontWeight: '700' }}>Source </Text>
-              records who decided. Agent placed unattended, Approved means the agent
-              proposed and you accepted, You means you chose the ticker. Performance keeps
-              the three apart — a set of the agent&rsquo;s picks that a human filtered is
-              not a clean measure of the agent.
+              records who decided. Agent means the tool decided and acted without you,
+              Semi means it recommended and you actioned it, Manual means you chose the
+              ticker yourself. Performance keeps the three apart — a set of the
+              agent&rsquo;s picks that a human filtered is not a clean measure of the
+              agent.
             </Text>
           </>
         )}

@@ -2,51 +2,86 @@ import { useCallback, useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { AlertCircle } from 'lucide-react'
 import { analyzeApi } from '../lib/api'
-import type { AnalyzeResponse } from '../types'
+import type { AnalyzeResponse, Quote } from '../types'
 import Layout from '../components/Layout'
 import AnalysisProgress from '../components/trade/AnalysisProgress'
 import { TickerAnalysis, TickerHeader } from '../components/trade/TickerDetail'
 
 /**
- * One name, nothing else — the target of the overlay's "New window" control.
+ * One name, nothing else — the target of the "New window" control.
  *
  * Deliberately thin. It renders the analysis and no watchlist, no order
  * ticket, no approvals queue, because its whole purpose is to be opened twice
  * and put side by side. It also makes no watchlist request, so a second window
- * costs one call rather than five.
+ * costs two calls rather than five.
  *
  * Watch and unwatch are absent for the same reason: mutating a list this window
  * does not display would leave the dashboard in the other window stale with
  * nothing to tell it. Those actions live where the list is.
+ *
+ * The two-step split applies here too — opening a name reads the stored
+ * analysis and a live price, and running a new one is a button. A window opened
+ * to compare two names must not silently start two pipeline runs.
  */
 export default function AnalysisPage() {
   const { symbol } = useParams<{ symbol: string }>()
   const ticker = symbol?.toUpperCase() ?? null
 
   const [data, setData] = useState<AnalyzeResponse | null>(null)
+  const [quote, setQuote] = useState<Quote | null>(null)
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
+  const [analysing, setAnalysing] = useState(false)
+  const [neverAnalysed, setNeverAnalysed] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = useCallback(async (force: boolean) => {
+  const loadStored = useCallback(async () => {
     if (!ticker) return
-    if (force) setRefreshing(true)
-    else setLoading(true)
+    setLoading(true)
     setError(null)
+    setNeverAnalysed(false)
     try {
-      const res = await analyzeApi.get(ticker, force)
+      const res = await analyzeApi.get(ticker)
       setData(res.data)
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to load analysis.')
+      const status = (err as { response?: { status?: number } })?.response?.status
       setData(null)
+      if (status === 404) setNeverAnalysed(true)
+      else {
+        const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        setError(msg ?? 'Failed to load the stored analysis.')
+      }
     } finally {
       setLoading(false)
-      setRefreshing(false)
     }
   }, [ticker])
 
-  useEffect(() => { load(false) }, [load])
+  const loadQuote = useCallback(async () => {
+    if (!ticker) return
+    try {
+      setQuote((await analyzeApi.quote(ticker)).data)
+    } catch {
+      setQuote(null)
+    }
+  }, [ticker])
+
+  const runAnalysis = useCallback(async () => {
+    if (!ticker) return
+    setAnalysing(true)
+    setError(null)
+    try {
+      const res = await analyzeApi.run(ticker)
+      setData(res.data)
+      setNeverAnalysed(false)
+      void loadQuote()
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? 'The analysis could not be completed.')
+    } finally {
+      setAnalysing(false)
+    }
+  }, [ticker, loadQuote])
+
+  useEffect(() => { void loadStored(); void loadQuote() }, [loadStored, loadQuote])
 
   useEffect(() => {
     if (ticker) document.title = `${ticker} — Analysis`
@@ -55,8 +90,24 @@ export default function AnalysisPage() {
   return (
     <Layout variant="app">
       <div className="mx-auto w-full max-w-[980px]">
-        {loading ? (
+        <TickerHeader
+          symbol={ticker ?? ''}
+          data={data}
+          quote={quote}
+          holding={null}
+          position={null}
+          watched={false}
+          analysing={analysing}
+          onRunAnalysis={() => void runAnalysis()}
+          onWatch={() => {}}
+          onUnwatch={() => {}}
+        />
+        {analysing ? (
           <AnalysisProgress ticker={ticker ?? ''} />
+        ) : loading ? (
+          <p className="px-[18px] py-10 text-center text-sm text-[var(--color-fg-muted)]">
+            Reading the last analysis…
+          </p>
         ) : error ? (
           <div
             role="alert"
@@ -70,20 +121,12 @@ export default function AnalysisPage() {
             <AlertCircle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
             {error}
           </div>
+        ) : neverAnalysed ? (
+          <p className="px-6 py-16 text-center text-sm text-[var(--color-fg-muted)]">
+            No in-depth analysis has been run for {ticker}. The price above is live.
+          </p>
         ) : data ? (
-          <>
-            <TickerHeader
-              data={data}
-              holding={null}
-              position={null}
-              watched={false}
-              refreshing={refreshing}
-              onRefresh={() => load(true)}
-              onWatch={() => {}}
-              onUnwatch={() => {}}
-            />
-            <TickerAnalysis data={data} item={null} />
-          </>
+          <TickerAnalysis data={data} item={null} />
         ) : null}
       </div>
     </Layout>

@@ -8,7 +8,7 @@ import { SOURCE_LABEL, tradeSource } from '../lib/trade-source'
 import { exitReasonLabel } from '../lib/exit-reason'
 import type { ClosedTrade } from '../types'
 import LoadingSpinner from './LoadingSpinner'
-import OrderHistory, { StatusPill } from './positions/OrderHistory'
+import ActivityTable, { StatusPill } from './positions/ActivityTable'
 import { CardList, RecordCard } from './positions/RecordCard'
 import { useIsCompact } from '../lib/use-media-query'
 import { useTradingSettings } from '../lib/trading-context'
@@ -35,9 +35,6 @@ import { usePortfolio } from '../lib/portfolio-context'
  */
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
-
-/** Mirrors `TradeStatus.OPEN` on the backend: a live commitment, not a proposal. */
-const OPEN_STATUSES = new Set(['PENDING', 'FILLED', 'PARTIAL'])
 
 function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
@@ -180,27 +177,6 @@ export default function PositionsDashboard() {
       trade: positions.find((p) => p.ticker === h.ticker && p.closed_at == null) ?? null,
     })), [holdings, positions])
 
-  /**
-   * The agent's own open entries.
-   *
-   * Deliberately read from our trade records rather than from broker holdings:
-   * the question here is "what did the agent decide", and a holding carries no
-   * decision. A position the agent opened and a position you opened look
-   * identical at the broker.
-   *
-   * `PROPOSED` is not among these — it commits nothing and lives in the
-   * approvals queue — and neither is `SKIPPED`, which is a refusal, not a
-   * position.
-   */
-  const agentRows = useMemo(
-    () => positions.filter(
-      (p) => p.closed_at == null
-        && OPEN_STATUSES.has(p.status)
-        && tradeSource(p.signal_type) === 'agent',
-    ),
-    [positions],
-  )
-
   const closePosition = (ticker: string) => {
     // Closing sends a real order, so it gets an undo window rather than a
     // confirm dialog — the action is reversible right up until it is sent.
@@ -322,105 +298,24 @@ export default function PositionsDashboard() {
             </p>
           )}
 
-          {/* ── Agent positions ────────────────────────────────────────────
-              What the agent decided, as distinct from what is held. These are
-              our own trade records, so a row here is a decision with a reason
-              behind it; the Open positions table below is the broker's account
-              of the same money and is the authority on quantity. */}
+          {/* ── Activity ───────────────────────────────────────────────────
+              Pending and recent actions, in one place. This was two tables —
+              "Agent positions" for the agent's open entries and "Order history"
+              for everything else — which split one audit trail along a line
+              that answered no question anybody asks. It leads the screen
+              because the top of it is the part waiting on the reader. */}
           <Section
-            title="Agent positions"
-            note={`${agentRows.length} open`}
-            footnote="Entries the agent placed unattended from its own signals. Proposals awaiting your approval are not here — nothing is committed until you accept one — and neither are skipped evaluations, which are refusals rather than positions."
+            title="Activity"
+            note="pending and recent actions"
+            footnote="Every attempt, including the refusals. A skip is a guard refusing an order the agent wanted to place, and worth seeing. Proposed and Declined never held a position slot — a proposal commits nothing until you accept it. Open a transaction for the full record and the rest of that ticker's history."
           >
-            {agentRows.length === 0 ? (
-              <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]
-                              p-6 text-center text-sm text-[var(--color-fg-muted)]">
-                The agent holds nothing right now.
-              </div>
-            ) : compact ? (
-              <CardList>
-                {agentRows.map((t) => (
-                  <RecordCard
-                    key={t.id}
-                    title={t.ticker}
-                    onTitleClick={() => navigate(`/ticker/${t.ticker}`)}
-                    badges={<StatusPill status={t.status} />}
-                    fields={[
-                      { label: 'Qty', value: (t.filled_qty ?? t.qty).toLocaleString() },
-                      { label: 'Entry', value: money(t.entry_price ?? t.limit_price) },
-                      {
-                        label: 'Stop',
-                        value: <span style={{ color: 'var(--accent-sell)' }}>{money(t.stop_loss)}</span>,
-                      },
-                      {
-                        label: 'Target',
-                        value: <span style={{ color: 'var(--accent-buy)' }}>{money(t.take_profit)}</span>,
-                      },
-                      { label: 'Opened', value: formatDateTime(t.opened_at) },
-                      { label: 'Score', value: t.signal_score != null ? `${Math.round(t.signal_score * 100)}` : '—' },
-                    ]}
-                  />
-                ))}
-              </CardList>
-            ) : (
-              <TableShell>
-                <table className="w-full min-w-[42rem] text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border)] text-[10.5px] uppercase
-                                   tracking-widest text-[var(--color-fg-muted)]">
-                      <th scope="col" className={th}>Ticker</th>
-                      <th scope="col" className={th}>Status</th>
-                      <th scope="col" className={thR}>Qty</th>
-                      <th scope="col" className={thR}>Entry</th>
-                      <th scope="col" className={thR}>Stop</th>
-                      <th scope="col" className={thR}>Target</th>
-                      <th scope="col" className={thR}>Score</th>
-                      <th scope="col" className={th}>Opened</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {agentRows.map((t) => (
-                      <tr key={t.id} className="border-b border-[var(--color-border)]/50 last:border-0">
-                        <td className="px-3 py-2.5">
-                          <button
-                            onClick={() => navigate(`/ticker/${t.ticker}`)}
-                            className="num font-semibold text-[var(--color-fg)] hover:text-brand-500"
-                          >
-                            {t.ticker}
-                          </button>
-                        </td>
-                        <td className="px-3 py-2.5"><StatusPill status={t.status} /></td>
-                        <td className="num px-3 py-2.5 text-right">
-                          {(t.filled_qty ?? t.qty).toLocaleString()}
-                        </td>
-                        <td className="num px-3 py-2.5 text-right text-[var(--color-fg-muted)]">
-                          {money(t.entry_price ?? t.limit_price)}
-                        </td>
-                        <td className="num px-3 py-2.5 text-right" style={{ color: 'var(--accent-sell)' }}>
-                          {money(t.stop_loss)}
-                        </td>
-                        <td className="num px-3 py-2.5 text-right" style={{ color: 'var(--accent-buy)' }}>
-                          {money(t.take_profit)}
-                        </td>
-                        <td className="num px-3 py-2.5 text-right text-[var(--color-fg-muted)]">
-                          {t.signal_score != null ? Math.round(t.signal_score * 100) : '—'}
-                        </td>
-                        <td className="px-3 py-2.5 text-[11px] text-[var(--color-fg-muted)]">
-                          {formatDateTime(t.opened_at)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </TableShell>
-            )}
+            <ActivityTable orders={orders} onProposalsChanged={() => void reload()} />
           </Section>
-
           {/* ── Open positions ─────────────────────────────────────────── */}
           <Section
             title="Open positions"
             note={`${openRows.length} held`}
-            footnote="Source records who decided. Agent placed it unattended, Approved means the agent proposed and you accepted, You means you chose the ticker. Performance keeps the three apart — a set of the agent's picks that a human filtered is not a clean measure of the agent. Quantities come from the broker, not our records: if the two disagree, the broker is right."
+            footnote="Source records who decided. Agent means the tool decided and acted without you, Semi means it recommended and you actioned it, Manual means you chose the ticker yourself. Performance keeps the three apart — a set of the agent's picks that a human filtered is not a clean measure of the agent. Quantities come from the broker, not our records: if the two disagree, the broker is right."
           >
             {openRows.length === 0 ? (
               <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)]
@@ -656,14 +551,6 @@ export default function PositionsDashboard() {
             )}
           </Section>
 
-          {/* ── Order history ──────────────────────────────────────────── */}
-          <Section
-            title="Order history"
-            note="every attempt, including refusals"
-            footnote="A skip is a decision worth seeing: it is a guard refusing an order the agent wanted to place. Proposed and Declined never held a position slot — a proposal commits nothing."
-          >
-            <OrderHistory orders={orders} />
-          </Section>
         </>
       )}
     </>

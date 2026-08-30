@@ -36,6 +36,19 @@ function RootNavigator() {
           headerShadowVisible: false,
         }}
       />
+      {/* One order's record, pushed from any activity row. Same chrome as the
+          ticker screen so Back means the same thing on both. */}
+      <Stack.Screen
+        name="transaction/[id]"
+        options={{
+          headerShown: true,
+          headerTitle: '',
+          headerBackTitle: 'Back',
+          headerTintColor: C.brand,
+          headerStyle: { backgroundColor: C.bg },
+          headerShadowVisible: false,
+        }}
+      />
     </Stack>
   )
 }

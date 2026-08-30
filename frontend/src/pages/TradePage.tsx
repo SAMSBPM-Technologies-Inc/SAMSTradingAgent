@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useMatch, useNavigate, useParams } from 'react-router-dom'
 import { PanelLeft, X } from 'lucide-react'
 import { analyzeApi, watchlistApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
@@ -7,12 +7,14 @@ import { usePoll } from '../lib/use-poll'
 import { PortfolioProvider, usePortfolio } from '../lib/portfolio-context'
 import type {
   AnalyzeResponse,
+  Quote,
   WatchlistItem,
   WatchlistSetupCounts,
 } from '../types'
 import Layout from '../components/Layout'
 import WatchlistRail from '../components/trade/WatchlistRail'
-import AnalysisOverlay from '../components/trade/AnalysisOverlay'
+import TickerPanel from '../components/trade/TickerPanel'
+import TransactionDetail from '../components/positions/TransactionDetail'
 import BrokerPanel from '../components/BrokerPanel'
 import PositionsDashboard from '../components/PositionsDashboard'
 import { ActivityPanel, ApprovalsPanel, OrderPanel } from '../components/trade/TradeSidebar'
@@ -59,11 +61,19 @@ function TradeScreen() {
   const [lastUpdated, setLastUpdated] = useState<string | null>(null)
 
   const [data, setData] = useState<AnalyzeResponse | null>(null)
+  const [quote, setQuote] = useState<Quote | null>(null)
   // True only when a deep link means the fetch is already in flight at first
   // paint. On `/` there is nothing to load, and starting true would put a
-  // spinner inside an overlay that is not even open.
+  // spinner inside a panel that is not even shown.
   const [analysisLoading, setAnalysisLoading] = useState(!!symbol)
-  const [refreshing, setRefreshing] = useState(false)
+  // Separate from `analysisLoading` on purpose. Reading the stored analysis is
+  // a Mongo lookup; running one is the whole pipeline plus an analyst call.
+  // Only the second earns the staged progress display, and only the second is
+  // something the user asked for.
+  const [analysing, setAnalysing] = useState(false)
+  // Nothing has ever been analysed for this ticker. A 404 from the stored read,
+  // which is an empty state with a Run button — not a failure.
+  const [neverAnalysed, setNeverAnalysed] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
 
@@ -114,39 +124,96 @@ function TradeScreen() {
   // start in parallel at first paint, and no analysis runs until a name is
   // actually selected.
   const selected = symbol?.toUpperCase() ?? null
+  // `/transaction/:id` renders this same screen with a different centre column.
+  const transactionId = useMatch('/transaction/:id')?.params.id ?? null
 
-  const loadAnalysis = useCallback(async (ticker: string, force: boolean) => {
-    if (force) setRefreshing(true)
-    else setAnalysisLoading(true)
+  /**
+   * Read what is stored. Never runs the pipeline.
+   *
+   * This is what a ticker click does now. It used to call plain `/analyze`,
+   * which rebuilds anything older than thirty minutes — yfinance, Finnhub,
+   * FRED, fundamentals and a Claude call — so glancing at a name cost tens of
+   * seconds of work nobody asked for.
+   *
+   * A 404 is the expected answer for a name never analysed. It sets the empty
+   * state, not the error one: there is nothing wrong, there is just nothing
+   * there yet.
+   */
+  const loadStored = useCallback(async (ticker: string) => {
+    setAnalysisLoading(true)
     setError(null)
+    setNeverAnalysed(false)
     try {
-      const res = await analyzeApi.get(ticker, force)
+      const res = await analyzeApi.get(ticker)
       setData(res.data)
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to load analysis.')
+      const status = (err as { response?: { status?: number } })?.response?.status
       setData(null)
+      if (status === 404) {
+        setNeverAnalysed(true)
+      } else {
+        const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        setError(msg ?? 'Failed to load the stored analysis.')
+      }
     } finally {
       setAnalysisLoading(false)
-      setRefreshing(false)
     }
   }, [])
 
+  /** The live price, independently of the analysis. Cheap, and always current. */
+  const loadQuote = useCallback(async (ticker: string) => {
+    try {
+      const res = await analyzeApi.quote(ticker)
+      setQuote(res.data)
+    } catch {
+      // The endpoint falls back to a stored price server-side and does not
+      // raise, so reaching here means the request itself failed. The header
+      // shows the analysis's price and says nothing is live.
+      setQuote(null)
+    }
+  }, [])
+
+  /** The explicit run — the only path on this client that starts a pipeline. */
+  const runAnalysis = useCallback(async (ticker: string) => {
+    setAnalysing(true)
+    setError(null)
+    try {
+      const res = await analyzeApi.run(ticker)
+      setData(res.data)
+      setNeverAnalysed(false)
+      // A fresh run just repriced the name; take the new price with it rather
+      // than leaving a quote from before the run on screen.
+      void loadQuote(ticker)
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      setError(msg ?? 'The analysis could not be completed.')
+    } finally {
+      setAnalysing(false)
+    }
+  }, [loadQuote])
+
   // Keyed on the ticker alone. It must NOT depend on watchlist loading state:
-  // every add, remove or refresh would then re-fetch the analysis and flash a
-  // spinner over a pane whose contents had not changed.
+  // every add, remove or refresh would then re-fetch and flash a spinner over a
+  // pane whose contents had not changed.
+  //
+  // Both requests start together. Neither can run the pipeline, so the pair is
+  // bounded by the slower of one Mongo lookup and one quote call, and the
+  // header paints from whichever lands first.
   useEffect(() => {
     if (!selected) return
-    loadAnalysis(selected, false)
-  }, [selected, loadAnalysis])
+    void loadStored(selected)
+    void loadQuote(selected)
+  }, [selected, loadStored, loadQuote])
 
   // No selection is the resting state of `/` now, not an edge case: clear the
-  // previous name's analysis so reopening the overlay cannot flash stale data
-  // for the ticker you looked at before.
+  // previous name's analysis so reopening cannot flash stale data for the
+  // ticker you looked at before.
   useEffect(() => {
     if (!selected) {
       setData(null)
+      setQuote(null)
       setError(null)
+      setNeverAnalysed(false)
       setAnalysisLoading(false)
     }
   }, [selected])
@@ -183,7 +250,12 @@ function TradeScreen() {
     toast(`${ticker} added to your watchlist.`, 'success')
     // The row exists now but has no score until the pipeline runs. Kick a
     // forced analysis so the detail pane fills in rather than sitting empty.
-    analyzeApi.get(ticker, true).then(() => loadWatchlist()).catch(() => {})
+    //
+    // This is the one implicit run left, and it is not a contradiction of the
+    // two-step change: adding a name to the watchlist *is* asking the engine to
+    // cover it. Without this the row sits blank until the five-minute cycle
+    // reaches it, which reads as a broken add.
+    analyzeApi.run(ticker).then(() => loadWatchlist()).catch(() => {})
     if (ticker !== selected) navigate(`/ticker/${ticker}`)
   }
 
@@ -219,29 +291,38 @@ function TradeScreen() {
 
   const onAgentChanged = () => { void reload() }
 
-  // ── Analysis overlay ──────────────────────────────────────────────────────
-  // Everything the dialog needs, assembled once. It is mounted only while a
-  // symbol is in the route, so nothing here runs on the dashboard.
-  const overlay = selected && (
-    <AnalysisOverlay
+  // ── Centre column ─────────────────────────────────────────────────────────
+  //
+  // One region, three states, all of them routed. The analysis used to be a
+  // modal over the dashboard; it is not one any more, for the same reason the
+  // transaction detail never became one — the context a reader wants beside a
+  // record is exactly what a backdrop hides.
+  const centre = selected ? (
+    <TickerPanel
       symbol={selected}
       data={data}
+      quote={quote}
       item={selectedItem}
       holding={selectedHolding}
       position={selectedPosition}
       watched={watched}
       loading={analysisLoading}
-      refreshing={refreshing}
+      analysing={analysing}
+      neverAnalysed={neverAnalysed}
       error={error}
-      onRefresh={() => loadAnalysis(selected, true)}
+      onRunAnalysis={() => runAnalysis(selected)}
       onWatch={watchSelected}
       onUnwatch={() => removeFromWatchlist(selected)}
-      onRetry={() => loadAnalysis(selected, false)}
+      onRetry={() => loadStored(selected)}
       // Back rather than a push, so opening and closing five names does not
       // bury the dashboard under five history entries.
       onClose={() => navigate('/')}
       footer={<OrderPanel data={data} onOrderPlaced={onAgentChanged} />}
     />
+  ) : transactionId ? (
+    <TransactionDetail />
+  ) : (
+    <PositionsDashboard />
   )
 
   const rail = (
@@ -345,13 +426,14 @@ function TradeScreen() {
           />
         )}
 
-        {/* ── Dashboard ─────────────────────────────────────────────────────
-            The centre column is the dashboard now, not one ticker's analysis.
-            It is `PositionsPage` itself rather than a second rendering of the
-            same tables: two copies would have drifted, and the close-position
-            undo window is not worth maintaining twice. */}
+        {/* ── Centre column ──────────────────────────────────────────────
+            The dashboard, one name's analysis, or one order's record — chosen
+            by the route above. `PositionsDashboard` is the component itself
+            rather than a second rendering of the same tables: two copies would
+            have drifted, and the close-position undo window is not worth
+            maintaining twice. */}
         <div className="order-2 min-w-0 px-3 py-3 lg:order-none lg:min-h-0 lg:overflow-y-auto lg:px-4">
-          <PositionsDashboard />
+          {centre}
         </div>
 
         {/* ── Ticket, approvals, activity ────────────────────────────────────
@@ -381,12 +463,13 @@ function TradeScreen() {
 
           <div className="mb-bottom-bar order-5 border-t border-[var(--color-border)]
                           bg-[var(--color-surface)] lg:order-none lg:mb-0 lg:border-t-0">
-            <ActivityPanel orders={orders} />
+            {/* Scoped to the name being read, when there is one: what was
+                bought, sold, proposed or refused on *this* ticker is the
+                context that turns a verdict into a decision. */}
+            <ActivityPanel orders={orders} ticker={selected ?? undefined} />
           </div>
         </div>
       </div>
-
-      {overlay}
     </Layout>
   )
 }

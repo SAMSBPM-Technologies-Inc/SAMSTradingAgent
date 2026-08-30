@@ -14,6 +14,101 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.17.0] — 2026-08-30
+
+**Opening a ticker no longer runs an analysis.** Clicking a name used to call
+`/analyze`, which serves a stored verdict only if it is under thirty minutes old
+and otherwise runs the whole pipeline first — yfinance, Finnhub, FRED,
+fundamentals and a Claude call. So glancing at a stock you had not looked at
+since the morning meant waiting tens of seconds for work you never asked for,
+and there was no way to *just look*.
+
+Reading and analysing are now separate acts:
+
+- **A ticker paints immediately.** The stored analysis comes back at whatever
+  age it is, labelled **"Last in-depth analysis: <date, time>"** rather than a
+  quiet relative aside, and the existing Stale badge still marks anything past
+  the rebuild window.
+- **The price is always live**, independent of the verdict's age. A new
+  `GET /quote/{ticker}` fetches one price on its own; a stale analysis no longer
+  drags a stale price along with it. If the quote provider is unreachable or no
+  key is set, the last recorded price is shown *labelled as such* rather than the
+  page going blank.
+- **"Run full analysis" is a button**, and the only control on either client
+  that starts a pipeline run. A name that has never been analysed shows its live
+  price and an empty state, not a spinner.
+
+Adding a ticker to your watchlist still kicks a run — that *is* asking the engine
+to cover the name, and without it a new row would sit blank until the five-minute
+cycle reached it.
+
+**Agent positions is now Activity — every action, with the pending ones first.**
+It used to list only the agent's currently open entries, while proposals waiting
+on you, guard refusals, declines, closes and manual orders lived in a separate
+Order history table further down. That is one audit trail split in half along a
+line that answers no question anybody asks.
+
+- **One table**, grouped by what a status *means* — Waiting on you / Active /
+  Closed / Not taken / Unreconciled / All — rather than one tab per status.
+  Waiting on you is the default whenever it has anything in it.
+- **Transaction ID, Action, Qty, Price, Source, Score and Time of action** on
+  every row, with P&L and the reason kept from the old table. Score is new: the
+  composite the agent was working from when it acted, or a dash where nobody
+  scored it.
+- **Approve and Reject in the row.** A paper proposal resolves in place. A
+  live-money one still requires typing the ticker back — on web the row sends you
+  to the transaction page, which has room for the confirmation; on mobile the
+  card shows it inline. There is no path to approving live money in one click.
+
+**Clicking a transaction opens its full record and that ticker's history.**
+Every field on the order — full reference, requested versus filled quantity,
+limit, entry, exit, stop, target, score, analyst conviction, input completeness,
+timestamps — then all three of its sentences (why it was refused, why it was
+opened, why it closed), then **every other transaction on that ticker**: three
+months' worth, or the ten most recent if that reaches further back, and the page
+says which rule produced the list. Manual orders, agent entries, adds and
+refusals alike. This is the view that answers "why do I own 40 shares of this",
+which no single record could.
+
+**Nothing on the Trade screen is a modal any more.** The analysis used to open
+as a sheet over the dashboard. The centre column is now a routed region with
+three states — dashboard, one name's analysis, one order's record — because the
+context a reader wants beside a record is exactly what a backdrop hides. All
+three are real URLs, so Back still walks what you looked at. With a ticker
+selected, the right-hand panel narrows to **that ticker's transactions**.
+
+**"Approved" is now labelled "Semi"** on the activity table and the Performance
+page: the tool recommended it and you actioned it, as distinct from *Agent* (the
+tool decided and acted without you) and *Manual* (you decided, without a
+recommendation). Only the label moved — the underlying bucketing is unchanged,
+so historical performance figures are the same numbers under a clearer name.
+
+All of the above is on web and mobile together.
+
+### Known gaps
+
+- **A SEMI_AUTO trade the agent executed on its own is still indistinguishable
+  from an AUTO one.** Trade documents record `signal_type`, not the trading mode
+  in force at the time, so "Semi" means specifically *the proposal path* — the
+  agent asked and you answered. An agent entry taken unattended under SEMI_AUTO
+  because it cleared the conviction threshold is labelled Agent, which is
+  accurate about what happened and silent about the mode. Recording the mode per
+  trade would need a new field and would leave every historical row unknown.
+- **The activity table reads the newest 200 orders.** The transaction page
+  fetches a wider window when it needs one, but the dashboard table itself does
+  not paginate, so a very active account will not see its oldest rows there.
+- **`GET /quote/{ticker}` is Finnhub-only.** With no key it silently serves the
+  last stored price — correctly labelled, but that price is only as fresh as the
+  last pipeline cycle, and overnight or at the weekend it is yesterday's close.
+- **The stored read cannot tell "never analysed" from "analysed before this
+  ticker was renamed".** Both are a 404 and both render the same empty state.
+- **No test drives the two clients end to end.** The negative property that
+  matters — that `stored_only` cannot reach `run_pipeline` — is covered on the
+  server (`backend/tests/test_stored_analysis.py`), but nothing asserts that the
+  clients only ever call the explicit-run endpoint from the button.
+
+---
+
 ## [1.16.0] — 2026-08-30
 
 **Scores change on this release.** If your server has no `FINNHUB_API_KEY`, or

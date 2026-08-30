@@ -74,8 +74,31 @@ export const watchlistApi = {
 }
 
 export const analyzeApi = {
-  get: (ticker: string, forceRefresh = false) =>
-    api.get('/analyze', { params: { ticker, force_refresh: forceRefresh } }),
+  /**
+   * The last analysis, whatever its age, and never a pipeline run.
+   *
+   * This is what a ticker click calls. Plain `/analyze` rebuilds anything older
+   * than 30 minutes, and a rebuild is yfinance, Finnhub, FRED, fundamentals and
+   * an LLM call — seconds of waiting for work the reader did not ask for.
+   * 404 means nothing has ever been analysed, which is an empty state, not an
+   * error.
+   */
+  get: (ticker: string) =>
+    api.get<import('../types').AnalyzeResponse>('/analyze', {
+      params: { ticker, stored_only: true },
+    }),
+  /** The explicit full run. The only call on the client that starts a pipeline. */
+  run: (ticker: string) =>
+    api.get<import('../types').AnalyzeResponse>('/analyze', {
+      params: { ticker, force_refresh: true },
+      // A cold run does the whole pipeline plus an analyst call; the default
+      // axios timeout would abandon it halfway and report a failure that was
+      // still succeeding on the server.
+      timeout: 180_000,
+    }),
+  /** One live price. Cheap enough to call on every ticker view. */
+  quote: (ticker: string) =>
+    api.get<import('../types').Quote>(`/quote/${ticker}`),
   search: (q: string) =>
     api.get<{ symbol: string; name: string }[]>('/ticker/search', { params: { q } }),
 }
@@ -150,7 +173,12 @@ export const tradingApi = {
   getAccount: () => api.get<import('../types').AccountSummaryResponse>('/trading/account'),
   getPositions: () => api.get<import('../types').TradeRecord[]>('/trading/positions'),
   getHoldings: () => api.get<import('../types').HoldingsResponse>('/trading/holdings'),
-  getOrders: () => api.get<import('../types').TradeRecord[]>('/trading/orders'),
+  /** Every order, newest first — or one ticker's, for a per-symbol audit trail
+   *  that does not depend on the global row cap reaching far enough back. */
+  getOrders: (ticker?: string, limit?: number) =>
+    api.get<import('../types').TradeRecord[]>('/trading/orders', {
+      params: { ticker, limit },
+    }),
   closePosition: (ticker: string) => api.post(`/trading/close/${ticker}`),
 
   /**

@@ -226,6 +226,35 @@ class AnalyzeResponse(BaseModel):
     inputs: Optional[SignalInputs] = None
 
 
+class QuoteResponse(BaseModel):
+    """
+    What a name is worth right now — and nothing else.
+
+    Deliberately separate from `AnalyzeResponse`. The analysis is a stored
+    judgement that can be hours old and still be the right thing to read; the
+    price is only useful if it is current. Fusing them is what forced a full
+    pipeline run just to see whether a stock had moved.
+
+    `source` says which of the two the reader is looking at: `live` is a quote
+    fetched now, `stored` is the last price the pipeline wrote — served with the
+    time it was written rather than an error, because a quote provider being
+    down must not blank the ticker page.
+    """
+    ticker: str
+    price: Optional[float] = None
+    day_change_pct: Optional[float] = None
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    prev_close: Optional[float] = None
+    #: When this price was true. For `stored`, when the pipeline last wrote it.
+    as_of: Optional[datetime] = None
+    source: Literal["live", "stored", "unavailable"] = "unavailable"
+    #: Why the live quote was not used, when it was not. Never an exception
+    #: string — this reaches a UI.
+    note: Optional[str] = None
+
+
 class AnalystReport(BaseModel):
     """Full analyst report — returned by GET /report/{ticker}."""
     ticker: str
@@ -688,7 +717,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.16.0"
+    version: str = "1.17.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

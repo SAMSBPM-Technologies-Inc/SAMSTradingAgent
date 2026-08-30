@@ -13,11 +13,12 @@ import {
 import type {
   AnalyzeResponse,
   Holding,
+  Quote,
   SignalInputs,
   TradeRecord,
   WatchlistItem,
 } from '../../types'
-import { relativeTime } from '../../lib/format'
+import { formatDateTime, relativeTime } from '../../lib/format'
 import { useNow } from '../../lib/use-poll'
 import { downloadPdf, downloadTxt, emailReport } from '../../lib/report'
 import { useToast } from '../../lib/toast-context'
@@ -291,8 +292,27 @@ interface TickerDetailProps {
   holding: Holding | null
   position: TradeRecord | null
   watched: boolean
-  refreshing: boolean
-  onRefresh: () => void
+  onWatch: () => void
+  onUnwatch: () => void
+}
+
+/**
+ * The header does not require an analysis.
+ *
+ * That is the whole of the two-step change: a name with a live price and no
+ * stored verdict is still a page worth painting, and the header is what paints
+ * it. `data` is therefore nullable here and nowhere else.
+ */
+interface TickerHeaderProps {
+  /** Known before either request returns — the header can render from this alone. */
+  symbol: string
+  data: AnalyzeResponse | null
+  quote: Quote | null
+  holding: Holding | null
+  position: TradeRecord | null
+  watched: boolean
+  analysing: boolean
+  onRunAnalysis: () => void
   onWatch: () => void
   onUnwatch: () => void
 }
@@ -308,17 +328,17 @@ interface TickerDetailProps {
  * whole analysis first buried the ticket three screens down.
  */
 export function TickerHeader({
+  symbol,
   data,
+  quote,
   holding,
   position,
   watched,
-  refreshing,
-  onRefresh,
+  analysing,
+  onRunAnalysis,
   onWatch,
   onUnwatch,
-}: Omit<TickerDetailProps, 'item'>) {
-  const chg = data.day_change_pct
-  const tone = whyTone(data.signal)
+}: TickerHeaderProps) {
   const { toast } = useToast()
 
   /**
@@ -343,8 +363,21 @@ export function TickerHeader({
   // rather than serve this, which makes it exactly the point where what is on
   // screen stops being what the engine would say.
   const now = useNow()
-  const generatedMs = Date.parse(data.generated_at)
+  const generatedMs = data ? Date.parse(data.generated_at) : NaN
   const stale = Number.isFinite(generatedMs) && now - generatedMs > ANALYSIS_TTL_MS
+
+  /**
+   * The price is the quote's, never the analysis's.
+   *
+   * `data.current_price` is whatever the price was when the pipeline last ran,
+   * which on a stored read is by definition not now — and the whole point of
+   * separating the two steps was that a stale verdict should not drag a stale
+   * price along with it. The analysis is the fallback only when there is no
+   * quote at all.
+   */
+  const price = quote?.price ?? data?.current_price ?? null
+  const chg = quote?.price != null ? quote.day_change_pct : data?.day_change_pct
+  const tone = data ? whyTone(data.signal) : null
 
   return (
     <>
@@ -356,15 +389,26 @@ export function TickerHeader({
               className="m-0 text-[26px] font-bold tracking-[-0.02em]"
               style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}
             >
-              {data.ticker}
+              {symbol}
             </h1>
-            <SignalBadge signal={data.signal} size="lg" />
-            {data.conviction && <ConvictionBadge conviction={data.conviction} />}
+            {data && <SignalBadge signal={data.signal} size="lg" />}
+            {data?.conviction && <ConvictionBadge conviction={data.conviction} />}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-1 text-[11.5px]
                           text-[var(--color-fg-muted)]">
-            {data.time_horizon && <span>{data.time_horizon} horizon ·</span>}
-            <span>scored {relativeTime(data.generated_at)}</span>
+            {data?.time_horizon && <span>{data.time_horizon} horizon ·</span>}
+            {/* Named, dated and stated outright rather than tucked into a
+                relative aside. This is now the one line that tells a reader
+                whether what they are looking at is a judgement from ten minutes
+                ago or from Tuesday, because nothing on this page re-runs on its
+                own any more. */}
+            <span>
+              Last in-depth analysis:{' '}
+              <span className="text-[var(--color-fg)]">
+                {data ? formatDateTime(data.generated_at) : 'never'}
+              </span>
+              {data ? ` · ${relativeTime(data.generated_at)}` : ''}
+            </span>
             {/* Past the server's own cache window this analysis is older than
                 anything the engine would still serve, so say so rather than
                 letting a quiet "scored 47m ago" pass for current. `useNow`
@@ -379,78 +423,98 @@ export function TickerHeader({
                 Stale — re-analyse
               </span>
             )}
-            {data.confidence != null && (
+            {data?.confidence != null && (
               <span>· {Math.round(data.confidence * 100)}% confidence</span>
             )}
           </div>
         </div>
 
-        <div className="flex items-baseline gap-2.5">
-          <span className="num text-[26px] font-semibold">
-            {data.current_price != null ? usd.format(data.current_price) : '—'}
-          </span>
-          {chg != null && (
-            <span
-              className="num text-[14px]"
-              style={{ color: chg >= 0 ? 'var(--accent-buy)' : 'var(--accent-sell)' }}
-            >
-              {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
+        <div className="flex flex-col">
+          <div className="flex items-baseline gap-2.5">
+            <span className="num text-[26px] font-semibold">
+              {price != null ? usd.format(price) : '—'}
             </span>
-          )}
+            {chg != null && (
+              <span
+                className="num text-[14px]"
+                style={{ color: chg >= 0 ? 'var(--accent-buy)' : 'var(--accent-sell)' }}
+              >
+                {chg >= 0 ? '+' : ''}{chg.toFixed(2)}%
+              </span>
+            )}
+          </div>
+          {/* A price that is not live must say so. A stored figure shown with
+              no label is the one number on this page a reader would act on
+              without checking. */}
+          <span className="text-[10.5px] text-[var(--color-fg-muted)]">
+            {quote?.source === 'live'
+              ? 'Live'
+              : quote?.source === 'stored'
+                ? `Last recorded ${relativeTime(quote.as_of)} — ${quote.note ?? 'no live quote'}`
+                : quote?.source === 'unavailable'
+                  ? quote.note ?? 'No price available'
+                  : 'Fetching price…'}
+          </span>
         </div>
 
         {holding && <PositionBlock holding={holding} position={position} />}
 
-        <ScoreBar data={data} />
+        {data && <ScoreBar data={data} />}
 
         <div className="flex w-full items-center gap-1.5">
           <button
             onClick={watched ? onUnwatch : onWatch}
             className="chip touch-target"
-            aria-label={watched ? `Remove ${data.ticker} from watchlist` : `Add ${data.ticker} to watchlist`}
+            aria-label={watched ? `Remove ${symbol} from watchlist` : `Add ${symbol} to watchlist`}
           >
             {watched
               ? <><Check className="h-3 w-3" aria-hidden="true" /> Watching</>
               : <><Plus className="h-3 w-3" aria-hidden="true" /> Watch</>}
           </button>
 
-          <button onClick={onRefresh} disabled={refreshing} className="chip touch-target disabled:opacity-40">
-            <RefreshCw className={`h-3 w-3 ${refreshing ? 'animate-spin' : ''}`} aria-hidden="true" />
-            {refreshing ? 'Refreshing…' : 'Re-analyse'}
+          {/* The only control on the client that starts a pipeline run, and
+              styled as the primary action because on a name with no stored
+              analysis it is the only thing to do. Everything else on this page
+              is a read. */}
+          <button onClick={onRunAnalysis} disabled={analysing} className="btn-primary disabled:opacity-40">
+            <RefreshCw className={`h-3.5 w-3.5 ${analysing ? 'animate-spin' : ''}`} aria-hidden="true" />
+            {analysing ? 'Analysing…' : data ? 'Run full analysis again' : 'Run full analysis'}
           </button>
 
-          <Menu
-            label="Export report"
-            align="left"
-            triggerClassName="chip touch-target"
-            trigger={<><Download className="h-3 w-3" aria-hidden="true" /> Export</>}
-          >
-            {(close) => (
-              <>
-                {/* Both are fallible — the PDF lazily imports jsPDF, so a
-                    chunk that fails to load surfaces here rather than as a
-                    click that silently does nothing. */}
-                <MenuItem onClick={() => { close(); void runExport(() => downloadPdf(data), 'PDF') }}>
-                  Download PDF
-                </MenuItem>
-                <MenuItem onClick={() => { close(); void runExport(() => downloadTxt(data), '.txt') }}>
-                  Download .txt
-                </MenuItem>
-                <MenuItem onClick={() => { close(); emailReport(data) }}>
-                  <span className="flex items-center gap-2.5">
-                    <Mail className="h-3.5 w-3.5 text-[var(--color-fg-muted)]" aria-hidden="true" />
-                    Email report
-                  </span>
-                </MenuItem>
-              </>
-            )}
-          </Menu>
+          {data && (
+            <Menu
+              label="Export report"
+              align="left"
+              triggerClassName="chip touch-target"
+              trigger={<><Download className="h-3 w-3" aria-hidden="true" /> Export</>}
+            >
+              {(close) => (
+                <>
+                  {/* Both are fallible — the PDF lazily imports jsPDF, so a
+                      chunk that fails to load surfaces here rather than as a
+                      click that silently does nothing. */}
+                  <MenuItem onClick={() => { close(); void runExport(() => downloadPdf(data), 'PDF') }}>
+                    Download PDF
+                  </MenuItem>
+                  <MenuItem onClick={() => { close(); void runExport(() => downloadTxt(data), '.txt') }}>
+                    Download .txt
+                  </MenuItem>
+                  <MenuItem onClick={() => { close(); emailReport(data) }}>
+                    <span className="flex items-center gap-2.5">
+                      <Mail className="h-3.5 w-3.5 text-[var(--color-fg-muted)]" aria-hidden="true" />
+                      Email report
+                    </span>
+                  </MenuItem>
+                </>
+              )}
+            </Menu>
+          )}
 
           {watched && (
             <button
               onClick={onUnwatch}
               className="chip touch-target ml-auto hover:!text-[var(--accent-sell)]"
-              aria-label={`Remove ${data.ticker} from watchlist`}
+              aria-label={`Remove ${symbol} from watchlist`}
             >
               <Trash2 className="h-3 w-3" aria-hidden="true" />
               Remove
@@ -460,16 +524,17 @@ export function TickerHeader({
       </div>
 
       {/* ── Why ───────────────────────────────────────────────────────────── */}
-      <div
-        className="flex items-start gap-3 border-b border-[var(--color-border)] px-[18px] py-3"
-        style={{ background: tone.bg }}
-      >
-        <span className="label-micro flex-shrink-0 pt-0.5" style={{ color: tone.fg }}>Why</span>
-        <p className="m-0 max-w-[66ch] text-[14px] leading-relaxed text-[var(--color-fg)]">
-          {whyText(data)}
-        </p>
-      </div>
-
+      {data && tone && (
+        <div
+          className="flex items-start gap-3 border-b border-[var(--color-border)] px-[18px] py-3"
+          style={{ background: tone.bg }}
+        >
+          <span className="label-micro flex-shrink-0 pt-0.5" style={{ color: tone.fg }}>Why</span>
+          <p className="m-0 max-w-[66ch] text-[14px] leading-relaxed text-[var(--color-fg)]">
+            {whyText(data)}
+          </p>
+        </div>
+      )}
     </>
   )
 }

@@ -345,20 +345,66 @@ separation — every authenticated user gets every feature.
 ### Frontend Route Structure
 
 ```
-/              → HomePage when signed out, DashboardPage when signed in
-/home          → HomePage (always — the public landing page)
-/auth          → AuthPage (register/login)
-/              → DashboardPage (watchlist: signals + dip-buy setups in one table)
-/search        → SearchPage (ticker lookup — analyse without watching first)
-/ticker/:sym   → TickerPage (chart, score breakdown, risk gate, order ticket, AI report)
-/orders        → OrdersPage (proposal queue, open positions, full order history)
-/holdings      → HoldingsPage (IBKR positions)
-/performance   → PerformancePage (signal history, win rate)
-/calibration   → CalibrationPage (do the thresholds hold up? see below)
-/profile       → ProfilePage (alerts, IBKR config, auto-trade)
-/guide         → GuidePage (IB Gateway setup)
-/radar         → redirects to / (see below)
+/               → HomePage when signed out, TradePage when signed in
+/home           → HomePage (always — the public landing page)
+/auth           → AuthPage (register/login)
+/ticker/:sym    → TradePage, centre column = one name's analysis
+/transaction/:id→ TradePage, centre column = one order's record + that ticker's history
+/analysis/:sym  → AnalysisPage (the same report, no dashboard — "New window")
+/search         → SearchPage (ticker lookup — analyse without watching first)
+/performance    → PerformancePage (signal history, win rate)
+/calibration    → CalibrationPage (do the thresholds hold up? see below)
+/status         → StatusPage (what the engine is actually running on)
+/settings       → SettingsPage (alerts, IBKR config, auto-trade, LLM keys)
+/guide          → GuidePage (IB Gateway setup)
+/positions /holdings /orders /radar → redirect to /
+/profile        → redirects to /settings
 ```
+
+**The centre column is a routed region with three states, and none of them is a
+modal.** `TradePage` renders `PositionsDashboard`, `TickerPanel` or
+`TransactionDetail` depending on the route; the rail and the right-hand panels
+are unchanged around it. The analysis used to be a sheet over the dashboard —
+it stopped being one because the context a reader wants beside a record is
+exactly what a backdrop hides. Do not reintroduce an overlay here. All three are
+real URLs, so Back walks what was looked at.
+
+**Reading is not analysing.** `GET /analyze?stored_only=true` returns the stored
+verdict at *any* age and can never reach `run_pipeline`; that is what a ticker
+click calls, on both clients. `force_refresh=true` is the explicit run and the
+only thing behind the "Run full analysis" button. Plain `/analyze` keeps its old
+stored-if-fresh-else-rebuild behaviour for the report export and the watchlist
+warm-up. The negative property is the one worth protecting and is tested in
+`backend/tests/test_stored_analysis.py` — a regression here does not fail
+loudly, it just makes the app slow again in production.
+
+**The price is separate from the verdict.** `GET /quote/{ticker}` is one Finnhub
+call and the only source of the price shown on a ticker page — `current_price` on
+a stored analysis is whatever it was when the pipeline last ran. It never 5xxs:
+no key, an error or a timeout falls back to `stocks_raw` and reports
+`source: "stored"`, which the UI must label. This is not a health probe and does
+not contradict "observed, never probed" — that rule protects the Alpha Vantage
+cap and answers "did this source build the score".
+
+**One activity trail, not two.** `ActivityTable`
+(`components/positions/ActivityTable.tsx`, mirrored by mobile's `ActivityList`)
+replaced the separate "Agent positions" and "Order history" tables. Rows are
+grouped by what a status *means* — Waiting on you / Active / Closed / Not taken
+/ Unreconciled — and a PROPOSED row carries Approve and Reject. The live-money
+gate must survive every path: a paper proposal resolves in the row, a live one
+routes to the transaction page where the type-the-ticker input lives. All three
+call sites share `ProposalActions`; there must never be a second implementation
+of that confirmation.
+
+**`tradeSource` mirrors the backend; `displaySource` is what a row reads.** A
+PROPOSED or DECLINED record carries `signal_type: "BUY"`, so `tradeSource` calls
+it `agent` — correct for `/performance/trades`, which buckets *executed* trades,
+and wrong on screen, where "Agent" claims the tool acted without the trader. The
+bucket key stays `approved`; the label is **"Semi"** everywhere, including the
+Performance page, and means *the tool recommended it and you actioned it*. Note
+what the data cannot say: a SEMI_AUTO trade the agent executed unattended is
+indistinguishable from an AUTO one, because no trading mode is recorded per
+trade.
 
 **The landing page is the only public screen, and it knows nothing about
 auth.** `sta.samsbpm.com` used to open on a password prompt, which tells a
@@ -529,11 +575,21 @@ them.
 
 Key shared infrastructure: `AuthContext` (JWT persistence), `ThemeContext` (light/dark), `ToastContext` (`toast` / `toastWithUndo` — destructive actions defer their request for the length of the undo window), `lib/api.ts` (Axios with bearer token). The mobile app mirrors this structure using Expo Router.
 
-**Mobile is at parity with web.** Order ticket, proposal queue, Orders tab,
-chart, calibration, factor breakdown, risk gate, and holdings all exist on both
-clients and must stay in step — particularly the two safety behaviours: the
-displayed quantity is never authoritative (the server clamps it), and a
-live-money order or approval requires the user to type the ticker back.
+**Mobile is at parity with web.** Order ticket, activity trail with inline
+Approve/Reject, transaction detail (`app/transaction/[id].tsx`), the two-step
+ticker view, chart, calibration, factor breakdown, risk gate, and holdings all
+exist on both clients and must stay in step — particularly the two safety
+behaviours: the displayed quantity is never authoritative (the server clamps
+it), and a live-money order or approval requires the user to type the ticker
+back.
+
+Where the two clients differ, they differ for a reason worth stating. The mobile
+activity card has room for the type-the-ticker input, so a live proposal is
+approvable in place; a web table row does not, so it routes to the transaction
+page instead. The web ticker screen puts that ticker's transactions in the right
+rail; the phone has no rail, so they are a section. `trade-source.ts` is kept
+byte-identical between `frontend/src/lib/` and `mobile/src/lib/` — the two
+clients must not disagree about who decided a trade.
 
 The mobile chart is `react-native-svg`, not `lightweight-charts` (DOM-only), but
 reads the same `/chart/{ticker}/series` and the same server-computed moving

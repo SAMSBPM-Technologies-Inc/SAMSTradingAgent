@@ -1,13 +1,12 @@
-import { useState } from 'react'
-import { tradingApi } from '../../lib/api'
+import { useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { formatDateTimeShort, relativeTime } from '../../lib/format'
-import { useToast } from '../../lib/toast-context'
 import { useTradingSettings } from '../../lib/trading-context'
-import { SOURCE_LABEL, tradeSource } from '../../lib/trade-source'
+import { SOURCE_LABEL, displaySource } from '../../lib/trade-source'
 import { exitReasonLabel } from '../../lib/exit-reason'
 import type { AnalyzeResponse, Proposal, TradeRecord } from '../../types'
-import LoadingSpinner from '../LoadingSpinner'
 import OrderTicket from '../OrderTicket'
+import { ProposalActions } from './ProposalActions'
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
@@ -16,10 +15,11 @@ const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' 
 /**
  * Entries the agent wanted to take but was not permitted to take alone.
  *
- * A live-money approval asks for the ticker to be typed back, exactly as the
- * order ticket does. Approving a proposal *is* placing an order — the fact
- * that the agent chose the name rather than the human does not make it a
- * smaller commitment, so it does not get a smaller confirmation.
+ * The card is the reading; the buttons are `ProposalActions`, shared with the
+ * activity table's rows and the transaction page. Approving a proposal *is*
+ * placing an order — the fact that the agent chose the name rather than the
+ * human does not make it a smaller commitment — so the live-money gate lives in
+ * exactly one place and every caller gets it.
  */
 function ProposalCard({
   proposal,
@@ -28,50 +28,7 @@ function ProposalCard({
   proposal: Proposal
   onResolved: () => void
 }) {
-  const { toast } = useToast()
-  const [busy, setBusy] = useState(false)
-  const [confirmText, setConfirmText] = useState('')
-
   const isLive = !proposal.is_paper
-  const confirmed = !isLive || confirmText.trim().toUpperCase() === proposal.ticker.toUpperCase()
-
-  const approve = async () => {
-    if (busy || !confirmed) return
-    setBusy(true)
-    try {
-      const { data } = await tradingApi.approveProposal(proposal.id, isLive)
-      if (data.placed) {
-        toast(
-          `Order placed: ${data.qty} ${data.ticker} at ${usd.format(data.limit_price)}`
-          + (data.is_paper ? ' (paper)' : '')
-          + (data.trade_id ? ` — Ref ${data.trade_id.slice(-8).toUpperCase()}` : ''),
-          'success',
-        )
-      } else {
-        toast(data.reason ?? 'The order was not placed.', 'error')
-      }
-      onResolved()
-    } catch (err: unknown) {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      toast(detail ?? 'Could not approve that proposal.', 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const decline = async () => {
-    if (busy) return
-    setBusy(true)
-    try {
-      await tradingApi.declineProposal(proposal.id)
-      toast(`Skipped ${proposal.ticker}.`, 'info')
-      onResolved()
-    } catch {
-      toast('Could not skip that proposal.', 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const tone = proposal.action === 'SELL'
     ? { bg: 'var(--tint-sell)', fg: 'var(--accent-sell)' }
@@ -119,44 +76,12 @@ function ProposalCard({
         {proposal.stop_loss != null ? ` · stop ${usd.format(proposal.stop_loss)}` : ''}
       </p>
 
-      {isLive && (
-        <div className="mt-2">
-          <label
-            htmlFor={`confirm-${proposal.id}`}
-            className="mb-1 block text-[10.5px] text-[var(--accent-sell)]"
-          >
-            Type <strong>{proposal.ticker}</strong> to approve a live order
-          </label>
-          <input
-            id={`confirm-${proposal.id}`}
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            autoComplete="off"
-            className="h-11 w-full rounded-md border border-[var(--accent-sell)] bg-[var(--color-bg)]
-                       px-2 text-[12px] text-[var(--color-fg)] outline-none sm:h-7"
-          />
-        </div>
-      )}
-
-      <div className="mt-2 flex gap-1.5">
-        <button
-          onClick={approve}
-          disabled={busy || !confirmed}
-          className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-md bg-brand-500
-                     text-[12px] font-semibold text-white disabled:opacity-40 sm:h-7"
-        >
-          {busy ? <LoadingSpinner size="sm" /> : null}
-          Approve
-        </button>
-        <button
-          onClick={decline}
-          disabled={busy}
-          className="h-11 flex-1 rounded-md border border-[var(--color-border)] text-[12px]
-                     text-[var(--color-fg)] hover:bg-[var(--color-hover)] disabled:opacity-40 sm:h-7"
-        >
-          Skip
-        </button>
-      </div>
+      <ProposalActions
+        id={proposal.id}
+        ticker={proposal.ticker}
+        isPaper={proposal.is_paper}
+        onResolved={onResolved}
+      />
     </div>
   )
 }
@@ -178,15 +103,19 @@ function ProposalCard({
  * user's own Close button did it, and `entry_reason`, so an open one says what
  * the agent saw when it bought.
  */
-function ActivityLog({ orders }: { orders: TradeRecord[] }) {
-  const recent = [...orders]
+function ActivityLog({ orders, ticker }: { orders: TradeRecord[]; ticker?: string }) {
+  const navigate = useNavigate()
+  const recent = useMemo(() => (ticker ? orders.filter((o) => o.ticker === ticker) : orders)
+    .slice()
     .sort((a, b) => (b.closed_at ?? b.opened_at ?? '').localeCompare(a.closed_at ?? a.opened_at ?? ''))
-    .slice(0, 12)
+    .slice(0, 12), [orders, ticker])
 
   if (recent.length === 0) {
     return (
       <p className="mt-2 text-[11px] text-[var(--color-fg-muted)]">
-        No orders yet. Activity appears here as the agent places them.
+        {ticker
+          ? `Nothing has been traded on ${ticker}.`
+          : 'No orders yet. Activity appears here as the agent places them.'}
       </p>
     )
   }
@@ -194,7 +123,7 @@ function ActivityLog({ orders }: { orders: TradeRecord[] }) {
   return (
     <div className="mt-2 flex flex-col">
       {recent.map((o) => {
-        const src = tradeSource(o.signal_type)
+        const src = displaySource(o)
         const closed = o.closed_at != null
         const pnl = o.pnl
         const qty = o.filled_qty ?? o.qty
@@ -210,9 +139,12 @@ function ActivityLog({ orders }: { orders: TradeRecord[] }) {
         // what happened.
         const settled = closed && !o.exit_price_estimated
         return (
-          <div
+          <button
             key={o.id}
-            className="flex gap-2 border-b border-[var(--color-border)] py-1.5 last:border-b-0"
+            type="button"
+            onClick={() => navigate(`/transaction/${o.id}`)}
+            className="flex gap-2 border-b border-[var(--color-border)] py-1.5 text-left
+                       last:border-b-0 hover:bg-[var(--color-hover)]"
           >
             {/* Date and time both. A log showing only "2:04 PM" is unreadable
                 the moment it spans midnight — which it does by the second
@@ -245,7 +177,7 @@ function ActivityLog({ orders }: { orders: TradeRecord[] }) {
                 </span>
               )}
             </span>
-          </div>
+          </button>
         )
       })}
     </div>
@@ -323,12 +255,22 @@ export function ApprovalsPanel({
   )
 }
 
-/** What the agent has actually done. */
-export function ActivityPanel({ orders }: { orders: TradeRecord[] }) {
+/**
+ * What has actually been done — for the whole account, or for the name being
+ * read.
+ *
+ * With a ticker selected this is the audit trail beside the analysis: what was
+ * bought, sold, proposed or refused on *this* name, which is the context that
+ * turns a verdict into a decision. Without one it is the account-wide feed it
+ * has always been.
+ */
+export function ActivityPanel({ orders, ticker }: { orders: TradeRecord[]; ticker?: string }) {
   return (
     <div className="px-3.5 py-3">
-      <span className="label-micro">Agent activity</span>
-      <ActivityLog orders={orders} />
+      <span className="label-micro">
+        {ticker ? `Transactions — ${ticker}` : 'Agent activity'}
+      </span>
+      <ActivityLog orders={orders} ticker={ticker} />
     </div>
   )
 }
