@@ -48,6 +48,7 @@ from typing import Any, Optional
 
 from app.config import get_settings
 from app.db import COLL_DOSSIERS, COLL_FEATURES, COLL_RAW, COLL_USERS, get_db
+from app.services import source_health
 from app.services.fundamentals import fetch_earnings, fetch_fundamentals, fetch_statements
 from app.services.prediction_markets import fetch_macro_markets
 from app.services.social import fetch_social
@@ -127,18 +128,45 @@ async def build_dossier(ticker: str, user_id: Optional[str] = None,
                        facts=ledger.substantive_count(), total=len(ledger))
         return None
 
-    results = await _fan_out(client, ledger, settings, chains)
-    debate = await _rebut(client, ledger, results, settings, chains)
-    synthesis, synthesis_error = await _synthesise(
-        client, ledger, results, scores, settings, debate, chains
-    )
+    # From here on the module talks to a provider, and the status page's
+    # research row had no writer of any kind before this — nothing here reaches
+    # `stocks_raw`, so `source_health.observe` never saw it and the row read
+    # "No reading yet" forever, whether or not a single dossier had ever been
+    # built. Recorded around the model phase only: the early returns above are
+    # data conditions (thin evidence, a name with no statements collected),
+    # which say nothing about whether deep research works.
+    try:
+        results = await _fan_out(client, ledger, settings, chains)
+        debate = await _rebut(client, ledger, results, settings, chains)
+        synthesis, synthesis_error = await _synthesise(
+            client, ledger, results, scores, settings, debate, chains
+        )
 
-    stances = await _stance_panel(client, ledger, synthesis, scores, settings, chains)
+        stances = await _stance_panel(client, ledger, synthesis, scores, settings, chains)
+    except Exception as exc:
+        await source_health.record_attempt(
+            "research", source_health.FAILED, error=str(exc), ticker=ticker,
+        )
+        raise
 
     dossier = _compose(ticker, ledger, scores, summary, results, synthesis,
                        synthesis_error, debate, stances)
     dossier["user_id"] = str(user_id) if user_id else None
     await _persist(dossier)
+
+    # A dossier whose specialists wrote but whose synthesiser did not is a real
+    # result with a hole in it, not a failure — `succeeded=True` so the row
+    # still carries when research last produced something.
+    await source_health.record_attempt(
+        "research",
+        source_health.OK if synthesis else source_health.DEGRADED,
+        succeeded=True,
+        ticker=ticker,
+        detail=None if synthesis else (
+            "The specialists answered but the synthesiser did not, so the "
+            "latest dossiers carry their sections without a combined verdict."
+        ),
+    )
     return dossier
 
 

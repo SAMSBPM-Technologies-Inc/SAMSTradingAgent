@@ -221,6 +221,16 @@ async def _research_refresh_job() -> None:
         cohort = await _research_users()
         if not cohort:
             logger.info("research_refresh_no_opted_in_users")
+            # Said on the row rather than left as silence. `llm_settings.
+            # research_enabled` defaults false, so a server with
+            # RESEARCH_AGENTS_ENABLED=true and nobody opted in builds nothing —
+            # and the status page cannot tell that from an outage, because both
+            # look like an absence of readings. It is a setting, not a fault.
+            await source_health.record_attempt(
+                "research", source_health.NOT_CONFIGURED,
+                detail="Switched on for this server, but no account has enabled "
+                       "research in its LLM settings, so no dossiers are built.",
+            )
             return
 
         built = failed = 0
@@ -243,6 +253,16 @@ async def _research_refresh_job() -> None:
 
         logger.info("research_refresh_done", built=built, skipped=failed,
                     users=len(cohort))
+        if not built and failed:
+            # Every ticker was skipped. `build_dossier` records nothing for a
+            # skip — each one on its own is a data condition — but a whole run
+            # producing no dossier is a state a reader needs told, and it is not
+            # the same as never having run.
+            await source_health.record_attempt(
+                "research", source_health.DEGRADED, succeeded=False,
+                detail=f"The last run built no dossier for any of {failed} "
+                       f"tickers — not enough collected evidence yet.",
+            )
     except Exception as exc:
         logger.error("research_refresh_job_failed", error=str(exc))
 
@@ -468,6 +488,16 @@ async def _capability_watch_job() -> None:
             # Configuration is not an event. Neither is a source nothing has
             # reached yet — that is a fresh deployment, not a failure.
             if state in ("not_configured", "never_run"):
+                _capability_states.pop(row["id"], None)
+                continue
+
+            # Neither is a failure that cannot change a number. Options and
+            # insider flow is unkeyed best-effort scraping feeding an additive
+            # modifier centred on neutral, so a notification about it asks the
+            # reader to act on something with no consequence — and a channel
+            # that does that gets muted before the one that matters arrives.
+            # Same judgement as the banner; see `Capability.alters_scores`.
+            if not system_status.alters_scores(row["id"]):
                 _capability_states.pop(row["id"], None)
                 continue
 

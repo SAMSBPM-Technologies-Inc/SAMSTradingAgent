@@ -1,6 +1,6 @@
 {
   "name": "sams-trading-mobile",
-  "version": "1.17.0",
+  "version": "1.17.1",
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",

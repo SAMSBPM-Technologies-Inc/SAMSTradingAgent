@@ -171,6 +171,134 @@ def test_a_stale_fundamentals_cache_is_not_a_failure():
     assert result["overall"] == "ok"
 
 
+# ── A failure that changes no number does not set the banner ──────────────────
+#
+# The page read *degraded* on a server whose every weighted factor was live,
+# because a Yahoo option chain had missed one symbol — and the summary it
+# generated then contradicted that row's own impact line by claiming the factors
+# it fed had gone neutral. Alternative data is an additive modifier centred on
+# 0.50; an absent one moves the composite by 0.00.
+
+def test_a_failure_that_cannot_change_a_score_does_not_degrade_the_banner():
+    result = status(hp=health(alternative={"source": "alternative",
+                                           "last_status": sh.FAILED}))
+    assert row(result, "alternative")["state"] == sh.FAILED
+    assert result["overall"] == "ok"
+
+
+def test_but_it_is_still_named_in_the_summary():
+    """Suppressed in the headline, never hidden. A silent red row is worse."""
+    summary = status(hp=health(alternative={"source": "alternative",
+                                            "last_status": sh.FAILED}))["summary"]
+    assert "Options and insider flow" in summary
+    assert "changes no score" in summary
+
+
+def test_the_exemption_is_not_granted_by_tier():
+    """
+    Sentiment is `quiet` too, and it is 0.20 of every composite. The question
+    the banner asks is whether a number moved, not how the row is grouped.
+    """
+    from app.services.system_status import alters_scores
+    assert alters_scores("sentiment") is True
+    assert alters_scores("alternative") is False
+    # A capability nobody classified is assumed to matter.
+    assert alters_scores("something_new") is True
+
+
+# ── Partial failure is a degradation, not an outage ───────────────────────────
+
+def test_one_ticker_of_thirteen_erroring_is_a_degradation():
+    """
+    Worst-wins decides *which* fault to name; it must not also decide how bad
+    it is. Reporting `failed` for a source that answered twelve times is what
+    kept the alternative row permanently red.
+    """
+    assert sh._resolved(
+        {"status": sh.FAILED, "ok": 12, "total": 13, "detail": "error"}
+    ) == sh.DEGRADED
+
+
+def test_a_source_that_answered_for_nobody_has_failed():
+    assert sh._resolved(
+        {"status": sh.FAILED, "ok": 0, "total": 13, "detail": "error"}
+    ) == sh.FAILED
+
+
+def test_a_partial_answer_says_how_partial():
+    detail = row(status(hp=health(alternative={
+        "source": "alternative", "last_status": sh.DEGRADED,
+        "tickers_ok": 12, "tickers_total": 13,
+    })), "alternative")["detail"]
+    assert "12 of 13" in detail
+
+
+# ── The analyst and deep research report at all ───────────────────────────────
+#
+# Neither touches `stocks_raw`, so `observe` cannot see them, and nothing called
+# `record_subsystem` for them either — their rows read "No reading yet"
+# permanently on a server where both were working. That is the page reporting on
+# its own instrumentation rather than on the system.
+
+def test_a_recorded_analyst_reading_is_surfaced():
+    result = status(hp=health(analyst={
+        "source": "analyst", "last_status": sh.OK,
+        "last_success_at": NOW - timedelta(minutes=8),
+    }))
+    assert row(result, "analyst")["state"] == sh.OK
+    assert row(result, "analyst")["last_success_at"] is not None
+
+
+def test_a_failing_analyst_degrades_because_conviction_gates_execution():
+    result = status(hp=health(analyst={"source": "analyst",
+                                       "last_status": sh.FAILED}))
+    assert result["overall"] == "degraded"
+
+
+def test_research_switched_on_with_nobody_opted_in_reads_as_a_setting():
+    """
+    `llm_settings.research_enabled` defaults false, so this server builds
+    nothing while the feature flag is on. It is a setting, not a fault, and the
+    status word alone cannot say which — hence the recorded sentence.
+    """
+    result = status(hp=health(research={
+        "source": "research", "last_status": sh.NOT_CONFIGURED,
+        "status_detail": "Switched on for this server, but no account has "
+                         "enabled research in its LLM settings, so no dossiers "
+                         "are built.",
+    }))
+    assert row(result, "research")["state"] == sh.NOT_CONFIGURED
+    assert "no account has enabled research" in row(result, "research")["detail"]
+    assert result["overall"] == "ok"
+
+
+def test_a_recorded_sentence_cannot_outlive_its_condition():
+    """It is written on every attempt, including as None."""
+    from app.services.source_health import _update_for
+
+    update = _update_for("research", sh.OK, NOW, detail=None)
+    assert update["$set"]["last_detail"] is None
+
+
+def test_a_failed_attempt_scrubs_its_error_and_extends_the_streak():
+    from app.services.source_health import _update_for
+
+    update = _update_for(
+        "research", sh.FAILED, NOW,
+        error="401 from https://api.anthropic.com/v1/messages?api_key=sk-live",
+    )
+    assert update["$inc"] == {"consecutive_failures": 1}
+    assert "sk-live" not in update["$set"]["last_error"]
+
+
+def test_a_successful_attempt_clears_the_streak():
+    from app.services.source_health import _update_for
+
+    update = _update_for("analyst", sh.OK, NOW)
+    assert update["$set"]["consecutive_failures"] == 0
+    assert "$inc" not in update
+
+
 # ── The ML path reports what actually ran ─────────────────────────────────────
 
 def test_the_weighted_path_is_a_first_class_state_not_an_absence():
@@ -380,6 +508,15 @@ def test_an_unconfigured_source_is_never_an_alert(monkeypatch):
 
 def test_a_fresh_deployment_with_no_records_says_nothing(monkeypatch):
     assert _watch(monkeypatch, {}) == []
+
+
+def test_a_failure_that_changes_no_number_never_pages_anyone(monkeypatch):
+    """
+    The same judgement as the banner. Asking someone to act on a failure with
+    no consequence is how a channel gets muted before the one that matters
+    arrives.
+    """
+    assert _watch(monkeypatch, _failing("alternative")) == []
 
 
 def test_the_alert_carries_what_the_failure_costs(monkeypatch):
