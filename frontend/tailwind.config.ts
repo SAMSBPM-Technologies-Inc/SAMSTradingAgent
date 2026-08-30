@@ -44,6 +44,7 @@ const config: Config = {
         archivo: ['Archivo', 'system-ui', 'sans-serif'],
         'work-sans': ['Work Sans', 'system-ui', 'sans-serif'],
         fraunces: ['Fraunces', 'Georgia', 'serif'],
+        jakarta: ['Plus Jakarta Sans', 'ui-sans-serif', 'system-ui', 'sans-serif'],
       },
       borderRadius: {
         card: '10px',
