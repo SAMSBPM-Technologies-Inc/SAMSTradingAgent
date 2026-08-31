@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, ArrowUpRight, Check } from 'lucide-react'
 import { contactApi } from '../lib/api'
@@ -59,11 +59,20 @@ function HomeNav() {
           ))}
         </ul>
 
+        {/* Same ordering as the hero, and for the same reason: the button a
+            stranger can actually use is the one that asks for an account. */}
         <div className="flex items-center gap-1.5">
           <ThemeToggle />
-          <Link to="/auth" className="btn-primary whitespace-nowrap">
+          <Link
+            to="/auth"
+            className="hidden whitespace-nowrap px-2 text-[13px] text-[var(--color-fg-muted)]
+                       transition-colors hover:text-[var(--color-fg)] sm:inline"
+          >
             Sign in
           </Link>
+          <a href="#contact" className="btn-primary whitespace-nowrap">
+            Request access
+          </a>
         </div>
       </nav>
     </header>
@@ -233,15 +242,33 @@ function Hero() {
               loop, on your rules.
             </p>
 
+            {/* Request access is primary and Sign in is not, because almost
+                everybody reading this page does not have an account — there is
+                no self-serve signup, so "Sign in" is a door they cannot open.
+                Leading with it left a first-time visitor no route at all: the
+                only explanation of how to get in was section 06, below four
+                screens of argument. */}
             <div className="mt-9 flex flex-wrap items-center gap-3">
-              <Link to="/auth" className="btn-primary h-11 px-6">
-                Sign in
+              <a href="#contact" className="btn-primary h-11 px-6">
+                Request access
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </Link>
+              </a>
               <a href="#loop" className="btn-secondary h-11 px-5">
                 How it works
               </a>
+              <Link
+                to="/auth"
+                className="h-11 px-2 text-[13.5px] leading-[2.75rem] text-[var(--color-fg-muted)]
+                           underline-offset-4 transition-colors hover:text-[var(--color-fg)] hover:underline"
+              >
+                Already have an account?
+              </Link>
             </div>
+
+            <p className="mt-5 text-[13px] leading-relaxed text-[var(--color-fg-muted)]">
+              Accounts are provisioned by hand — there is no signup form. Tell us
+              what you trade and you will get credentials by email.
+            </p>
           </div>
 
           <div className="home-rise lg:col-span-5" style={{ animationDelay: '120ms' }}>
@@ -794,6 +821,26 @@ function Footer() {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function HomePage() {
+  // Arriving at `/home#contact` — which is where the sign-in screen sends
+  // somebody who has no account — must actually land on the contact form.
+  // React Router does not act on a hash fragment by itself, so a link that
+  // looks like it works would quietly drop the visitor at the top of the page,
+  // four screens above the only thing they came for.
+  //
+  // Reading `window.location.hash` is not a violation of this page making no
+  // request and reading no context on load: it touches neither the API nor any
+  // provider, so moving this page to its own public host stays a one-line
+  // change.
+  useEffect(() => {
+    const id = window.location.hash.slice(1)
+    if (!id) return
+    // After paint, or the target does not exist to scroll to yet.
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
   return (
     <div className="home-scroll min-h-dvh bg-[var(--color-bg)] text-[var(--color-fg)]">
       <HomeNav />

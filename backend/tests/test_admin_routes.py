@@ -13,7 +13,11 @@ from app.models.user import AdminUserCreateResponse, AdminUserRow
 from app.services.auth import new_user_document
 from app.models.user import AccessTier
 
-ADMIN = {"_id": "u-admin", "email": "sudheer.samudrala@samspm.com", "access_tier": "BASIC"}
+#: The address in `config.admin_email`. Deliberately spelled out rather
+#: than read from settings — a test that derived it from the same source as
+#: the code would still pass if that source were wrong, which is exactly
+#: how a one-letter typo in the domain reached production once already.
+ADMIN = {"_id": "u-admin", "email": "sudheer.samudrala@samsbpm.com", "access_tier": "BASIC"}
 TRADER = {"_id": "u-trader", "email": "trader@example.com", "access_tier": "TRADER"}
 
 
@@ -54,7 +58,7 @@ def test_the_configured_address_is_not_refused(client, as_user):
 
 
 def test_a_case_different_address_still_matches(client, as_user):
-    as_user({**ADMIN, "email": "SUDHEER.SAMUDRALA@SAMSPM.COM"})
+    as_user({**ADMIN, "email": "SUDHEER.SAMUDRALA@SAMSBPM.COM"})
     assert client.get("/admin/users").status_code != 403
 
 
@@ -116,3 +120,21 @@ def test_the_password_alphabet_avoids_ambiguous_characters():
     from app.services.auth import generate_password
 
     assert not (set(generate_password(200)) & set("l1IO0"))
+
+
+def test_the_configured_admin_address_is_on_the_company_domain():
+    """
+    A one-letter typo in this default shipped once and made `/admin`
+    unreachable in production — the operator could not provision anybody, and
+    nothing failed loudly enough to notice, because being nobody's admin is
+    indistinguishable from an ordinary account until you go looking for the
+    page.
+
+    Pinned against the domain the rest of the deployment uses, so the two
+    cannot drift apart again silently.
+    """
+    from app.config import get_settings
+
+    configured = get_settings().admin_email
+    assert configured.endswith("@samsbpm.com"), configured
+    assert "samspm" not in configured, "samspm.com is the typo, not the company domain"

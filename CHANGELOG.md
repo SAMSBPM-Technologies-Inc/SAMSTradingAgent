@@ -14,6 +14,38 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.19.1] — 2026-08-31
+
+**The Admin page was unreachable.** `ADMIN_EMAIL` shipped defaulting to
+`sudheer.samudrala@sams**pm**.com` — a missing letter — so it matched no
+account and nobody was the operator. There was no error to see: being nobody's
+admin looks exactly like an ordinary account until you go looking for the page.
+Corrected to `@samsbpm.com`, and a test now pins the default to the company
+domain so the two cannot drift apart again quietly.
+
+**The landing page now tells a new visitor how to get in.** Both buttons at the
+top said *Sign in* — a door with no key, since there is no signup form and
+never has been. The only explanation of how to get an account was in section 06,
+below four screens of argument.
+
+- **Request access** is the primary action in the hero and the nav; *Sign in* is
+  still there, quieter, for the people it applies to.
+- A line under the hero buttons says plainly that accounts are provisioned by
+  hand and credentials arrive by email.
+- The sign-in screen has a **No account? Request access** link, so somebody who
+  lands there without one is not left staring at a password box. It goes to the
+  contact form and now actually scrolls to it — the page ignored the anchor
+  before, dropping people at the top.
+
+### Known gaps
+
+- If `ADMIN_EMAIL` was already set by hand in `.env.production` on the server,
+  the corrected default does not override it — check that file, not just this
+  release.
+- Everything from 1.19.0 and 1.18.0's Known gaps still stands.
+
+---
+
 ## [1.19.0] — 2026-08-31
 
 **Forgetting a password no longer means losing the account.** The previous

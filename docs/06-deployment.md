@@ -195,11 +195,29 @@ deploy workflow**, for the same reason `CONTACT_EMAIL` is not: the workflow's
 address makes *nobody* the operator — `/admin` becomes unreachable and account
 provisioning silently stops working. It defaults in `config.py`, and
 `main._check_admin_email` logs a warning at startup when it is empty or matches
-no account. Check the api container's logs after a deploy:
+no account.
+
+`.env.production` lives in **`/opt/trading-agent/backend/`**, not the repo root
+— the deploy workflow does `cd /opt/trading-agent && cd backend` before it
+touches anything, so every command in this section runs from there:
 
 ```bash
+cd /opt/trading-agent/backend
+grep ADMIN_EMAIL .env.production          # empty output = falling back to config.py
 docker compose -f docker-compose.prod.yml logs api | grep admin_email
 ```
+
+An absent `ADMIN_EMAIL` is not a fault — the default in `config.py` applies.
+Setting it explicitly is still worth doing, because it survives a change to
+that default and states the intent where an operator will look for it:
+
+```bash
+echo 'ADMIN_EMAIL=you@example.com' >> .env.production
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --no-deps api
+```
+
+`up -d`, not `restart`: `restart` reuses the container with the environment it
+already has and would silently ignore the edit.
 
 Two other optional values, both cost controls rather than credentials:
 `TIER_WATCHLIST_CAP_BASIC` / `TIER_WATCHLIST_CAP_PRO` (defaults 5 and 15 — the
