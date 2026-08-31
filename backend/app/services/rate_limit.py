@@ -26,6 +26,7 @@ import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 
+from app.config import get_settings
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -190,6 +191,47 @@ def record_contact_submission(client_ip: str) -> None:
     _by_contact.record_failure(client_ip)
 
 
+# ── Full analysis runs ────────────────────────────────────────────────────────
+#
+# `GET /analyze?force_refresh=true` is the one path where a user who is not
+# entitled to the deployment's model key spends it anyway. The analyst call
+# happens inside `run_pipeline`, which has no `user_id` and writes a single
+# shared `stocks_signals` document per ticker — so the spend genuinely cannot
+# be attributed to the person who asked for it without restructuring the
+# pipeline.
+#
+# That makes this a *quota* rather than an *entitlement*, which is why it lives
+# here with the other counters and not in `services/entitlements.py`. The
+# entitlement answers "may you"; this answers "how often". Keeping them in
+# different modules keeps either from being mistaken for the other.
+#
+# Note what this is and is not. `_SlidingWindow` counts hits and then applies a
+# fixed lockout, so with both durations set to a day the shape is "N runs, then
+# wait" rather than a true rolling allowance where the oldest run ages out on
+# its own. That is a coarser rule than the name "per day" suggests, and it is
+# the one being shipped: the decision carries `retry_after`, so the refusal can
+# say exactly how long rather than leaving someone guessing.
+
+_ANALYSIS_WINDOW_SECONDS = 86400
+
+_by_analysis = _SlidingWindow(
+    max_hits=get_settings().analysis_runs_per_day,
+    window_seconds=_ANALYSIS_WINDOW_SECONDS,
+    lockout_seconds=_ANALYSIS_WINDOW_SECONDS,
+)
+
+
+def check_analysis_allowed(user_id: str) -> LimitDecision:
+    """Whether this user may start another full analysis run today."""
+    _by_analysis.prune()
+    return _by_analysis.check(user_id)
+
+
+def record_analysis_run(user_id: str) -> None:
+    """Count a run. Called on every accepted rebuild, successful or not."""
+    _by_analysis.record_failure(user_id)
+
+
 def reset_for_tests() -> None:
     """Drop all state. Test seam only."""
     _by_email.__init__()    # type: ignore[misc]
@@ -198,4 +240,9 @@ def reset_for_tests() -> None:
         max_hits=CONTACT_MAX_SUBMISSIONS,
         window_seconds=CONTACT_WINDOW_SECONDS,
         lockout_seconds=CONTACT_LOCKOUT_SECONDS,
+    )
+    _by_analysis.__init__(  # type: ignore[misc]
+        max_hits=get_settings().analysis_runs_per_day,
+        window_seconds=_ANALYSIS_WINDOW_SECONDS,
+        lockout_seconds=_ANALYSIS_WINDOW_SECONDS,
     )

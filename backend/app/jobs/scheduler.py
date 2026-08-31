@@ -28,6 +28,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from app.config import get_settings
 from app.db import COLL_SIGNAL_HISTORY, COLL_SIGNALS, COLL_USERS, COLL_WATCHED, get_db
+from app.services.entitlements import ENROLABLE_TIERS, entitlements_for
 from app.services import source_health
 from app.services.benchmark import (
     alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
@@ -97,8 +98,8 @@ async def _research_users() -> list[tuple[str, list[str]]]:
     """
     Users who have opted into research, each with their own watchlist.
 
-    Two properties matter and both are cost controls. Research is five to seven
-    model calls per ticker per day; multiplied across users it is the one
+    Three properties matter and all three are cost controls. Research is five to
+    seven model calls per ticker per day; multiplied across users it is the one
     number in this system that can run away, so the job reaches nobody who has
     not asked for it — `research_enabled` defaults false and stays false until
     a user turns it on, at which point they are spending their own key.
@@ -106,11 +107,29 @@ async def _research_users() -> list[tuple[str, list[str]]]:
     And each user gets *their* watchlist rather than the union: building a
     dossier on a ticker somebody else watches spends one trader's key on
     another trader's name.
+
+    The third is the plan. `research_enabled` may have been set *before* a
+    downgrade — the route check only covers the moment of writing, and the admin
+    route clears the flag on a downgrade, so this is the belt to that brace.
+
+    **`$in` over the enrolable tiers, never `$ne: "BASIC"`.** `$ne` also matches
+    documents where the field is *absent*, which is every account predating
+    `db._migrate_access_tier` — so a failed migration plus a `$ne` filter would
+    enrol everybody rather than nobody. One operator's worth of difference
+    between cost contained and cost inverted.
+
+    The tier gets us to the candidates; `entitlements_for` makes the final call,
+    because a PRO account needs an explicit admin grant on top of its tier and
+    that rule lives in the table, not here.
     """
     try:
         db = await get_db()
         users = await db[COLL_USERS].find(
-            {"llm_settings.research_enabled": True}, {"_id": 1},
+            {
+                "llm_settings.research_enabled": True,
+                "access_tier": {"$in": ENROLABLE_TIERS},
+            },
+            {"_id": 1, "access_tier": 1, "email": 1, "research_daily_allowed": 1},
         ).to_list(length=1000)
     except Exception as exc:
         logger.warning("research_users_fetch_failed", error=str(exc))
@@ -118,6 +137,8 @@ async def _research_users() -> list[tuple[str, list[str]]]:
 
     out: list[tuple[str, list[str]]] = []
     for user in users:
+        if not entitlements_for(user).may_enrol_in_nightly_research:
+            continue
         user_id = str(user["_id"])
         try:
             db = await get_db()

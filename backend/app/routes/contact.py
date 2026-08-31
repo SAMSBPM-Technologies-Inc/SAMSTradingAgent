@@ -19,10 +19,28 @@ The failure is reported honestly rather than swallowed. Elsewhere in this
 codebase a mail failure is logged and ignored, because trading must not stop
 for it — but a person who fills in a form and is told "sent" when nothing was
 sent has simply been lied to, and has no other way to reach anyone.
+
+Since accounts are provisioned by hand, this is also the intake. Each real
+submission is written to `access_requests` so the operator has a queue rather
+than an inbox search, which makes it the only unauthenticated **insert** on
+this API as well as the only unauthenticated write. Three rules come with that:
+
+  * **A honeypot trip persists nothing.** Filling the queue with what the
+    honeypot exists to absorb defeats the point of having one.
+  * **A failed write does not fail the request.** A dropped queue row is a lost
+    convenience; a dropped email is a lost person, and the mail is what the
+    visitor was promised.
+  * **A successful write never masks a failed send.** The 502 stands. Writing
+    a row and then reporting success for mail that did not go is the exact lie
+    the paragraph above forbids.
 """
+from datetime import datetime, timezone
+from typing import Literal, Optional
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.db import COLL_ACCESS_REQUESTS, get_db
 from app.services import rate_limit
 from app.services.notifier import send_contact_message
 from app.utils.logger import get_logger
@@ -38,6 +56,13 @@ class ContactRequest(BaseModel):
     message: str = Field(min_length=10, max_length=4000)
     #: Honeypot. Named for what a bot expects to see, not for what it does.
     company: str = Field(default="", max_length=200)
+    #: What they are after, in the visitor's own terms rather than in ours.
+    #:
+    #: Deliberately not "BASIC / PRO / TRADER": a stranger has no idea what
+    #: those mean, and naming plans on a page that quotes no prices invites a
+    #: question the page cannot answer. A fixed set rather than free text so it
+    #: can be grouped, and so nothing arbitrary reaches a mail header.
+    interest: Optional[Literal["read", "research", "trade"]] = None
 
     @field_validator("name", "message")
     @classmethod
@@ -74,7 +99,12 @@ async def submit_contact(body: ContactRequest, request: Request) -> ContactRespo
 
     rate_limit.record_contact_submission(ip)
 
-    failure = await send_contact_message(body.name, str(body.email), body.message)
+    await _record_request(body, ip)
+
+    failure = await send_contact_message(
+        body.name, str(body.email), body.message,
+        interest=_INTEREST_LABELS.get(body.interest or ""),
+    )
     if failure:
         logger.error("contact_send_failed", client=ip, error=failure)
         raise HTTPException(
@@ -84,3 +114,42 @@ async def submit_contact(body: ContactRequest, request: Request) -> ContactRespo
 
     logger.info("contact_received", client=ip, sender=str(body.email))
     return ContactResponse(sent=True)
+
+
+#: How each choice reads in the operator's inbox and queue. The wire values stay
+#: short and stable; these are the sentence.
+_INTEREST_LABELS = {
+    "read": "Just wants to see the analysis",
+    "research": "In-depth research on their own names",
+    "trade": "Trading through their own IB account",
+}
+
+
+async def _record_request(body: ContactRequest, ip: str) -> None:
+    """
+    Add this submission to the operator's queue.
+
+    Never raises. Persisting is a convenience for whoever provisions accounts;
+    the mail is what the visitor was actually promised, and losing a queue row
+    must not cost them their message. Called only for real submissions — a
+    honeypot trip returns before this.
+    """
+    try:
+        db = await get_db()
+        await db[COLL_ACCESS_REQUESTS].insert_one({
+            "name": body.name,
+            "email": str(body.email),
+            "message": body.message,
+            "interest": _INTEREST_LABELS.get(body.interest or ""),
+            "created_at": datetime.now(tz=timezone.utc),
+            # Kept for the same reason the rate limiter keys on it, and aged out
+            # by the TTL index with the rest of the row.
+            "client_ip": ip,
+        })
+    except Exception as exc:
+        logger.error(
+            "access_request_not_recorded",
+            client=ip, error=str(exc),
+            impact="the message is still being sent; it just will not appear "
+                   "in the admin queue",
+        )

@@ -19,6 +19,7 @@ from app.config import get_settings
 from app.db import COLL_USERS, close_db, connect_db, get_db  # COLL_USERS used by _check_owner_account
 from app.jobs.scheduler import start_scheduler, stop_scheduler
 from app.routes import (
+    admin,
     alerts,
     analysis,
     auth,
@@ -75,6 +76,43 @@ def _check_jwt_secret() -> bool:
     return True
 
 
+async def _check_admin_email() -> None:
+    """
+    Say loudly when nobody can reach the admin surface.
+
+    `ADMIN_EMAIL` is deliberately not injected by the deploy workflow — the
+    workflow's `_set_key` writes `KEY=` for an unset variable, which is exactly
+    how `CONTACT_EMAIL` would have turned every submission into a 502. Here the
+    same mistake would be quieter and worse: an empty value makes *nobody*
+    admin, so provisioning simply stops working with no error anywhere.
+
+    Not fatal, for the same reason `_check_jwt_secret` is not: taking the API
+    down over a configuration problem is still an outage. Logged as a warning
+    and visible at startup instead.
+    """
+    from app.services.entitlements import is_admin
+
+    configured = (get_settings().admin_email or "").strip()
+    if not configured:
+        logger.warning(
+            "admin_email_unset",
+            impact="nobody can reach /admin — no account provisioning, no tier "
+                   "or cap changes without shell access to the database",
+            fix="set ADMIN_EMAIL in .env.production and restart the api container",
+        )
+        return
+
+    db = await get_db()
+    users = await db[COLL_USERS].find({}, {"email": 1}).to_list(length=1000)
+    if not any(is_admin(u) for u in users):
+        logger.warning(
+            "admin_email_matches_no_account",
+            configured=configured,
+            impact="/admin is unreachable — the configured address has no account",
+            fix="create that account, or correct ADMIN_EMAIL and restart",
+        )
+
+
 async def _check_owner_account() -> None:
     """Log a warning on startup if no user accounts exist yet.
     Run scripts/create_user.py to create the first account.
@@ -93,6 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _check_jwt_secret()
     await connect_db()
     await _check_owner_account()
+    await _check_admin_email()
     start_scheduler()
 
     # Connect to the broker if auto-trading is enabled
@@ -193,6 +232,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts.router)
     app.include_router(trading.router)
     app.include_router(contact.router)
+    app.include_router(admin.router)
 
     return app
 

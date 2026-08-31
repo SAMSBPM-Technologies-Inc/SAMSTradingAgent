@@ -17,11 +17,12 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.config import get_settings
 from app.db import COLL_FUNDAMENTALS_CACHE, COLL_WATCHED, get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_token_spend
 from app.models.stock import (
     CitationAudit, PriorRecordCoverage, ResearchDebate, ResearchDossier,
     ModelUsed, ResearchOutcome, ResearchStances, ResearchVetoStatus,
 )
+from app.services.entitlements import entitlements_for
 from app.services.research.dossier import build_dossier, latest_dossier
 from app.services.research.veto import evaluate_veto
 from app.utils.logger import get_logger
@@ -48,10 +49,40 @@ async def get_research(ticker: str,
 
 
 @router.post("/research/{ticker}", response_model=ResearchDossier,
-             summary="Build a new research dossier (slow, costs API calls)")
+             summary="Build a new research dossier (slow, costs API calls)",
+             dependencies=[Depends(require_token_spend)])
 async def create_research(ticker: str,
                           current_user: dict = Depends(get_current_user)
                           ) -> ResearchDossier:
+    """
+    The expensive verb. Five to eleven model calls with extended thinking.
+
+    Note the order the two refusals come in, which falls out of the dependency
+    running before the body: a caller whose plan does not include this is told
+    about their plan, not about `RESEARCH_AGENTS_ENABLED`. A deployment flag is
+    not their problem and naming it leaks configuration to someone who could
+    not act on it anyway.
+    """
+    ent = entitlements_for(current_user)
+
+    # Refuse early rather than after the evidence ledger has been built. A user
+    # who may not fall back to the deployment's key and has configured none of
+    # their own has an empty chain: `complete_with_chain` reports that honestly,
+    # but only once the dossier is most of the way through being assembled, and
+    # as a model failure rather than as the configuration problem it is.
+    if not ent.may_use_server_key and not _has_own_key(current_user):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "no_provider_key",
+                "capability": "may_bring_own_key",
+                "tier": ent.tier.value,
+                "message": "Add a provider key in Settings → Models before "
+                           "running deep research. Research on your plan runs "
+                           "on your own key.",
+            },
+        )
+
     settings = get_settings()
     if not settings.research_agents_enabled:
         raise HTTPException(
@@ -103,6 +134,12 @@ async def get_research_veto(ticker: str,
     ticker = ticker.upper().strip()
     doc = await latest_dossier(ticker, str(current_user.get("_id") or ""))
     return ResearchVetoStatus(**evaluate_veto(doc).to_dict())
+
+
+def _has_own_key(user: dict) -> bool:
+    """Whether this user has at least one provider key of their own stored."""
+    keys = ((user or {}).get("llm_settings") or {}).get("keys") or []
+    return any(k.get("ciphertext") for k in keys if isinstance(k, dict))
 
 
 async def _watchlist_context(user_id: str) -> list[dict]:

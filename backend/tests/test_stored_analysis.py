@@ -45,7 +45,12 @@ class FakeDB:
         return self._c.get(name) or FakeCollection([])
 
 
-USER = {"_id": "u1", "scoring_weights": None}
+#: TRADER, because these tests are about *when* `/analyze` rebuilds, and a
+#: caller who may not spend tokens never rebuilds at all — plain `/analyze`
+#: degrades to a stored read for them, which is a different property, pinned in
+#: `test_tier_routes.py`. Leaving the tier off here would have made these tests
+#: quietly assert the reader's behaviour instead of the trader's.
+USER = {"_id": "u1", "scoring_weights": None, "access_tier": "TRADER"}
 
 
 def run(coro):

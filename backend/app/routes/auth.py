@@ -14,6 +14,7 @@ from app.db import COLL_USERS, get_db
 from app.dependencies import get_current_user
 from app.services import rate_limit
 from app.services.auth import create_access_token, hash_password, verify_password
+from app.services.entitlements import entitlements_for, is_admin
 from app.utils.net import client_ip as _client_ip
 from app.utils.logger import get_logger
 
@@ -95,13 +96,31 @@ async def login(body: LoginRequest, request: Request) -> TokenResponse:
 
 @router.get("/me")
 async def get_me(current_user: dict = Depends(get_current_user)) -> dict:
-    """Return the current user's profile."""
+    """
+    Return the current user's profile, including what they may do.
+
+    `entitlements` is the whole resolved object, so **no client ever derives
+    policy from a tier name**. Both clients read these booleans; neither maps a
+    tier to a feature or restates a cap. It is the rule `/analyze` already
+    follows by returning `breakdown` and `gate` from the engine rather than
+    letting the UI keep its own copy of the weights — and it means a fourth
+    tier, or a retuned cap, needs no client change at all.
+
+    Also why there is no tier claim in the JWT: this is read on every request
+    anyway, and a claim would be stale for the token's whole 24-hour life, so a
+    downgrade would take effect whenever the user next signed in. For a control
+    whose purpose is to stop spending now, that is the wrong direction.
+    """
+    ent = entitlements_for(current_user)
     return {
         "id": str(current_user["_id"]),
         "email": current_user["email"],
         "display_name": current_user.get("display_name", ""),
         "created_at": current_user.get("created_at"),
         "scoring_weights": current_user.get("scoring_weights"),
+        "access_tier": ent.tier.value,
+        "is_admin": is_admin(current_user),
+        "entitlements": ent.to_response().model_dump(),
     }
 
 

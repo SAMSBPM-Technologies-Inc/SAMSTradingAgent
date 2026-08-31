@@ -673,6 +673,13 @@ class WatchlistResponse(BaseModel):
     count: int
     items: list[WatchlistItem]
     setups: WatchlistSetupCounts = WatchlistSetupCounts()
+    #: How many tickers this plan covers. `None` is unlimited — zero would be a
+    #: cap of nothing, and the two must stay distinguishable.
+    #:
+    #: Returned so the client can show "7 / 15" and disable the add box before
+    #: the request rather than after a refusal. That is presentation; the 403
+    #: from `POST /ticker` is the gate.
+    cap: Optional[int] = None
 
 
 class TickerAddRequest(BaseModel):

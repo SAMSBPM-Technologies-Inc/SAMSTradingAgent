@@ -146,14 +146,22 @@ async def _resolve_chains(user_id: Optional[str]) -> dict:
     """
     This user's ordered candidates per role, resolved once per dossier.
 
-    A user with nothing configured gets a chain of exactly one — the server's
-    own key — which is why a fresh account still produces dossiers and why a
-    single-trader deployment behaves exactly as it did before any of this
-    existed.
+    A user entitled to it and with nothing configured gets a chain of exactly
+    one — the server's own key — which is why a fresh trader account still
+    produces dossiers and why a single-trader deployment behaves exactly as it
+    did before any of this existed.
+
+    An account on a plan that pays for its own tokens does not get that link.
+    Their chain is their keys and nothing else, so a key that fails mid-dossier
+    fails the dossier rather than quietly moving the bill to the operator.
     """
+    from app.services.entitlements import entitlements_for
     from app.services.llm.resolver import build_chain
 
     llm_settings: Optional[dict] = None
+    # Absent a user, this is the deployment's own work — the same reading
+    # `build_chain` defaults to.
+    allow_server_key = True
     if user_id:
         try:
             db = await get_db()
@@ -163,8 +171,14 @@ async def _resolve_chains(user_id: Optional[str]) -> dict:
                 key = ObjectId(str(user_id))
             except Exception:
                 key = user_id
-            user = await db[COLL_USERS].find_one({"_id": key}, {"llm_settings": 1})
+            user = await db[COLL_USERS].find_one(
+                {"_id": key},
+                {"llm_settings": 1, "access_tier": 1, "email": 1,
+                 "research_daily_allowed": 1},
+            )
             llm_settings = (user or {}).get("llm_settings")
+            if user is not None:
+                allow_server_key = entitlements_for(user).may_use_server_key
         except Exception as exc:
             # Fall through to the server key rather than failing the build. A
             # database hiccup should cost the user their model *choice*, not
@@ -173,8 +187,10 @@ async def _resolve_chains(user_id: Optional[str]) -> dict:
                            user_id=user_id, error=str(exc))
 
     return {
-        "orchestrator": build_chain(llm_settings, "orchestrator"),
-        "specialist": build_chain(llm_settings, "specialist"),
+        "orchestrator": build_chain(llm_settings, "orchestrator",
+                                    allow_server_key=allow_server_key),
+        "specialist": build_chain(llm_settings, "specialist",
+                                  allow_server_key=allow_server_key),
     }
 
 

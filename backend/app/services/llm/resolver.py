@@ -3,13 +3,20 @@ Which key answers this call, and what happens when it does not.
 
 Two jobs. Build the ordered candidate list for a (user, role), and walk it.
 
-**The server's own key is always last.** A user who has configured nothing gets
-it, which is the only reason "user keys pay for everything" does not mean
-"a new account silently gets no dossiers, no analyst, and no signals". It is
+**The server's own key is last, for whoever is entitled to reach it.** It is
 appended rather than offered as a choice: it belongs to the deployment, not to
 the user, so it cannot be reordered, relabelled, or deleted from a profile —
 and on a single-trader deployment with one server key, the behaviour is
 identical to before this package existed.
+
+`allow_server_key=False` withholds it, and that is what makes the PRO tier's
+economics real: an account that pays for its own tokens must not silently fall
+through to the operator's key when it has configured nothing, or when its own
+key rate-limits mid-dossier. The default stays True, so every caller that has
+no user behind it — the pipeline's analyst call, which writes one shared
+`stocks_signals` document per ticker and belongs to the deployment however it
+was triggered — is unchanged. Only `research/dossier._resolve_chains` passes it,
+because that is the one path resolved per user.
 
 **The walk stops on a failure that retrying cannot fix.** `ErrorKind` carries
 that judgement (see `base.py`); nothing here re-derives it. The distinction
@@ -67,7 +74,8 @@ def server_candidate(role: str) -> Optional[Candidate]:
     return Candidate(provider="anthropic", model=model, api_key=api_key, key_id=None)
 
 
-def build_chain(llm_settings: Optional[dict], role: str) -> list[Candidate]:
+def build_chain(llm_settings: Optional[dict], role: str,
+                *, allow_server_key: bool = True) -> list[Candidate]:
     """
     The ordered candidates for one role, user keys first and the server last.
 
@@ -75,6 +83,12 @@ def build_chain(llm_settings: Optional[dict], role: str) -> list[Candidate]:
     entry — a rotated `ENCRYPTION_KEY`, a hand-edited document — must not take
     down every other key the user configured, and the chain has somewhere else
     to go by construction.
+
+    `allow_server_key=False` drops that last link. The chain can then come back
+    empty, which `complete_with_chain` reports as a configuration failure rather
+    than a model one — but callers should refuse earlier than that where they
+    can, so the user hears "add a key" instead of "the model did not answer".
+    `POST /research/{ticker}` does exactly that.
     """
     chain: list[Candidate] = []
     settings = llm_settings or {}
@@ -101,9 +115,10 @@ def build_chain(llm_settings: Optional[dict], role: str) -> list[Candidate]:
         chain.append(Candidate(provider=provider, model=model,
                                api_key=api_key, key_id=key_id))
 
-    fallback = server_candidate(role)
-    if fallback is not None:
-        chain.append(fallback)
+    if allow_server_key:
+        fallback = server_candidate(role)
+        if fallback is not None:
+            chain.append(fallback)
     return chain
 
 

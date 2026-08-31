@@ -771,7 +771,8 @@ async def send_test_email(to: str) -> str | None:
 
 # ── Contact form ──────────────────────────────────────────────────────────────
 
-async def send_contact_message(name: str, email: str, message: str) -> str | None:
+async def send_contact_message(name: str, email: str, message: str,
+                               interest: str | None = None) -> str | None:
     """
     Deliver a landing-page contact submission to `CONTACT_EMAIL`.
 
@@ -792,17 +793,27 @@ async def send_contact_message(name: str, email: str, message: str) -> str | Non
     # Subject lines are headers; a newline in one splits the message.
     safe_name = name.replace("\r", " ").replace("\n", " ").strip()
 
+    # Validated against a fixed set at the schema, so this cannot carry
+    # arbitrary text into a header — but it is still escaped for the HTML part
+    # like everything else here.
+    safe_interest = (interest or "").replace("\r", " ").replace("\n", " ").strip()
+
     subject = f"[STA] Contact from {safe_name}"
     text = (
         f"Name:    {safe_name}\n"
         f"Email:   {email}\n"
-        f"\n"
+        + (f"Wants:   {safe_interest}\n" if safe_interest else "")
+        + f"\n"
         f"{message}\n"
     )
     body_html = html_mod.escape(message).replace("\n", "<br>")
+    interest_html = (
+        f"<br><strong>Wants:</strong> {html_mod.escape(safe_interest)}"
+        if safe_interest else ""
+    )
     html_body = (
         f"<p><strong>Name:</strong> {html_mod.escape(safe_name)}<br>"
-        f"<strong>Email:</strong> {html_mod.escape(email)}</p>"
+        f"<strong>Email:</strong> {html_mod.escape(email)}{interest_html}</p>"
         f"<hr><p>{body_html}</p>"
     )
 
