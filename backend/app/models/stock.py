@@ -196,7 +196,7 @@ class AnalyzeResponse(BaseModel):
     bull_case: Optional[str] = None
     bear_case: Optional[str] = None
     # The scannable form of the two cases, written by the analyst rather than
-    # derived from the prose. Empty on every analysis stored before 1.15.0 —
+    # derived from the prose. Empty on every analysis stored before 1.20.0 —
     # the client falls back to the paragraph and must never split one itself.
     bull_points: list[str] = []
     bear_points: list[str] = []
