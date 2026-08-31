@@ -1,4 +1,3 @@
-import React from 'react'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import type { AnalyzeResponse, Holding, Quote, TradeRecord, WatchlistItem } from '../../types'
 import AnalysisProgress from './AnalysisProgress'
@@ -33,7 +32,6 @@ interface Props {
   item: WatchlistItem | null
   holding: Holding | null
   position: TradeRecord | null
-  watched: boolean
   /** Reading the stored analysis. Fast; no pipeline involved. */
   loading: boolean
   /** The explicit full run is in flight. */
@@ -41,23 +39,20 @@ interface Props {
   /** Nothing has ever been analysed for this ticker. Not an error. */
   neverAnalysed: boolean
   error: string | null
+  /**
+   * Only the empty state uses this: with no stored analysis, running one is the
+   * single thing to do and the rail is a column away. Watch, Remove and Export
+   * are not here at all — they are `TickerActions`, in the right column.
+   */
   onRunAnalysis: () => void
-  onWatch: () => void
-  onUnwatch: () => void
   onRetry: () => void
   onClose: () => void
-  /**
-   * The order ticket. It belongs under the analysis rather than in the rail:
-   * the ticket is *about* the name being read, and the rail is where the
-   * account-wide queues live.
-   */
-  footer?: React.ReactNode
 }
 
 export default function TickerPanel({
-  symbol, data, quote, item, holding, position, watched,
+  symbol, data, quote, item, holding, position,
   loading, analysing, neverAnalysed, error,
-  onRunAnalysis, onWatch, onUnwatch, onRetry, onClose, footer,
+  onRunAnalysis, onRetry, onClose,
 }: Props) {
   const { user } = useAuth()
   const maySpend = entitlementsOf(user).may_spend_tokens
@@ -89,11 +84,6 @@ export default function TickerPanel({
         quote={quote}
         holding={holding}
         position={position}
-        watched={watched}
-        analysing={analysing}
-        onRunAnalysis={onRunAnalysis}
-        onWatch={onWatch}
-        onUnwatch={onUnwatch}
       />
 
       {analysing ? (
@@ -128,10 +118,7 @@ export default function TickerPanel({
           )}
         </div>
       ) : data ? (
-        <>
-          <TickerAnalysis data={data} item={item} />
-          {footer}
-        </>
+        <TickerAnalysis data={data} item={item} />
       ) : null}
     </div>
   )

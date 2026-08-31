@@ -14,6 +14,71 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.20.0] — 2026-08-31
+
+**The ticker page said everything at once, so it said nothing first.** A reader
+opening a name met the verdict, then a row of four controls, then a chart, then
+five timing tiles, then an open factor breakdown and an open risk panel — and
+only after all of that, around five screens down, the actual argument for and
+against owning the thing. This release re-orders it around one question: what
+does the engine think, and why.
+
+- **The bull and bear cases are now the first thing under the verdict**, as at
+  most three short bullets a side. The analyst writes those bullets — there is a
+  new `bull_points` / `bear_points` pair in its structured output — rather than
+  the client chopping the paragraph on its full stops, which is a guess at which
+  clause carried the argument made by the layer least able to know. The full
+  paragraph, the catalysts and the key risks fold in behind a *Full case*
+  toggle.
+- **The detail collapses.** Timing indicators, the factor attribution, the risk
+  and buy gate, and everything below them start closed. Nothing was removed —
+  the engine paid to produce all of it — and the price chart stays open, because
+  a chart is scanned rather than read.
+- **Actions moved to the right column.** Watch, Remove from watchlist, Export
+  report and Run full analysis were a row wedged between the verdict and the
+  reasoning for it; they now sit at the top of the right rail with the order
+  ticket, which moved up from the bottom of the centre column to join them.
+  Reading a name and acting on it are separate questions and the page no longer
+  interleaves them.
+- **One unwatch control, not two.** The "Watching ✓" chip and the trash button
+  did the same thing, which meant the state readout was itself a way to destroy
+  the row it reported on. The state is a state now; removing is a button that
+  says so.
+- **The IB Gateway box is gone from the ticker rail unless the session is
+  down.** A permanent "connected" panel on a screen about one company is a fact
+  the reader did not ask for, restated on every ticker they open — and the
+  account strip already carries a live dot for it. When the session *is* down it
+  appears at the top of the rail with Reconnect and Restart, because then it is
+  the only thing there worth acting on.
+- **The phone app moved in step.** Bull and bear rise above the chart with the
+  same bullets and the same fallback; the score breakdown and risk panel
+  collapse. The separate Catalysts and Key Risks sections were folded into the
+  two cases rather than shown twice.
+
+### Known gaps
+
+- **Bullets only appear on analyses run after this release.** `bull_points` and
+  `bear_points` are empty on every stored analysis, and there is no backfill —
+  the page shows the stored paragraph, clamped to three lines, until the name is
+  re-analysed. On a watched ticker that happens on the next analyst refresh; on
+  an unwatched one it takes a *Run full analysis*.
+- **The bullets are not checked against the paragraph they summarise.** The
+  prompt forbids introducing anything the case does not say, and nothing
+  enforces it. Unlike the research module, the analyst path has no citation
+  filter, so this is a prompt-level guarantee and not a structural one.
+- **On the stacked mobile-web layout the actions now land after the analysis
+  rather than before it.** That is a real regression in reach for *Run full
+  analysis* on a narrow browser window, accepted because collapsing the detail
+  made "after the analysis" about a screen and a half instead of five, and
+  because a button that spends an analyst call does not belong above the verdict
+  it would replace. The React Native app is unaffected — it has its own header
+  actions.
+- **`AnalystReport` gained the two fields but the exported PDF and .txt still
+  render the prose cases only.** Nothing is lost; the export simply does not
+  show the summary.
+
+---
+
 ## [1.19.3] — 2026-08-31
 
 **The status page was reporting on itself.** It read **Degraded** on a server

@@ -6,6 +6,7 @@ import { useToast } from '../lib/toast-context'
 import { useAuth } from '../lib/auth-context'
 import { entitlementsOf, tierRefusal } from '../lib/entitlements'
 import { usePoll } from '../lib/use-poll'
+import { useTradingSettings } from '../lib/trading-context'
 import { PortfolioProvider, usePortfolio } from '../lib/portfolio-context'
 import type {
   AnalyzeResponse,
@@ -16,6 +17,7 @@ import type {
 import Layout from '../components/Layout'
 import WatchlistRail from '../components/trade/WatchlistRail'
 import TickerPanel from '../components/trade/TickerPanel'
+import TickerActions from '../components/trade/TickerActions'
 import TransactionDetail from '../components/positions/TransactionDetail'
 import BrokerPanel from '../components/BrokerPanel'
 import PositionsDashboard from '../components/PositionsDashboard'
@@ -88,6 +90,10 @@ function TradeScreen() {
   // dashboard body also reads, so the rail's held-badges and the tables below
   // can never be drawn from two different reads of the same account.
   const { holdings, positions, orders, proposals, reload } = usePortfolio()
+
+  // Only to decide whether the broker box is worth the space — see the rail
+  // below. The same object the account strip reads, not a second poll.
+  const { account, accountLoading } = useTradingSettings()
 
   // ── Watchlist ─────────────────────────────────────────────────────────────
   const loadWatchlist = useCallback(async (background = false) => {
@@ -317,21 +323,15 @@ function TradeScreen() {
       item={selectedItem}
       holding={selectedHolding}
       position={selectedPosition}
-      watched={watched}
       loading={analysisLoading}
       analysing={analysing}
       neverAnalysed={neverAnalysed}
       error={error}
       onRunAnalysis={() => runAnalysis(selected)}
-      onWatch={watchSelected}
-      onUnwatch={() => removeFromWatchlist(selected)}
       onRetry={() => loadStored(selected)}
       // Back rather than a push, so opening and closing five names does not
       // bury the dashboard under five history entries.
       onClose={() => navigate('/')}
-      footer={ent.may_trade
-        ? <OrderPanel data={data} onOrderPlaced={onAgentChanged} />
-        : undefined}
     />
   ) : transactionId ? (
     <TransactionDetail />
@@ -465,34 +465,69 @@ function TradeScreen() {
           {centre}
         </div>
 
-        {/* ── Ticket, approvals, activity ────────────────────────────────────
-            Same trick: dissolved below lg so the ticket and the approvals queue
-            land directly under the verdict (order-3) and the activity log falls
-            to the bottom (order-5), while at lg all three stack in the right
-            column. Every panel is mounted exactly once either way. */}
+        {/* ── Actions, ticket, approvals, activity ───────────────────────────
+            Same trick: dissolved below lg so the panels fall into the single
+            column in reading order — actions (order-3), ticket and approvals
+            (order-4), activity last (order-5) — while at lg all four stack in
+            the right column. Every panel is mounted exactly once either way. */}
         <div
           className="contents lg:block lg:min-h-0 lg:overflow-y-auto lg:border-l
                      lg:border-[var(--color-border)] lg:bg-[var(--color-surface)]"
         >
-          {/* The whole right column is the brokerage account: a session
-              status, a queue of proposed orders and a log of placed ones. An
-              account whose plan has no trading has none of those things, so
-              this is removed rather than shown empty — and the server refuses
-              every request behind it regardless. */}
-          {ent.may_trade && (
-          <div className="order-3 border-b border-[var(--color-border)]
-                          bg-[var(--color-surface)] lg:order-none lg:border-b-0">
-            {/* Broker session first: when it is down every action on this
-                screen is refused, so it is the first thing worth knowing. It
-                sits here rather than across the top of the dashboard because
-                it is a standing status, not a result — a small box you glance
-                at, not a banner competing with the positions. */}
-            <div className="border-b border-[var(--color-border)] px-3 py-2.5">
-              <BrokerPanel compact />
+          {/* ── What you can do about the name being read ─────────────────
+              Watch, Remove, Export and Run full analysis were a row wedged
+              between the verdict and the reasoning for it. Reading and acting
+              are separate questions, so the centre column answers the first
+              and this column carries the second — with the order ticket, which
+              is the same kind of thing.
+
+              Not gated on `may_trade`: none of these four is a trading action,
+              and a plan that reads without trading still watches, exports and
+              runs analyses.
+
+              Below lg this lands directly after the analysis rather than
+              before it. That is only tolerable because the analysis got short
+              — every detail panel under the two cases is collapsed now — and
+              because putting a button that spends an analyst call above the
+              verdict invites the spend before the reading. */}
+          {selected && (
+            <div className="order-3 border-b border-[var(--color-border)]
+                            bg-[var(--color-surface)] lg:order-none lg:border-b-0">
+              <TickerActions
+                symbol={selected}
+                data={data}
+                watched={watched}
+                analysing={analysing}
+                onRunAnalysis={() => runAnalysis(selected)}
+                onWatch={watchSelected}
+                onUnwatch={() => removeFromWatchlist(selected)}
+              />
             </div>
-            {/* The order ticket moved into the analysis overlay: it is about
-                the name being read, and a ticket in this rail would sit behind
-                the sheet that is covering the screen. */}
+          )}
+
+          {/* The rest of this column is the brokerage account: a ticket, a
+              queue of proposed orders and a log of placed ones. An account
+              whose plan has no trading has none of those things, so this is
+              removed rather than shown empty — and the server refuses every
+              request behind it regardless. */}
+          {ent.may_trade && (
+          <div className="order-4 border-b border-[var(--color-border)]
+                          bg-[var(--color-surface)] lg:order-none lg:border-b-0">
+            {/* Only when it is down, and only then. A permanent "IB Gateway
+                connected" box on a screen about one company is a fact the
+                reader did not ask for, restated on every ticker they open —
+                and the account strip already carries a live dot for it. This
+                is the same instinct as `AccountBar`'s inputs chip: silent in
+                the nominal case, because a status that is always green is a
+                status people stop seeing. When the session is actually down it
+                is the only thing here that can be acted on, so it goes first
+                and it brings Reconnect and Restart with it. */}
+            {!accountLoading && account?.connected === false && (
+              <div className="border-b border-[var(--color-border)] px-3 py-2.5">
+                <BrokerPanel compact />
+              </div>
+            )}
+            {selected && <OrderPanel data={data} onOrderPlaced={onAgentChanged} />}
             <ApprovalsPanel proposals={proposals} onProposalsChanged={onAgentChanged} />
           </div>
           )}

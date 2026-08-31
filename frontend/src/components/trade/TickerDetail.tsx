@@ -1,15 +1,5 @@
 import { Suspense, lazy, useState } from 'react'
-import {
-  AlertCircle,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Download,
-  Mail,
-  Plus,
-  RefreshCw,
-  Trash2,
-} from 'lucide-react'
+import { AlertCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import type {
   AnalyzeResponse,
   Holding,
@@ -20,20 +10,15 @@ import type {
 } from '../../types'
 import { formatDateTime, relativeTime } from '../../lib/format'
 import { useNow } from '../../lib/use-poll'
-import { downloadPdf, downloadTxt, emailReport } from '../../lib/report'
-import { useToast } from '../../lib/toast-context'
 import { SOURCE_DESCRIPTION, tradeSource } from '../../lib/trade-source'
 import { Disclaimer } from '../Layout'
 import ConvictionBadge from '../ConvictionBadge'
 import FactorBreakdown from '../FactorBreakdown'
 import LoadingSpinner from '../LoadingSpinner'
-import Menu, { MenuItem } from '../Menu'
 import RiskPanel from '../RiskPanel'
 import SignalBadge from '../SignalBadge'
 import AltDataPanel from './AltDataPanel'
 import { ResearchPanel } from './ResearchPanel'
-import { useAuth } from '../../lib/auth-context'
-import { entitlementsOf } from '../../lib/entitlements'
 
 // Split out: the charting library is ~200 kB and this is the only screen that
 // draws one. Bundled eagerly it loaded on screens that have no chart.
@@ -286,16 +271,115 @@ function Collapsible({
   )
 }
 
+// ── The two cases ─────────────────────────────────────────────────────────────
+
+/** At most this many bullets a side. Past three it stops being a glance. */
+const MAX_CASE_POINTS = 3
+
+/**
+ * One side of the argument, bullets first.
+ *
+ * `points` is written by the analyst, not derived here. Splitting a paragraph
+ * on its full stops is a guess at which clause carried the argument, made by
+ * the layer least equipped to know — so an analysis stored before the analyst
+ * was asked for bullets shows its paragraph, clamped, with the full text a
+ * click away. It never gets chopped into fake bullets.
+ *
+ * The prose, catalysts and risks are not dropped, only folded: this section is
+ * at the top of the page now, and the whole reason it could move up is that it
+ * stopped being four paragraphs tall.
+ */
+function CasePanel({
+  label,
+  colour,
+  points,
+  prose,
+  extraLabel,
+  extra,
+}: {
+  label: string
+  colour: string
+  points: string[]
+  prose?: string | null
+  extraLabel: string
+  extra: string[]
+}) {
+  const [open, setOpen] = useState(false)
+  const bullets = points.slice(0, MAX_CASE_POINTS)
+  const id = `case-${label.toLowerCase().replace(/[^a-z]+/g, '-')}`
+  const hasMore = !!prose || extra.length > 0
+
+  return (
+    <section className="min-w-0 bg-[var(--color-bg)] px-[18px] py-3.5">
+      <div className="label-micro" style={{ color: colour }}>{label}</div>
+
+      {bullets.length > 0 ? (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {bullets.map((p, i) => (
+            <li key={i} className="flex gap-2 text-[13px] leading-snug text-[var(--color-fg)]">
+              <span aria-hidden="true" className="mt-[7px] h-1 w-1 flex-shrink-0 rounded-full"
+                    style={{ background: colour }} />
+              <span className="min-w-0">{p}</span>
+            </li>
+          ))}
+        </ul>
+      ) : prose ? (
+        // No bullets on this record. Show the analyst's own words, clamped —
+        // the honest fallback, and the one that disappears as names are
+        // re-analysed.
+        <p className={`mt-2 text-[12.5px] leading-relaxed ${open ? '' : 'line-clamp-3'}`}>
+          {prose}
+        </p>
+      ) : (
+        <p className="mt-2 text-[11.5px] text-[var(--color-fg-muted)]">
+          Not recorded for this analysis.
+        </p>
+      )}
+
+      {hasMore && (
+        <>
+          <button
+            onClick={() => setOpen((v) => !v)}
+            aria-expanded={open}
+            aria-controls={id}
+            className="mt-2 flex items-center gap-1.5 text-[10.5px] text-[var(--color-fg-muted)]
+                       transition-colors hover:text-[var(--color-fg)]"
+          >
+            <span aria-hidden="true">
+              {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </span>
+            {open ? 'Less' : 'Full case'}
+          </button>
+
+          {open && (
+            <div id={id} className="mt-2">
+              {/* Suppressed when the clamped paragraph above is already this
+                  text — an unclamped duplicate directly beneath it reads as a
+                  rendering bug. */}
+              {prose && bullets.length > 0 && (
+                <p className="text-[12.5px] leading-relaxed text-[var(--color-fg-muted)]">{prose}</p>
+              )}
+              {extra.length > 0 && (
+                <>
+                  <div className="label-micro mt-3">{extraLabel}</div>
+                  <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[12px]">
+                    {extra.map((e, i) => <li key={i}>{e}</li>)}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
 // ── Detail ────────────────────────────────────────────────────────────────────
 
 interface TickerDetailProps {
   data: AnalyzeResponse
   item: WatchlistItem | null
-  holding: Holding | null
-  position: TradeRecord | null
-  watched: boolean
-  onWatch: () => void
-  onUnwatch: () => void
 }
 
 /**
@@ -312,16 +396,17 @@ interface TickerHeaderProps {
   quote: Quote | null
   holding: Holding | null
   position: TradeRecord | null
-  watched: boolean
-  analysing: boolean
-  onRunAnalysis: () => void
-  onWatch: () => void
-  onUnwatch: () => void
 }
 
 /**
  * Identity and verdict: the ticker, the signal, the price, your position, the
  * score, and the one-line "why".
+ *
+ * Nothing here is a control. Watch, Remove, Export and Run full analysis used
+ * to sit in a row at the bottom of this block, between the verdict and the
+ * reasoning for it; they live in `TickerActions` now, beside the order ticket.
+ * The reader's first screen is what the engine concluded and why — reading and
+ * acting are separate questions and they are no longer interleaved.
  *
  * Split from the analysis below it so the two can be ordered independently.
  * On mobile the order ticket sits between them — you read what the name is and
@@ -335,33 +420,7 @@ export function TickerHeader({
   quote,
   holding,
   position,
-  watched,
-  analysing,
-  onRunAnalysis,
-  onWatch,
-  onUnwatch,
 }: TickerHeaderProps) {
-  const { toast } = useToast()
-  const { user } = useAuth()
-  const maySpend = entitlementsOf(user).may_spend_tokens
-
-  /**
-   * Run an export and report a failure.
-   *
-   * These used to be bare calls in the menu handler, so the promise floated:
-   * if `import('jspdf')` never resolved — a stale chunk hash after a deploy is
-   * the usual way — the click did nothing at all and left no trace. A silent
-   * no-op on a button is indistinguishable from a broken app.
-   */
-  const runExport = async (fn: () => void | Promise<void>, what: string) => {
-    try {
-      await fn()
-    } catch (err) {
-      console.error(`${what} export failed`, err)
-      toast(`Could not produce the ${what} export.`, 'error')
-    }
-  }
-
   // Ticks so the age below stays true while the tab sits open. The threshold
   // is the server's own `_CACHE_TTL_MINUTES`: past it, `/analyze` would rebuild
   // rather than serve this, which makes it exactly the point where what is on
@@ -464,74 +523,6 @@ export function TickerHeader({
         {holding && <PositionBlock holding={holding} position={position} />}
 
         {data && <ScoreBar data={data} />}
-
-        <div className="flex w-full items-center gap-1.5">
-          <button
-            onClick={watched ? onUnwatch : onWatch}
-            className="chip touch-target"
-            aria-label={watched ? `Remove ${symbol} from watchlist` : `Add ${symbol} to watchlist`}
-          >
-            {watched
-              ? <><Check className="h-3 w-3" aria-hidden="true" /> Watching</>
-              : <><Plus className="h-3 w-3" aria-hidden="true" /> Watch</>}
-          </button>
-
-          {/* The only control on the client that starts a pipeline run, and
-              styled as the primary action because on a name with no stored
-              analysis it is the only thing to do. Everything else on this page
-              is a read — which is why a plan that cannot run one still gets the
-              whole page, and a sentence here rather than a missing button. */}
-          {maySpend ? (
-            <button onClick={onRunAnalysis} disabled={analysing} className="btn-primary disabled:opacity-40">
-              <RefreshCw className={`h-3.5 w-3.5 ${analysing ? 'animate-spin' : ''}`} aria-hidden="true" />
-              {analysing ? 'Analysing…' : data ? 'Run full analysis again' : 'Run full analysis'}
-            </button>
-          ) : (
-            <span className="text-[11.5px] text-[var(--color-fg-muted)]">
-              Running a new analysis is part of the Pro plan.
-            </span>
-          )}
-
-          {data && (
-            <Menu
-              label="Export report"
-              align="left"
-              triggerClassName="chip touch-target"
-              trigger={<><Download className="h-3 w-3" aria-hidden="true" /> Export</>}
-            >
-              {(close) => (
-                <>
-                  {/* Both are fallible — the PDF lazily imports jsPDF, so a
-                      chunk that fails to load surfaces here rather than as a
-                      click that silently does nothing. */}
-                  <MenuItem onClick={() => { close(); void runExport(() => downloadPdf(data), 'PDF') }}>
-                    Download PDF
-                  </MenuItem>
-                  <MenuItem onClick={() => { close(); void runExport(() => downloadTxt(data), '.txt') }}>
-                    Download .txt
-                  </MenuItem>
-                  <MenuItem onClick={() => { close(); emailReport(data) }}>
-                    <span className="flex items-center gap-2.5">
-                      <Mail className="h-3.5 w-3.5 text-[var(--color-fg-muted)]" aria-hidden="true" />
-                      Email report
-                    </span>
-                  </MenuItem>
-                </>
-              )}
-            </Menu>
-          )}
-
-          {watched && (
-            <button
-              onClick={onUnwatch}
-              className="chip touch-target ml-auto hover:!text-[var(--accent-sell)]"
-              aria-label={`Remove ${symbol} from watchlist`}
-            >
-              <Trash2 className="h-3 w-3" aria-hidden="true" />
-              Remove
-            </button>
-          )}
-        </div>
       </div>
 
       {/* ── Why ───────────────────────────────────────────────────────────── */}
@@ -550,14 +541,49 @@ export function TickerHeader({
   )
 }
 
-/** Everything behind the verdict: chart, attribution, risk, cases, research. */
+/**
+ * Everything behind the verdict, most-read first.
+ *
+ * The order is the change: the two cases used to sit below the chart, the
+ * factor attribution and the risk gate — around five screens down on a laptop,
+ * behind two open panels of numbers. They are the first thing here now, and
+ * everything that is evidence *for* them is collapsed.
+ *
+ * The chart is the one detail left open. It is scanned rather than read, so it
+ * costs a reader nothing to have it there, and it is the only thing on the page
+ * that answers "what has this actually been doing" without being parsed.
+ */
 export function TickerAnalysis({
   data,
   item,
 }: Pick<TickerDetailProps, 'data' | 'item'>) {
   return (
     <>
-      {/* ── Chart + timing ────────────────────────────────────────────────── */}
+      {/* ── Bull / bear ───────────────────────────────────────────────────── */}
+      {(data.bull_case || data.bear_case
+        || data.bull_points?.length || data.bear_points?.length
+        || data.catalysts?.length || data.key_risks?.length) && (
+        <div className="grid gap-px border-b border-[var(--color-border)] bg-[var(--color-border)] lg:grid-cols-2">
+          <CasePanel
+            label="Bull case"
+            colour="var(--accent-buy)"
+            points={data.bull_points ?? []}
+            prose={data.bull_case}
+            extraLabel="Catalysts"
+            extra={data.catalysts ?? []}
+          />
+          <CasePanel
+            label="Bear case"
+            colour="var(--accent-sell)"
+            points={data.bear_points ?? []}
+            prose={data.bear_case}
+            extraLabel="Key risks"
+            extra={data.key_risks ?? []}
+          />
+        </div>
+      )}
+
+      {/* ── Chart ─────────────────────────────────────────────────────────── */}
       <div className="border-b border-[var(--color-border)] px-[18px] py-3.5">
         <Suspense
           fallback={
@@ -573,23 +599,31 @@ export function TickerAnalysis({
             height={260}
           />
         </Suspense>
-
-        {item ? (
-          <TimingTiles item={item} />
-        ) : (
-          <p className="mt-3 rounded-[7px] border border-[var(--color-border)] px-3 py-2 text-[11px]
-                        text-[var(--color-fg-muted)]">
-            Timing indicators are computed for watched tickers only. Add {data.ticker} to your
-            watchlist to see RSI, Stochastic RSI, Bollinger position and volume anomaly here.
-          </p>
-        )}
       </div>
 
-      {/* ── Score attribution + risk gate ─────────────────────────────────── */}
+      {/* ── Timing ────────────────────────────────────────────────────────── */}
+      <div className="border-b border-[var(--color-border)] px-[18px] py-3.5">
+        <Collapsible title="Timing indicators">
+          {item ? (
+            <TimingTiles item={item} />
+          ) : (
+            <p className="rounded-[7px] border border-[var(--color-border)] px-3 py-2 text-[11px]
+                          text-[var(--color-fg-muted)]">
+              Timing indicators are computed for watched tickers only. Add {data.ticker} to your
+              watchlist to see RSI, Stochastic RSI, Bollinger position and volume anomaly here.
+            </p>
+          )}
+        </Collapsible>
+      </div>
+
+      {/* ── Score attribution + risk gate ─────────────────────────────────
+          Both closed now. They are the workings behind the score in the header
+          and the gate chip beside it — the answer is already above the fold,
+          and this is where a reader goes when they want to argue with it. */}
       <div className="grid gap-px border-b border-[var(--color-border)] bg-[var(--color-border)] lg:grid-cols-2">
         <section className="min-w-0 bg-[var(--color-bg)] px-[18px] py-3.5">
           {data.breakdown ? (
-            <Collapsible title="How the score was built" defaultOpen>
+            <Collapsible title="How the score was built">
               <FactorBreakdown breakdown={data.breakdown} inputs={data.inputs} />
             </Collapsible>
           ) : (
@@ -603,51 +637,20 @@ export function TickerAnalysis({
         </section>
 
         <section className="min-w-0 bg-[var(--color-bg)] px-[18px] py-3.5">
-          <div className="label-micro mb-2.5">Risk and the buy gate</div>
           {data.risk ? (
-            <RiskPanel risk={data.risk} gate={data.gate} signal={data.signal} score={data.score} />
+            <Collapsible title="Risk and the buy gate">
+              <RiskPanel risk={data.risk} gate={data.gate} signal={data.signal} score={data.score} />
+            </Collapsible>
           ) : (
-            <p className="text-[11.5px] text-[var(--color-fg-muted)]">
-              No risk assessment was returned for this analysis.
-            </p>
+            <>
+              <div className="label-micro">Risk and the buy gate</div>
+              <p className="mt-2 text-[11.5px] text-[var(--color-fg-muted)]">
+                No risk assessment was returned for this analysis.
+              </p>
+            </>
           )}
         </section>
       </div>
-
-      {/* ── Bull / bear ───────────────────────────────────────────────────── */}
-      {(data.bull_case || data.bear_case || data.catalysts?.length || data.key_risks?.length) && (
-        <div className="grid gap-px border-b border-[var(--color-border)] bg-[var(--color-border)] lg:grid-cols-2">
-          <section className="bg-[var(--color-bg)] px-[18px] py-3.5">
-            <div className="label-micro text-[var(--accent-buy)]">Bull case</div>
-            {data.bull_case && (
-              <p className="mt-2 text-[12.5px] leading-relaxed">{data.bull_case}</p>
-            )}
-            {data.catalysts && data.catalysts.length > 0 && (
-              <>
-                <div className="label-micro mt-3">Catalysts</div>
-                <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[12px]">
-                  {data.catalysts.map((c, i) => <li key={i}>{c}</li>)}
-                </ul>
-              </>
-            )}
-          </section>
-
-          <section className="bg-[var(--color-bg)] px-[18px] py-3.5">
-            <div className="label-micro text-[var(--accent-sell)]">Bear case</div>
-            {data.bear_case && (
-              <p className="mt-2 text-[12.5px] leading-relaxed">{data.bear_case}</p>
-            )}
-            {data.key_risks && data.key_risks.length > 0 && (
-              <>
-                <div className="label-micro mt-3">Key risks</div>
-                <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-4 text-[12px]">
-                  {data.key_risks.map((r, i) => <li key={i}>{r}</li>)}
-                </ul>
-              </>
-            )}
-          </section>
-        </div>
-      )}
 
       {/* ── Deep research ──────────────────────────────────────────────────
           A second, slower opinion than the 5-minute signal above, and a

@@ -481,6 +481,40 @@ it stopped being one because the context a reader wants beside a record is
 exactly what a backdrop hides. Do not reintroduce an overlay here. All three are
 real URLs, so Back walks what was looked at.
 
+**Reading a name and acting on it are separate columns.** The centre answers
+"what is this and why"; `TickerActions` (Watch, Remove, Export, Run full
+analysis) and the order ticket are the top of the right rail. Those four used to
+be a row inside `TickerHeader`, between the verdict and the reasoning for it —
+which put a control that spends an analyst call, and one that destroys a
+watchlist row, directly in the path of a reader's eye. `TickerHeader` therefore
+carries **no control at all**; keep it that way. The ticket sat at the bottom of
+the centre column under a comment about not hiding behind a sheet — that reason
+expired when the analysis stopped being a sheet. `TickerActions` is not gated on
+`may_trade`: none of the four is a trading action. `/analysis/:symbol` has no
+right column, so it renders the same component `layout="inline"`, without watch
+and unwatch — mutating a list that window does not display would strand the
+dashboard in the other window.
+
+**The ticker page is a verdict, an argument, and then evidence on demand.**
+Order under the header: the "Why" band, the two cases, the chart, then
+everything else collapsed. `CasePanel` shows at most three analyst-written
+bullets a side (`bull_points` / `bear_points`), with the prose, catalysts and
+key risks behind a *Full case* toggle. **A client must never split the prose
+into bullets** — which clause carried the argument is not something the view
+layer knows — so an analysis stored before 1.20.0 shows its clamped paragraph
+instead, the same refusal-to-fabricate as `explain_score` on the XGBoost path.
+The chart is the one detail left open, because it is scanned rather than read.
+Mobile mirrors this ordering in `app/ticker/[symbol].tsx`.
+
+**The broker box is not on the ticker rail unless the session is down.** A
+standing "IB Gateway connected" panel on a screen about one company is restated
+on every ticker a reader opens, and `AccountBar` already carries a live dot for
+it — the same reason `InputsChip` renders nothing when `overall === 'ok'`. When
+`account.connected` is false it appears at the top of the rail with Reconnect
+and Restart, because then it is the only thing there that can be acted on. It
+reads the shared `useTradingSettings` account rather than polling
+`/trading/broker/status` a second time.
+
 **Reading is not analysing.** `GET /analyze?stored_only=true` returns the stored
 verdict at *any* age and can never reach `run_pipeline`; that is what a ticker
 click calls, on both clients. `force_refresh=true` is the explicit run and the
