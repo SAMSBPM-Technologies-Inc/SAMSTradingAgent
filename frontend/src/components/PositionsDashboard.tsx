@@ -6,7 +6,7 @@ import { formatDateTime } from '../lib/format'
 import { useToast } from '../lib/toast-context'
 import { SOURCE_LABEL, tradeSource } from '../lib/trade-source'
 import { exitReasonLabel } from '../lib/exit-reason'
-import type { ClosedTrade } from '../types'
+import type { ClosedTrade, TradeStats } from '../types'
 import LoadingSpinner from './LoadingSpinner'
 import ActivityTable, { StatusPill } from './positions/ActivityTable'
 import { CardList, RecordCard } from './positions/RecordCard'
@@ -35,10 +35,47 @@ import { usePortfolio } from '../lib/portfolio-context'
  */
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
+/** Whole dollars. A six-figure balance does not need its cents on a tile. */
+const usd0 = new Intl.NumberFormat('en-US', {
+  style: 'currency', currency: 'USD', maximumFractionDigits: 0,
+})
 
 function money(v: number | null | undefined): string {
   return v == null ? '—' : usd.format(v)
 }
+
+function money0(v: number | null | undefined): string {
+  return v == null ? '—' : usd0.format(v)
+}
+
+/** A fraction as a signed percentage. `null` stays a dash — never 0%. */
+function pct(v: number | null | undefined, digits = 1): string {
+  if (v == null) return '—'
+  return `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(digits)}%`
+}
+
+/** Unsigned, for shares-of-a-whole like cash weight, where a sign means nothing. */
+function share(v: number | null | undefined): string {
+  return v == null ? '—' : `${Math.round(v * 100)}%`
+}
+
+/**
+ * One rule for gain/loss colour, so the places that need it cannot drift.
+ *
+ * `eps` is the width of the dead band around zero, and it is a parameter
+ * because the two callers work in different units: half a cent is nothing on a
+ * dollar figure, while 0.005 as a *fraction* is half a percent and painting
+ * that neutral would grey out a real move.
+ */
+function pnlColor(v: number | null | undefined, eps = 0.005): string | undefined {
+  if (v == null) return undefined
+  if (v < -eps) return 'var(--accent-sell)'
+  if (v > eps) return 'var(--accent-buy)'
+  return undefined
+}
+
+/** The same, for values that are fractions rather than dollars. */
+const rateColor = (v: number | null | undefined) => pnlColor(v, 0.00005)
 
 /**
  * The two sentences a closed trade can tell, one under the other.
@@ -85,24 +122,266 @@ function Pnl({ value, className = '' }: { value: number | null | undefined; clas
 
 // ── Tiles ─────────────────────────────────────────────────────────────────────
 
-function Tile({ label, value, note, color }: {
+/**
+ * `delta` is the percentage that makes the dollar figure mean something.
+ *
+ * A dollar figure alone cannot be judged — $400 up is a triumph on $4,000 and
+ * a rounding error on $400,000 — so the tiles that have an honest denominator
+ * carry the rate beside the amount, and the note underneath says what the
+ * denominator was. Tiles with no honest denominator (net liquidation, fees)
+ * pass nothing rather than inventing one.
+ */
+function Tile({ label, value, note, color, delta }: {
   label: string
   value: string
   note: string
   color?: string
+  delta?: number | null
 }) {
   return (
     <div className="bg-[var(--color-surface)] px-3 py-2.5">
       <div className="text-[10px] uppercase tracking-[0.1em] text-[var(--color-fg-muted)]">{label}</div>
       {/* Steps down two-up on a phone so a six-figure net liquidation still
           fits its half-width column instead of wrapping mid-number. */}
-      <div
-        className="num mt-0.5 text-[17px] font-semibold sm:text-[21px]"
-        style={{ color: color ?? 'var(--color-fg)' }}
-      >
-        {value}
+      <div className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5">
+        <span
+          className="num text-[17px] font-semibold sm:text-[21px]"
+          style={{ color: color ?? 'var(--color-fg)' }}
+        >
+          {value}
+        </span>
+        {delta != null && (
+          <span className="num text-[12px] font-semibold" style={{ color: rateColor(delta) }}>
+            {pct(delta)}
+          </span>
+        )}
       </div>
       <div className="mt-px text-[10.5px] leading-snug text-[var(--color-fg-muted)]">{note}</div>
+    </div>
+  )
+}
+
+// ── Head to head ──────────────────────────────────────────────────────────────
+
+/**
+ * The tool's picks against yours.
+ *
+ * Deliberately a *fourth* reading and not a replacement for the three buckets
+ * on the Performance page. Those answer "does the engine work", and pooling
+ * auto with semi would ruin that — half the semi bucket is whatever the trader
+ * chose to approve. This answers a different question, "whose ideas were
+ * better", and for that question who pressed the button is not part of it.
+ *
+ * So the split is printed under the agent column rather than hidden: a reader
+ * who wants the clean read of the engine can see the unattended half on its
+ * own, and is told where to get the full version.
+ *
+ * Two rules keep it from becoming a scoreboard that lies:
+ *
+ *  - **Rates, not dollars, decide it.** The agent and the trader size
+ *    positions differently, so comparing totals would mostly measure who
+ *    committed more money.
+ *  - **Nothing is declared on a thin sample.** Under `MIN_MEANINGFUL` a side
+ *    is marked provisional and the verdict line says the count out loud
+ *    instead of naming a winner. Three lucky trades are not a track record,
+ *    and a dashboard that says otherwise gets believed.
+ */
+const MIN_MEANINGFUL = 30
+
+interface Side { key: string; label: string; blurb: string; stats: TradeStats | null }
+
+/** Which way is up for a metric — a lower fee bill is not a better trader. */
+type Better = 'high' | 'none'
+
+function Metric({ label, hint, a, b, render, better = 'high' }: {
+  label: string
+  hint?: string
+  a: number | null | undefined
+  b: number | null | undefined
+  render: (v: number | null | undefined) => React.ReactNode
+  better?: Better
+}) {
+  // Only a comparison where both sides actually have a number is a comparison.
+  const lead = better === 'none' || a == null || b == null || a === b
+    ? null
+    : a > b ? 'a' : 'b'
+  const cell = (v: number | null | undefined, side: 'a' | 'b') => (
+    <td
+      className="px-3 py-2 text-right"
+      style={lead === side ? { background: 'var(--tint-buy)' } : undefined}
+    >
+      <span className={lead === side ? 'font-semibold' : ''}>{render(v)}</span>
+    </td>
+  )
+  return (
+    <tr className="border-b border-[var(--color-border)]/50 last:border-0">
+      <th scope="row" className="px-3 py-2 text-left font-normal text-[var(--color-fg-muted)]">
+        {label}
+        {hint && <span className="mt-px block text-[10px] leading-snug opacity-80">{hint}</span>}
+      </th>
+      {cell(a, 'a')}
+      {cell(b, 'b')}
+    </tr>
+  )
+}
+
+function HeadToHead({ agent, manual, autoOnly, semi }: {
+  agent: TradeStats | null
+  manual: TradeStats | null
+  autoOnly: TradeStats | null
+  semi: TradeStats | null
+}) {
+  const sides: [Side, Side] = [
+    { key: 'agent', label: 'Agent', blurb: 'Auto + semi — the tool picked it', stats: agent },
+    { key: 'manual', label: 'You', blurb: 'You picked the ticker yourself', stats: manual },
+  ]
+  const [A, B] = sides
+
+  const an = A.stats?.netted ?? 0
+  const bn = B.stats?.netted ?? 0
+  const ar = A.stats?.return_on_capital_net ?? null
+  const br = B.stats?.return_on_capital_net ?? null
+
+  /**
+   * One sentence, and it refuses to name a winner more confidently than the
+   * evidence allows. The three cases are genuinely different: nothing to
+   * compare, a gap on too few trades, and a gap worth reading.
+   */
+  const verdict = (() => {
+    if (an === 0 || bn === 0) {
+      const missing = an === 0 ? A : B
+      const other = an === 0 ? B : A
+      const otherN = an === 0 ? bn : an
+      return otherN === 0
+        ? 'No closed trades with a complete fee total on either side yet — nothing to compare.'
+        : `No nettable ${missing.key === 'agent' ? 'agent' : 'manual'} trades yet, so there is nothing to `
+          + `hold ${other.label === 'You' ? 'your' : 'the agent’s'} ${otherN} against.`
+    }
+    if (ar == null || br == null) return 'One side has no return on capital yet — no comparison to draw.'
+    const gap = Math.abs(ar - br) * 100
+    const leader = ar > br ? A : B
+    const thin = an < MIN_MEANINGFUL || bn < MIN_MEANINGFUL
+    const head = ar === br
+      ? 'Dead level on return on capital'
+      : `${leader.label === 'You' ? 'You are' : 'The agent is'} ahead by ${gap.toFixed(1)} points of return on capital`
+    return thin
+      ? `${head} — on ${an} agent and ${bn} manual nettable trades. Far too few to mean anything; `
+        + 'read it as a tally, not a verdict.'
+      : `${head}, across ${an} agent and ${bn} manual nettable trades.`
+  })()
+
+  // Not `TableShell`: that puts everything inside the horizontal scroller, and
+  // the two paragraphs below are prose that must wrap to the column rather
+  // than slide sideways with a 30rem-wide table. Only the table scrolls.
+  return (
+    <div className="overflow-hidden rounded-lg border border-[var(--color-border)]
+                    bg-[var(--color-surface)]">
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[30rem] text-sm">
+        <caption className="sr-only">
+          Agent-originated trades compared with trades you chose yourself
+        </caption>
+        <thead>
+          <tr className="border-b border-[var(--color-border)] text-left">
+            <th scope="col" className="px-3 py-2.5 text-[10.5px] uppercase tracking-widest
+                                       text-[var(--color-fg-muted)]">
+              Metric
+            </th>
+            {sides.map((s) => (
+              <th key={s.key} scope="col" className="px-3 py-2.5 text-right">
+                <span className="block text-[13px] font-bold">{s.label}</span>
+                <span className="block text-[10px] font-normal leading-snug text-[var(--color-fg-muted)]">
+                  {s.blurb}
+                </span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {/* Rate first: it is the row that actually decides the thing. */}
+          <Metric
+            label="Return on capital"
+            hint="Net P&L over the money each side turned over"
+            a={ar} b={br}
+            render={(v) => <span className="num" style={{ color: rateColor(v) }}>{pct(v)}</span>}
+          />
+          <Metric
+            label="Realised net"
+            hint="After commission — totals, so sizing shows up here"
+            a={A.stats?.realised_pnl_net} b={B.stats?.realised_pnl_net}
+            render={(v) => <Pnl value={v} />}
+          />
+          <Metric
+            label="Win rate (net)"
+            a={A.stats?.win_rate_net} b={B.stats?.win_rate_net}
+            render={(v) => <span className="num">{v == null ? '—' : `${Math.round(v * 100)}%`}</span>}
+          />
+          {/* Alpha is the honest version of the whole comparison — it asks
+              whether either side beat simply holding the index — so it is
+              shown whenever either side has one, even though on a young
+              account that is usually neither. */}
+          {((A.stats?.alpha_measured ?? 0) > 0 || (B.stats?.alpha_measured ?? 0) > 0) && (
+            <Metric
+              label={`vs ${A.stats?.benchmark_ticker || B.stats?.benchmark_ticker || 'benchmark'}`}
+              hint="Average alpha — return beyond what holding the index paid"
+              a={A.stats?.avg_alpha} b={B.stats?.avg_alpha}
+              render={(v) => <span className="num" style={{ color: rateColor(v) }}>{pct(v)}</span>}
+            />
+          )}
+          <Metric
+            label="Avg win"
+            a={A.stats?.avg_win} b={B.stats?.avg_win}
+            render={(v) => <Pnl value={v} />}
+          />
+          <Metric
+            label="Avg loss"
+            // Both are negative, so "higher is better" is the right test:
+            // −$40 beats −$300.
+            a={A.stats?.avg_loss} b={B.stats?.avg_loss}
+            render={(v) => <Pnl value={v} />}
+          />
+          <Metric
+            label="Closed trades"
+            // Not the same denominator as the rates above, which count only
+            // trades with a complete fee total. The line below the table names
+            // those counts, so the two are never mistaken for each other.
+            hint="All of them — the rates above use only the nettable ones"
+            better="none"
+            a={A.stats?.closed} b={B.stats?.closed}
+            render={(v) => <span className="num">{v ?? 0}</span>}
+          />
+          <Metric
+            label="Fees paid"
+            better="none"
+            a={A.stats?.commission_paid} b={B.stats?.commission_paid}
+            render={(v) => <span className="num text-[var(--color-fg-muted)]">{money(v)}</span>}
+          />
+          <Metric
+            label="Capital deployed"
+            hint="Turned over, not held — sequential trades each count"
+            better="none"
+            a={A.stats?.capital_deployed_net} b={B.stats?.capital_deployed_net}
+            render={(v) => <span className="num text-[var(--color-fg-muted)]">{money0(v)}</span>}
+          />
+        </tbody>
+      </table>
+      </div>
+
+      <div className="border-t border-[var(--color-border)] px-3 py-2.5">
+        <p className="text-[11.5px] leading-relaxed">{verdict}</p>
+        {/* The pooling, shown rather than hidden. The agent column mixes trades
+            the tool placed unattended with ones you approved, and only the
+            first half is a clean read of the engine. */}
+        <p className="mt-1.5 text-[10.5px] leading-relaxed text-[var(--color-fg-muted)]">
+          The agent column is {autoOnly?.netted ?? 0} unattended and {semi?.netted ?? 0} you
+          approved{autoOnly?.return_on_capital_net != null && (
+            <> — unattended alone returned <span className="num" style={{ color: rateColor(autoOnly.return_on_capital_net) }}>
+              {pct(autoOnly.return_on_capital_net)}
+            </span></>
+          )}. Only the unattended half is a clean measure of the engine; what you approved is
+          filtered by what you declined, so it scores the pair. Performance keeps all three apart.
+        </p>
+      </div>
     </div>
   )
 }
@@ -177,6 +456,31 @@ export default function PositionsDashboard() {
       trade: positions.find((p) => p.ticker === h.ticker && p.closed_at == null) ?? null,
     })), [holdings, positions])
 
+  /**
+   * What the open book cost, and what it is up or down as a rate.
+   *
+   * Cost basis comes from the holdings rather than our own trade records for
+   * the same reason the table iterates holdings: the broker is the authority
+   * on what is held, and `avg_cost` there already blends every scale-in.
+   *
+   * The rate divides the broker's unrealised total by that basis. Both come
+   * from the same refresh, so they describe the same instant — mixing a fresh
+   * P&L with a stale basis is the one way this number could lie.
+   */
+  const openCost = useMemo(
+    () => openRows.reduce((sum, { holding: h }) => sum + Math.abs(h.qty * h.avg_cost), 0),
+    [openRows],
+  )
+  const unrealised = account?.unrealized_pnl ?? null
+  const unrealisedPct = unrealised != null && openCost > 0 ? unrealised / openCost : null
+
+  // Cash as a share of the account, which is the form the question is asked in
+  // — "how much of this is still dry powder" rather than "how many dollars".
+  const netLiq = account?.net_liquidation ?? null
+  const cashShare = account?.total_cash != null && netLiq != null && netLiq > 0
+    ? account.total_cash / netLiq
+    : null
+
   const closePosition = (ticker: string) => {
     // Closing sends a real order, so it gets an undo window rather than a
     // confirm dialog — the action is reversible right up until it is sent.
@@ -200,6 +504,14 @@ export default function PositionsDashboard() {
   }
 
   const closed: ClosedTrade[] = perf?.recent_closed ?? []
+
+  // `agent_originated` is served by the API; read defensively anyway so a
+  // client running ahead of a deploy degrades to hiding the panel rather than
+  // throwing on the screen that shows the positions.
+  const agentStats = perf?.agent_originated ?? null
+  const manualStats = perf?.manual ?? null
+  // Nothing to weigh until at least one side has actually closed something.
+  const hasContest = (agentStats?.closed ?? 0) + (manualStats?.closed ?? 0) > 0
 
   return (
     <>
@@ -244,28 +556,46 @@ export default function PositionsDashboard() {
               were 850px of chrome before the first holding, putting "what do I
               actually own" a screen and a half below the fold on the screen
               that exists to answer it. */}
+          {/* Two rows of four, and the split is the point: the top row is the
+              account as it stands right now, the bottom is the record of what
+              trading it has done. They are different questions and were
+              previously interleaved. */}
           <div className="mt-4 grid grid-cols-2 gap-px overflow-hidden rounded-lg
                           border border-[var(--color-border)] bg-[var(--color-border)]
-                          lg:grid-cols-5">
+                          sm:grid-cols-4">
             <Tile
               label="Net liquidation"
-              value={money(account?.net_liquidation)}
+              value={money0(netLiq)}
               note={account?.connected ? `Account ${account.account_id || '—'}` : 'Broker disconnected'}
             />
             <Tile
+              label="Invested"
+              value={money0(account?.gross_position_value)}
+              note={openCost > 0
+                ? `${money0(openCost)} cost · ${openRows.length} ${openRows.length === 1 ? 'position' : 'positions'}`
+                : 'Nothing held'}
+            />
+            <Tile
+              label="Cash"
+              value={money0(account?.total_cash)}
+              note={cashShare != null
+                ? `${share(cashShare)} of account · ${money0(account?.buying_power)} buying power`
+                : 'Broker disconnected'}
+            />
+            <Tile
               label="Unrealised"
-              value={money(account?.unrealized_pnl)}
-              color={account?.unrealized_pnl == null ? undefined
-                : account.unrealized_pnl < -0.005 ? 'var(--accent-sell)'
-                  : account.unrealized_pnl > 0.005 ? 'var(--accent-buy)' : undefined}
-              note={`${openRows.length} open ${openRows.length === 1 ? 'position' : 'positions'}`}
+              value={money(unrealised)}
+              color={pnlColor(unrealised)}
+              delta={unrealisedPct}
+              note={openCost > 0
+                ? `On ${money0(openCost)} of cost`
+                : `${openRows.length} open ${openRows.length === 1 ? 'position' : 'positions'}`}
             />
             <Tile
               label="Realised net"
               value={money(stats?.realised_pnl_net)}
-              color={stats?.realised_pnl_net == null ? undefined
-                : stats.realised_pnl_net < -0.005 ? 'var(--accent-sell)'
-                  : stats.realised_pnl_net > 0.005 ? 'var(--accent-buy)' : undefined}
+              color={pnlColor(stats?.realised_pnl_net)}
+              delta={stats?.return_on_capital_net}
               note={stats
                 ? `After commission · ${stats.netted} of ${stats.closed} closed trades nettable`
                 : 'No closed trades yet'}
@@ -278,6 +608,16 @@ export default function PositionsDashboard() {
                   ? `Thin — only ${stats.netted} nettable trades`
                   : `Across ${stats.netted} nettable trades`
                 : 'No closed trades yet'}
+            />
+            <Tile
+              label="Capital deployed"
+              value={money0(stats?.capital_deployed_net)}
+              // Says what the rate above was measured against, so it can be
+              // checked rather than believed — and names it as turnover, since
+              // a reader will otherwise take it for the account's size.
+              note={stats?.capital_deployed_net != null
+                ? `Turned over across ${stats.netted} closed ${stats.netted === 1 ? 'trade' : 'trades'} — not account size`
+                : 'No nettable closed trades yet'}
             />
             <Tile
               label="Fees paid"
@@ -420,6 +760,25 @@ export default function PositionsDashboard() {
               </TableShell>
             )}
           </Section>
+
+          {/* ── Agent vs you ───────────────────────────────────────────────
+              Sits between what is held and the rows it was computed from: the
+              closed-trades table directly below is the evidence for every
+              number in it. */}
+          {hasContest && (
+            <Section
+              title="Agent vs you"
+              note="whose picks did better"
+              footnote="Rates decide this, not totals — the agent and you size positions differently, so comparing dollar P&L would mostly measure who committed more money. Both columns count only trades with a complete fee total, so a trade the venue never priced sits in neither. This is not the engine's report card: the agent column includes trades you approved, and the Performance page keeps unattended, approved and manual apart for that reason."
+            >
+              <HeadToHead
+                agent={agentStats}
+                manual={manualStats}
+                autoOnly={perf?.signal_driven ?? null}
+                semi={perf?.approved ?? null}
+              />
+            </Section>
+          )}
 
           {/* ── Closed trades ──────────────────────────────────────────── */}
           <Section

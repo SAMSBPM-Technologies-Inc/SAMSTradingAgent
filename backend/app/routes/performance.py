@@ -146,6 +146,41 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
 
     trades = await db[COLL_TRADES].find({"user_id": user_id}).to_list(length=5000)
 
+    def cost_basis(t: dict) -> float | None:
+        """
+        What this trade actually tied up, or None if it cannot be known.
+
+        `entry_price` is the *blended* cost after every scale-in and
+        `filled_qty` the total shares held, so this is the whole position's
+        basis and not just its first leg — which is also exactly what `pnl` is
+        computed against, so the two can be divided.
+
+        None rather than zero for the usual reason: a missing basis in the
+        denominator would inflate the percentage without bound, and a basis
+        silently taken as zero is how a return of 4% comes to read as 400%.
+        """
+        entry = t.get("entry_price") or t.get("limit_price")
+        qty = t.get("filled_qty") or t.get("qty")
+        if not entry or not qty:
+            return None
+        return abs(float(entry) * float(qty))
+
+    def return_on(rows: list[dict], pnl_key: str) -> tuple[float | None, float | None]:
+        """
+        (capital deployed, return on it) over the trades that have both.
+
+        The numerator is re-summed over the rows with a usable basis rather
+        than reusing the headline P&L, so a trade counted in one is counted in
+        the other. Mixing the two sets would divide the P&L of every closed
+        trade by the capital of only some of them — a bias in one direction,
+        which is the same failure `net_unknown` exists to avoid.
+        """
+        pairs = [(t, b) for t in rows if (b := cost_basis(t)) is not None]
+        deployed = sum(b for _, b in pairs)
+        if not pairs or deployed <= 0:
+            return None, None
+        return round(deployed, 2), round(sum(t[pnl_key] for t, _ in pairs) / deployed, 4)
+
     def summarise(rows: list[dict]) -> dict:
         closed = [t for t in rows if t.get("status") == TradeStatus.CLOSED]
         priced = [t for t in closed if t.get("pnl") is not None]
@@ -199,6 +234,22 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
             if isinstance(t.get("benchmark_return"), (int, float))
         ]
 
+        # ── Return on the capital that earned it ─────────────────────────────
+        # A dollar figure cannot be compared between two buckets that traded
+        # different amounts of money: $400 made on $40,000 and $400 made on
+        # $4,000 are not the same result, and on this account the agent and the
+        # trader size positions differently. Percentages are what makes the
+        # head-to-head mean anything.
+        #
+        # Note what the denominator is and is not. It sums each round trip's
+        # own basis, so ten sequential $1,000 trades deploy $10,000 — it is
+        # capital *turned over*, not capital at risk and not account size.
+        # That is the right base for "did these trades earn their keep" and the
+        # wrong one for "how did the account do"; the tiles above use net
+        # liquidation for the latter.
+        deployed, roc = return_on(priced, "pnl")
+        deployed_net, roc_net = return_on(netted, "pnl_net")
+
         return {
             "benchmark_ticker": benchmark_ticker(),
             "alpha_measured": len(with_alpha),
@@ -245,6 +296,12 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
             "losses": len(losses),
             "win_rate": round(len(wins) / len(priced), 4) if priced else None,
             "realised_pnl": round(total, 2) if priced else None,
+            # Capital deployed and what came back as a fraction of it, gross
+            # and net. Each pair shares a denominator with its own numerator.
+            "capital_deployed": deployed,
+            "return_on_capital": roc,
+            "capital_deployed_net": deployed_net,
+            "return_on_capital_net": roc_net,
             "avg_win": round(sum(t["pnl"] for t in wins) / len(wins), 2) if wins else None,
             "avg_loss": round(sum(t["pnl"] for t in losses) / len(losses), 2) if losses else None,
             "best": round(max((t["pnl"] for t in priced), default=0), 2) if priced else None,
@@ -275,10 +332,26 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
         reverse=True,
     )[:50]
 
+    # A fourth bucket, and the one exception to "never pool", because it
+    # answers a question the three cannot: *whose ideas were better* — the
+    # tool's or the trader's. Both auto and semi trades were the agent's pick;
+    # the difference between them is who pressed the button, which matters for
+    # measuring the engine and not at all for measuring whose idea it was.
+    #
+    # It is `agent_originated` rather than `agent` so that nothing reads it as
+    # "the agent's performance". It is not a clean measure of the engine and
+    # must never be presented as one: half of it is filtered by a human, so a
+    # trader who declines badly makes it look worse and one who declines well
+    # makes it look better. `signal_driven` remains the only clean read, the
+    # three original buckets are untouched, and every surface that shows this
+    # must also show the split it was built from.
+    agent_originated = signal_driven + approved
+
     return {
         "signal_driven": summarise(signal_driven),
         "approved": summarise(approved),
         "manual": summarise(manual),
+        "agent_originated": summarise(agent_originated),
         "all": summarise(trades),
         "recent_closed": [
             {

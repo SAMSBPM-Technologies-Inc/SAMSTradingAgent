@@ -14,6 +14,73 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.21.0] — 2026-08-31
+
+**The dashboard told you dollars and left you to guess the rate.** It showed
+unrealised and realised P&L as amounts with nothing to divide them by, so
+neither could be judged — $400 up is a triumph on $4,000 and a rounding error
+on $400,000 — and it never said how much of the account was committed or how
+much was still cash.
+
+- **Eight tiles, in two rows that answer two different questions.** The top row
+  is the account as it stands — net liquidation, **Invested** (market value,
+  with cost basis and position count beneath), **Cash** (with its share of the
+  account and buying power), and unrealised P&L **now carrying its percentage**,
+  measured against the cost basis of what is actually held.
+- **The bottom row is the trading record**: realised net **with its return on
+  capital**, win rate, **capital deployed**, and fees. Capital deployed is
+  printed next to the rate it is the denominator for, so the percentage can be
+  checked rather than believed.
+- **Return on capital is turnover-based, and the tile says so.** Ten sequential
+  $1,000 trades deploy $10,000. That is the right base for "did these trades
+  earn their keep" and the wrong one for "how big is the account" — the label
+  names it as turnover so the two are not confused.
+
+**Agent vs you.** A new panel on the dashboard puts every trade the *tool*
+picked — unattended and semi-auto together — against the ones you chose
+yourself: return on capital, realised net, win rate, alpha against the
+benchmark, average win and loss, fees, capital deployed. The leading side of
+each comparable row is marked.
+
+- **Rates decide it, not totals.** The agent and you size positions
+  differently, so comparing dollar P&L would mostly measure who committed more
+  money.
+- **It will not call a winner on a thin sample.** Under 30 nettable trades a
+  side the verdict line prints both counts and says to read it as a tally
+  rather than a result. With nothing closed on one side it says that instead of
+  awarding a walkover.
+- **The pooling is shown, not hidden.** The agent column mixes trades placed
+  unattended with trades you approved, and only the first half is a clean read
+  of the engine — the panel prints the split, the unattended-only return beside
+  it, and points at the Performance page, which still keeps all three buckets
+  apart and is unchanged.
+
+**`GET /performance/trades` gained four fields per bucket** — `capital_deployed`
+and `return_on_capital`, gross and net — plus an `agent_originated` bucket. Each
+rate is computed over exactly the trades in its own denominator: a trade whose
+cost basis cannot be known leaves the numerator too, rather than inflating the
+return by an amount nobody can see. A basis covers the blended cost after every
+scale-in, so an added-to position is divided by what it actually cost. With
+nothing closed, every one of them is `null` and never `0.0` — a 0% return is a
+claim, and absence is not a result.
+
+**Known gaps.** **None of this reached mobile.** Its positions screen never had
+the tile row — it carries a compact account strip (available, in trade,
+unrealised) and no realised-performance summary at all — so the gap between the
+two clients is now wider than it was, not merely different. The parity rule
+binding them covers trading *safety* behaviours and these are informational, so
+nothing unsafe follows from it, but a trader reading the phone cannot see any of
+the rates or the head-to-head. The head-to-head is only as good as its
+sample, and on this account that sample is a paper record a few weeks old:
+treat every number in the panel as a tally, not a verdict. Alpha rows appear
+only for trades closed after benchmark measurement shipped, so they are often
+absent on both sides. Trades closed before 1.6.0 have no commission total and
+sit in neither column, since both count only nettable trades. And the tiles are
+verified by typecheck, lint and the new backend tests — **not by a screenshot of
+the rendered screen**, which needs a live broker session.
+
+---
+
 ## [1.20.0] — 2026-08-31
 
 **The ticker page said everything at once, so it said nothing first.** A reader
@@ -76,7 +143,6 @@ does the engine think, and why.
 - **`AnalystReport` gained the two fields but the exported PDF and .txt still
   render the prose cases only.** Nothing is lost; the export simply does not
   show the summary.
-
 ---
 
 ## [1.19.3] — 2026-08-31
