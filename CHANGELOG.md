@@ -14,6 +14,62 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.24.0] — 2026-08-31
+
+**The gate was recording its decisions into a document that gets overwritten
+every five minutes.** 1.22.0 added `analyst_gate` — what the AI analyst wanted,
+what the rule said, and which one was published — and wrote it to
+`stocks_signals`, which holds exactly one document per ticker and is replaced on
+every cycle. The retained series is `stocks_signal_history`, and `_append_history`
+copies an explicit list of fields that did not include it. So every refusal
+survived until the next cycle and then vanished, leaving a log line.
+
+That meant the question the gate exists to raise — *were these refusals worth
+making?* — could not have been answered no matter how long anyone waited. There
+was no accumulating sample, only the appearance of one.
+
+- **Three scalars now reach the history row**: `analyst_override`
+  (`null` / `buy_refused` / `sell_restored`), `analyst_wanted`, and
+  `rule_signal`. Flattened rather than stored whole — the prose reason is
+  reconstructible from the other three and would otherwise be written some two
+  dozen times a day per ticker to say the same sentence.
+- **`null` and absent are different facts, and the distinction is the whole
+  point.** `null` means the gate ran and had nothing to override. The key being
+  *missing* means the row predates this release and can say nothing either way.
+  A consumer that cannot tell them apart counts every old row as agreement and
+  dilutes the sample it is trying to measure.
+- **The two projections over this collection are pinned together by a test.**
+  `calibration_report` and the `/performance/calibration` route each carry their
+  own explicit field list, and a field added to one but not the other is not an
+  error — Mongo drops it silently and the report renders a confident-looking
+  page describing nothing. The test parses both lists out of the source and
+  fails if either is missing a field; it was checked by deleting one and
+  watching it fail.
+
+**Known gaps.** **This ships the retention and none of the analysis.** Nothing
+reads the new fields yet: `/performance/calibration` returns no override
+section, and the Calibration page shows nothing new — so from the outside this
+release changes nothing at all, which is exactly what it is. The counterfactual
+that consumes it (a `buy_refused` group against the analyst BUYs that passed;
+`sell_restored` against the rule SELLs the model agreed with, never pooled) is
+Phase 2 and is not written. **The first settled data point is roughly 20
+trading days out**, so early October, and that is one point rather than
+significance — overrides only occur in the `[0.62, 0.70)` band across about
+eleven watched tickers, and at 30 samples a side the page will honestly read
+*thin* for months. Two caveats belong beside the eventual number: a refused BUY
+was never taken, so `return_20d` measures the *name* and not a position, which
+is right for this question but is not a P&L; and this is a paper account whose
+history was wiped on 30 Aug 2026. **Rows already settled are not backfillable** —
+the override was never stored, so the sample starts now.
+
+Also worth stating plainly: the sampling is biased by the history key. Rows are
+`(ticker, hour_bucket)` with `$setOnInsert`, so only the hour's first fresh
+evaluation is kept. The analyst cache is also about an hour, so the two roughly
+line up — but an override occurring on a later cycle within the same hour goes
+unrecorded, and the eventual counts are a sample rather than a census.
+
+---
+
 ## [1.23.0] — 2026-08-31
 
 **1.22.0 shut the gate and left the screen still describing the old one.** The

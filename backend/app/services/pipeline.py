@@ -496,6 +496,19 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
         # Idempotency key: same ticker within the same clock-hour = same record
         hour_bucket = now.replace(minute=0, second=0, microsecond=0)
 
+        # What the gate made of the analyst's verdict, flattened.
+        #
+        # `analyst_gate` is written to `stocks_signals`, which holds ONE
+        # document per ticker and is replaced every cycle — so an override
+        # survived about five minutes and left nothing behind but a log line.
+        # This series is the only retained record of what the engine decided,
+        # and until the override reached it there was no sample to ask the
+        # question the gate exists to raise: were these refusals worth making?
+        #
+        # Flattened to three scalars rather than stored whole. The prose
+        # `reason` is reconstructible from the other fields and would otherwise
+        # be written ~24 times a day per ticker to say the same sentence.
+        gate = signal.get("analyst_gate") or {}
         record = {
             "ticker":          signal["ticker"],
             "generated_at":    now,
@@ -515,6 +528,13 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
             # before this.
             "inputs":          signal.get("inputs"),
             "analyst_used":    signal.get("analyst_used", False),
+            # None here is "no override", and it is only meaningful alongside
+            # `analyst_used`. A row from before this shipped has the key absent
+            # entirely, which means "never recorded" — a different fact, and
+            # one a consumer must exclude rather than count as agreement.
+            "analyst_override": gate.get("override"),
+            "analyst_wanted":   gate.get("model_signal"),
+            "rule_signal":      gate.get("rule_signal"),
             # Filled by performance tracker after ~20 trading days:
             "price_20d_later": None,
             "return_20d":      None,
