@@ -187,11 +187,14 @@ function ActivityLog({ orders, ticker }: { orders: TradeRecord[]; ticker?: strin
 // ── Panels ────────────────────────────────────────────────────────────────────
 //
 // The sidebar is exported as three panels rather than one block because the two
-// layouts want them in different orders. At lg they stack in the right column,
-// exactly as before. Below lg the order ticket and the approvals queue belong
-// *above* the analysis — measured on a 390px viewport, the old stacking put the
-// ticket 2898px down and the queue 3255px down, so every action on the screen
-// sat behind three and a half screens of reading.
+// layouts want them in different orders, and because `TickerActions` now sits
+// above them in the same column. At lg they stack in the right column; below lg
+// they dissolve into the single flow and `TradePage` orders them with CSS.
+//
+// The distance that used to matter here — a 390px viewport put the ticket
+// 2898px down and the queue 3255px down — was bought back by collapsing the
+// analysis rather than by hoisting the panels above it, which is why they land
+// after the centre column now. See the ordering note in `TradePage`.
 //
 // They are still mounted once each. `TradePage` reorders them with CSS; it does
 // not render a second copy.
@@ -204,12 +207,15 @@ export function OrderPanel({
   data: AnalyzeResponse | null
   onOrderPlaced: () => void
 }) {
+  // Mounted only with a ticker selected, so a missing analysis is the one
+  // reason left for an empty ticket — the sizing, the stop and the score gate
+  // all read from it. Saying "select a ticker" here would have been false.
   if (!data) {
     return (
       <div className="border-b border-[var(--color-border)] px-3.5 py-3">
         <span className="label-micro">Order ticket</span>
         <p className="mt-2 text-[11px] text-[var(--color-fg-muted)]">
-          Select a ticker to place an order.
+          No stored analysis for this ticker yet — run one and the ticket fills in.
         </p>
       </div>
     )

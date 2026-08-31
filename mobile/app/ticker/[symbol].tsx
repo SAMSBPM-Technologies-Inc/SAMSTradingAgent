@@ -123,12 +123,103 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
   )
 }
 
+// ── Bull / bear case ──────────────────────────────────────────────────────────
+
+/** At most this many bullets a side. Past three it stops being a glance. */
+const MAX_CASE_POINTS = 3
+
+/**
+ * One side of the argument, bullets first — mirrors `CasePanel` on the web.
+ *
+ * `points` is written by the analyst, never derived here: splitting a paragraph
+ * on its full stops is a guess at which clause carried the argument. An
+ * analysis stored before the analyst was asked for bullets shows its paragraph
+ * instead, folded behind the same control.
+ */
+function CaseBlock({
+  label,
+  color,
+  Icon,
+  points,
+  prose,
+  extraLabel,
+  extra,
+}: {
+  label: string
+  color: string
+  Icon: typeof TrendingUp
+  points: string[]
+  prose?: string | null
+  extraLabel: string
+  extra: string[]
+}) {
+  const C = usePalette()
+  const bullets = points.slice(0, MAX_CASE_POINTS)
+  const hasMore = !!prose || extra.length > 0
+
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        <Icon size={14} color={color} />
+        <Text style={{
+          fontSize: 10, fontWeight: '700', color, letterSpacing: 0.6,
+          textTransform: 'uppercase',
+        }}>
+          {label}
+        </Text>
+      </View>
+
+      {bullets.length > 0 ? (
+        <BulletList items={bullets} color={color} />
+      ) : prose ? (
+        <Text
+          numberOfLines={3}
+          style={{ fontSize: 13, color: C.fg, lineHeight: 19 }}
+        >
+          {prose}
+        </Text>
+      ) : (
+        <Text style={{ fontSize: 12, color: C.fgMuted }}>Not recorded for this analysis.</Text>
+      )}
+
+      {hasMore && (
+        <Collapsible title="Full case" defaultOpen={false}>
+          <View style={{ gap: 12 }}>
+            {prose && bullets.length > 0 && (
+              <Text style={{ fontSize: 13, color: C.fgMuted, lineHeight: 19 }}>{prose}</Text>
+            )}
+            {extra.length > 0 && (
+              <View style={{ gap: 8 }}>
+                <Text style={{
+                  fontSize: 10, fontWeight: '700', color: C.fgMuted,
+                  letterSpacing: 0.6, textTransform: 'uppercase',
+                }}>
+                  {extraLabel}
+                </Text>
+                <BulletList items={extra} color={color} />
+              </View>
+            )}
+          </View>
+        </Collapsible>
+      )}
+    </View>
+  )
+}
+
 // ── Collapsible ───────────────────────────────────────────────────────────────
 
-function Collapsible({ title, children }: { title: string; children: React.ReactNode }) {
+function Collapsible({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
   const C = usePalette()
   const card = cardStyle(C)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(defaultOpen)
   return (
     <View>
       <Pressable
@@ -766,26 +857,61 @@ export default function TickerScreen() {
           />
         </View>
 
-        {/* Thesis */}
-        {/* Price action first — it is what anyone opens a stock page to see. */}
+        {/* The two cases first, as bullets. They used to sit below the chart,
+            the factor breakdown and the risk panel; the argument for the name
+            is what a reader opens the page for, and the numbers behind it are
+            what they open when they want to disagree. Kept in step with the
+            web ticker view deliberately. */}
+        {(data.bull_case || data.bear_case
+          || data.bull_points?.length || data.bear_points?.length
+          || data.catalysts?.length || data.key_risks?.length) && (
+          <Section title="Bull & Bear Case">
+            <View style={{ gap: 18 }}>
+              <CaseBlock
+                label="Bull case"
+                color={C.green}
+                Icon={TrendingUp}
+                points={data.bull_points ?? []}
+                prose={data.bull_case}
+                extraLabel="Catalysts"
+                extra={data.catalysts ?? []}
+              />
+              <CaseBlock
+                label="Bear case"
+                color={C.red}
+                Icon={TrendingDown}
+                points={data.bear_points ?? []}
+                prose={data.bear_case}
+                extraLabel="Key risks"
+                extra={data.key_risks ?? []}
+              />
+            </View>
+          </Section>
+        )}
+
+        {/* The one detail left open: a chart is scanned, not read. */}
         <Section title="Price">
           <PriceChart ticker={data.ticker} />
         </Section>
 
-        {/* Why this score, and why this verdict. */}
+        {/* Why this score, and why this verdict — the workings, folded. */}
         {data.breakdown && (
           <Section title="Score Breakdown">
-            <FactorBreakdown breakdown={data.breakdown} inputs={data.inputs} />
+            <Collapsible title="How the score was built" defaultOpen={false}>
+              <FactorBreakdown breakdown={data.breakdown} inputs={data.inputs} />
+            </Collapsible>
           </Section>
         )}
         {data.risk && (
           <Section title="Risk & Signal Gate">
-            <RiskPanel
-              risk={data.risk}
-              gate={data.gate}
-              signal={data.signal}
-              score={data.score}
-            />
+            <Collapsible title="Risk and the buy gate" defaultOpen={false}>
+              <RiskPanel
+                risk={data.risk}
+                gate={data.gate}
+                signal={data.signal}
+                score={data.score}
+              />
+            </Collapsible>
           </Section>
         )}
 
@@ -799,30 +925,6 @@ export default function TickerScreen() {
         {data.analyst_note && (
           <Section title="Analyst Note">
             <AnalystNoteSummary note={data.analyst_note} />
-          </Section>
-        )}
-
-        {/* Bull & Bear */}
-        {(data.bull_case || data.bear_case) && (
-          <Section title="Bull & Bear Case">
-            <View style={{ gap: 16 }}>
-              {data.bull_case && (
-                <Collapsible title="Bull Case">
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                    <TrendingUp size={14} color={C.green} style={{ marginTop: 2 }} />
-                    <Text style={{ fontSize: 13, color: C.fg, flex: 1, lineHeight: 19 }}>{data.bull_case}</Text>
-                  </View>
-                </Collapsible>
-              )}
-              {data.bear_case && (
-                <Collapsible title="Bear Case">
-                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                    <TrendingDown size={14} color={C.red} style={{ marginTop: 2 }} />
-                    <Text style={{ fontSize: 13, color: C.fg, flex: 1, lineHeight: 19 }}>{data.bear_case}</Text>
-                  </View>
-                </Collapsible>
-              )}
-            </View>
           </Section>
         )}
 
@@ -847,20 +949,6 @@ export default function TickerScreen() {
                 </View>
               )}
             </View>
-          </Section>
-        )}
-
-        {/* Catalysts */}
-        {data.catalysts && data.catalysts.length > 0 && (
-          <Section title="Catalysts">
-            <BulletList items={data.catalysts} color={C.green} />
-          </Section>
-        )}
-
-        {/* Key risks */}
-        {data.key_risks && data.key_risks.length > 0 && (
-          <Section title="Key Risks">
-            <BulletList items={data.key_risks} color={C.red} />
           </Section>
         )}
 

@@ -195,6 +195,11 @@ class AnalyzeResponse(BaseModel):
     analyst_note: Optional[str] = None
     bull_case: Optional[str] = None
     bear_case: Optional[str] = None
+    # The scannable form of the two cases, written by the analyst rather than
+    # derived from the prose. Empty on every analysis stored before 1.15.0 —
+    # the client falls back to the paragraph and must never split one itself.
+    bull_points: list[str] = []
+    bear_points: list[str] = []
     key_risks: list[str] = []
     catalysts: list[str] = []
     # Alternative data
@@ -269,6 +274,8 @@ class AnalystReport(BaseModel):
     thesis: Optional[str] = None
     bull_case: Optional[str] = None
     bear_case: Optional[str] = None
+    bull_points: list[str] = []
+    bear_points: list[str] = []
     key_risks: list[str] = []
     catalysts: list[str] = []
     analyst_note: Optional[str] = None
@@ -724,7 +731,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.19.3"
+    version: str = "1.20.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

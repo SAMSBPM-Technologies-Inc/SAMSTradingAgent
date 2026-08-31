@@ -6,6 +6,7 @@ import type { AnalyzeResponse, Quote } from '../types'
 import Layout from '../components/Layout'
 import AnalysisProgress from '../components/trade/AnalysisProgress'
 import { TickerAnalysis, TickerHeader } from '../components/trade/TickerDetail'
+import TickerActions from '../components/trade/TickerActions'
 
 /**
  * One name, nothing else — the target of the "New window" control.
@@ -96,11 +97,19 @@ export default function AnalysisPage() {
           quote={quote}
           holding={null}
           position={null}
+        />
+        {/* Inline, because this window has no right column to put them in —
+            being one name and nothing else is the whole point of it. Watch and
+            unwatch stay absent for the reason above: mutating a list this
+            window does not display would leave the dashboard in the other
+            window stale with nothing to tell it. */}
+        <TickerActions
+          symbol={ticker ?? ''}
+          data={data}
           watched={false}
           analysing={analysing}
           onRunAnalysis={() => void runAnalysis()}
-          onWatch={() => {}}
-          onUnwatch={() => {}}
+          layout="inline"
         />
         {analysing ? (
           <AnalysisProgress ticker={ticker ?? ''} />

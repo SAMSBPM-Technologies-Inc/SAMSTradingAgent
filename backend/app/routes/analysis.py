@@ -423,6 +423,8 @@ def _doc_to_response(
         analyst_note=ao.get("analyst_note"),
         bull_case=ao.get("bull_case"),
         bear_case=ao.get("bear_case"),
+        bull_points=ao.get("bull_points") or [],
+        bear_points=ao.get("bear_points") or [],
         key_risks=ao.get("key_risks") or [],
         catalysts=ao.get("catalysts") or [],
         alternative_data=doc.get("alternative_data"),

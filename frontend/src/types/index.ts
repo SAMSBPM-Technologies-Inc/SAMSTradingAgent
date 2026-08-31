@@ -183,6 +183,14 @@ export interface AnalyzeResponse {
   gate?: SignalGate | null
   bull_case?: string
   bear_case?: string
+  /**
+   * The scannable form of the two cases, written by the analyst. Empty on any
+   * analysis stored before 1.20.0 — render the paragraph in that case. Never
+   * split the prose into bullets on the client: which clause carried the
+   * argument is not something this layer knows.
+   */
+  bull_points?: string[]
+  bear_points?: string[]
   catalysts?: string[]
   key_risks?: string[]
   alternative_data?: AlternativeData

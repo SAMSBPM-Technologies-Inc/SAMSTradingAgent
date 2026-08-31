@@ -19,6 +19,8 @@ Output schema stored in signal doc under "analyst_output":
   thesis       : str  (1-2 sentences)
   bull_case    : str
   bear_case    : str
+  bull_points  : list[str]  (2-3 short bullets — the scannable form of bull_case)
+  bear_points  : list[str]  (2-3 short bullets — the scannable form of bear_case)
   key_risks    : list[str]
   catalysts    : list[str]
   analyst_note : str  (2-3 paragraph research note)
@@ -57,6 +59,11 @@ Rules:
 - thesis: 1-2 sentences capturing the core investment case
 - analyst_note: 2-3 paragraphs written like a real sell-side research note
 - key_risks and catalysts: 2-4 items each, specific to this ticker and the current data
+- bull_points and bear_points: 2-3 items each, at most 12 words per item. These are the
+  same argument as bull_case and bear_case reduced to what a reader takes in at a glance —
+  one distinct claim per bullet, leading with the number or fact that carries it, no
+  hedging clauses, no sentence-final punctuation. They must not introduce anything the
+  corresponding case does not say.
 - Signal must be exactly one of: BUY, SELL, HOLD
 - Conviction must be exactly one of: HIGH, MEDIUM, LOW
 - When technicals and fundamentals conflict, reason through the dominant driver before deciding
@@ -91,12 +98,23 @@ _RESPONSE_SCHEMA: dict = {
         "thesis": _STRING,
         "bull_case": _STRING,
         "bear_case": _STRING,
+        # The scannable form of the two cases above. Asked of the model rather
+        # than derived on the client, for the same reason `whyText` prefers the
+        # model's own words: splitting a paragraph on full stops is a guess at
+        # which clause carried the argument, made by the layer least equipped
+        # to know. A client with no points shows the prose — it never invents
+        # bullets from it. Note the absence of `maxItems`/`maxLength`: structured
+        # outputs reject those with a 400 (see above), so the bounds are prose
+        # in the system prompt and the client clamps what it renders.
+        "bull_points": _STRING_LIST,
+        "bear_points": _STRING_LIST,
         "key_risks": _STRING_LIST,
         "catalysts": _STRING_LIST,
         "analyst_note": _STRING,
     },
     "required": ["signal", "conviction", "price_target", "stop_loss",
                  "time_horizon", "thesis", "bull_case", "bear_case",
+                 "bull_points", "bear_points",
                  "key_risks", "catalysts", "analyst_note"],
     "additionalProperties": False,
 }
