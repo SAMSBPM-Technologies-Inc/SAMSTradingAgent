@@ -9,7 +9,7 @@
 
 ## Authentication
 
-All endpoints except `/health`, `/auth/login` and `POST /contact` require a Bearer token in the `Authorization` header. Authenticated endpoints may additionally require an access tier — see *Access tiers*.
+All endpoints except `/health`, `/auth/login`, `POST /contact`, `POST /auth/forgot-password` and `POST /auth/reset-password` require a Bearer token in the `Authorization` header. Authenticated endpoints may additionally require an access tier — see *Access tiers*.
 
 ```
 Authorization: Bearer <access_token>
@@ -211,6 +211,64 @@ username=trader%40example.com&password=securepassword123
   "token_type": "bearer"
 }
 ```
+
+---
+
+### Password
+
+Three routes set a password, and all three go through one helper that also
+records `password_changed_at`. That field, compared against the token's `iat`,
+**ends every session issued before the change** — without it a reset would
+rotate the credential and leave a stolen token working for the rest of its 24
+hours. A token with no `iat` fails closed against a recorded change; an account
+that has never changed its password is unaffected.
+
+#### PUT /auth/password
+
+Auth required. Body: `current_password`, `new_password` (min 12).
+
+The current password is required even though the caller holds a valid token: a
+token can be stolen, and without the check whoever stole one could lock the
+real owner out permanently. Rate limited on the same counter as sign-in.
+
+Returns `{access_token, token_type}` — **the caller must store it**. Their old
+token is among the ones this change just invalidated, so the swap is what keeps
+them signed in on this device while every other session ends.
+
+| Status | Condition |
+|--------|-----------|
+| 400 | The new password is the same as the current one |
+| 403 | `current_password` is wrong |
+| 429 | Too many attempts |
+
+#### POST /auth/forgot-password
+
+**Public.** Body: `email`. Always returns `{"sent": true}`.
+
+The response is identical whether the address has an account, whether the mail
+sent, and whether it was never real. There is no self-serve signup here, so an
+address with an account is one the operator chose to let in, and confirming
+which is worth having to anyone probing. The rate limit is charged *before* the
+lookup for the same reason — charging only on a match would make the limiter
+itself an oracle.
+
+Rate limited to 5 per address and 15 per client per hour. A **503** means the
+deployment has no mail configured, or the token could not be stored; neither
+answer depends on the address, so reporting them leaks nothing.
+
+#### POST /auth/reset-password
+
+**Public.** Body: `token`, `new_password` (min 12). Returns
+`{access_token, token_type}`, so somebody who has just proved they control the
+mailbox lands signed in rather than retyping the password they set ten seconds
+ago.
+
+A single **400** covers expired, already used, superseded and never-real — one
+answer on purpose, since telling them apart tells whoever holds a stale link
+something about the account it came from.
+
+Links live one hour, work once, are stored only as a SHA-256 of the token, and
+are revoked by any password change.
 
 ---
 
@@ -1101,6 +1159,18 @@ what is lost is closing them by hand, which is worth stopping to say.
 
 A downgrade that removes nightly-research eligibility also clears
 `llm_settings.research_enabled` in the same write.
+
+#### POST /admin/users/{user_id}/password
+
+Sets a new password and returns it once, as `{email, password}`. Body: an
+optional `password`; omit it and one is generated.
+
+No current password is asked for — the situation this exists for is that nobody
+has it — which makes it the most powerful route on the API. **Every session
+that account had dies here**, including the one being reset because it was
+compromised. The password is never stored in plaintext and never logged; the
+log line records that a reset happened and for whom, which is what an audit
+needs.
 
 #### GET /admin/access-requests
 

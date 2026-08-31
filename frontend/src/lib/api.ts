@@ -71,6 +71,30 @@ export const authApi = {
 
   updateProfile: (data: { display_name?: string; scoring_weights?: import('../types').ScoringWeights | null }) =>
     api.put<{ status: string }>('/auth/me', data),
+
+  /**
+   * Change your own password. Returns a fresh token, and that is not a
+   * convenience: the change invalidates every token issued before it,
+   * including the one this request was sent with. The caller must store the
+   * new one or it signs itself out.
+   */
+  changePassword: (current_password: string, new_password: string) =>
+    api.put<{ access_token: string; token_type: string }>('/auth/password', {
+      current_password,
+      new_password,
+    }),
+
+  /** Ask for a reset link. The response is identical whether or not the
+   *  address has an account — do not try to read anything into it. */
+  forgotPassword: (email: string) =>
+    api.post<{ sent: boolean }>('/auth/forgot-password', { email }),
+
+  /** Redeem a link. Returns a token, so the caller lands signed in. */
+  resetPassword: (token: string, new_password: string) =>
+    api.post<{ access_token: string; token_type: string }>('/auth/reset-password', {
+      token,
+      new_password,
+    }),
 }
 
 export const watchlistApi = {
@@ -278,4 +302,14 @@ export const adminApi = {
 
   accessRequests: () =>
     api.get<import('../types').AccessRequest[]>('/admin/access-requests'),
+
+  /**
+   * Reset an account's password. Returns it once — nothing can read it back,
+   * and every session that account had is dead by the time this resolves.
+   */
+  resetPassword: (id: string, password?: string) =>
+    api.post<{ email: string; password: string }>(
+      `/admin/users/${id}/password`,
+      password ? { password } : {},
+    ),
 }

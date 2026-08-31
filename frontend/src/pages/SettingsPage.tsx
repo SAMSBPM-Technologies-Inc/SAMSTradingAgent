@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { alertsApi, authApi, llmApi, watchlistApi } from '../lib/api'
 import { useAuth } from '../lib/auth-context'
-import { entitlementsOf, TIER_LABELS } from '../lib/entitlements'
+import { entitlementsOf, tierRefusal, TIER_LABELS } from '../lib/entitlements'
 import { useToast } from '../lib/toast-context'
 import { useTradingSettings } from '../lib/trading-context'
 import type {
@@ -1180,6 +1180,107 @@ function ModelsCard() {
   )
 }
 
+/**
+ * Change your own password.
+ *
+ * The current password is required even though this screen is behind a valid
+ * session — the server insists, because a stolen token would otherwise be
+ * enough to lock the real owner out of their own account permanently.
+ *
+ * On success the response carries a **new token**, which has to be stored: the
+ * change ends every session issued before it, including this one. Without the
+ * swap the user would be signed out by the very act of changing their password.
+ */
+function ChangePassword() {
+  const { login } = useAuth()
+  const { toast } = useToast()
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const close = () => {
+    setOpen(false)
+    setCurrent('')
+    setNext('')
+    setError(null)
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setBusy(true)
+    try {
+      const { data } = await authApi.changePassword(current, next)
+      // Swaps the stored token and re-reads the profile. Every other session
+      // for this account is now dead; this one continues.
+      await login(data.access_token)
+      toast('Password changed. Other sessions have been signed out.', 'success')
+      close()
+    } catch (err) {
+      setError(tierRefusal(err)?.message ?? 'Could not change your password.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="btn-secondary mt-3 w-full">
+        Change password
+      </button>
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-3 flex flex-col gap-2">
+      <label htmlFor="current-password" className="text-[11px] text-[var(--color-fg-muted)]">
+        Current password
+      </label>
+      <input
+        id="current-password"
+        type="password"
+        autoComplete="current-password"
+        className="input text-sm"
+        value={current}
+        onChange={(e) => setCurrent(e.target.value)}
+        required
+      />
+
+      <label htmlFor="new-password" className="text-[11px] text-[var(--color-fg-muted)]">
+        New password
+      </label>
+      <input
+        id="new-password"
+        type="password"
+        autoComplete="new-password"
+        minLength={12}
+        className="input text-sm"
+        value={next}
+        onChange={(e) => setNext(e.target.value)}
+        required
+      />
+      <p className="text-[10.5px] text-[var(--color-fg-muted)]">
+        At least 12 characters. Every other device signed in as you will be
+        signed out; this one stays.
+      </p>
+
+      {error && <p role="alert" className="text-[11px] text-[var(--accent-sell)]">{error}</p>}
+
+      <div className="flex gap-2">
+        <button type="submit" disabled={busy || !current || next.length < 12} className="btn-primary flex-1">
+          {busy ? <LoadingSpinner size="sm" /> : null}
+          {busy ? 'Changing…' : 'Change password'}
+        </button>
+        <button type="button" onClick={close} className="btn-secondary">
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
 function AccountCard() {
   const { user, logout, fetchUser } = useAuth()
   const [editing, setEditing] = useState(false)
@@ -1275,6 +1376,8 @@ function AccountCard() {
 
       {error && <p className="mt-1.5 text-[11px] text-[var(--accent-sell)]">{error}</p>}
       {saved && <p className="mt-1.5 text-[11px] text-[var(--accent-buy)]">Saved.</p>}
+
+      <ChangePassword />
 
       <button
         onClick={logout}

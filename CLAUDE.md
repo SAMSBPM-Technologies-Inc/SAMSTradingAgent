@@ -355,6 +355,7 @@ npm run web
 | `earnings_history` | Reported vs estimated EPS, surprise record, next report date |
 | `research_dossiers` | Deep-research output **per user**, retained as a series; `outcome` added on settlement. Documents with no `user_id` are the pre-1.14 shared series |
 | `access_requests` | Contact-form submissions, so provisioning is a queue rather than an inbox search. Bounded by a 180-day TTL as well as by the per-address rate limit |
+| `password_resets` | Outstanding reset links, stored as a SHA-256 of the token and never the token itself. Single-use, one-hour expiry, TTL-swept |
 
 ### Authentication and access tiers
 
@@ -417,6 +418,39 @@ missing it afterwards resolves to **BASIC** — the migration's job is the known
 population; anything else is a bug, and the safe reading of a bug is the small
 one.
 
+**A password is set in exactly one place.** `services.auth.password_update` is
+the only thing that writes `password_hash`, and a test enforces that no route
+does it directly. The reason is the field it also records:
+`password_changed_at`, compared in `get_current_user` against an `iat` claim,
+ends every session issued before the change. Without it a reset would rotate
+the credential and leave a stolen token working for the rest of its 24 hours,
+which is most of what resetting is for — and the omission would not fail
+visibly, because the new password would work fine. A token with no `iat` fails
+**closed** against a recorded change; an account that never changed its
+password is untouched, which is what stops a deploy signing everybody out. Both
+the self-service change and the reset hand back a fresh token, so the person
+doing it stays signed in on that device while every other session dies.
+
+**Recovery is shaped entirely by not enumerating accounts.** There is no
+self-serve signup, so an address with an account is one the operator chose to
+let in, and confirming which is a fact worth having to anyone probing.
+`POST /auth/forgot-password` therefore returns the same body whether the lookup
+matched, whether the mail sent, or whether the address was never real; the rate
+limit is **charged before the lookup**, or the limiter itself becomes the
+oracle; and redeeming gives one answer for expired, used, superseded and
+never-real. The one thing reported honestly is a deployment with no mail
+configured — that answer does not depend on the address, and silence would
+leave somebody waiting for a message that was never coming.
+
+**Only a hash of a reset token is stored.** A link sets a password without
+knowing the old one, so a stored copy is as good as the credential — a dump, a
+backup or a log line must not yield a working one. Plain SHA-256 rather than
+bcrypt, deliberately: 256 bits from `secrets` has nothing to brute-force, and a
+slow hash could not be looked up by value. Links are single-use via
+`find_one_and_delete` (read-then-delete lets two requests race one link), carry
+their expiry **in the query rather than a check after it**, and are revoked by
+any password change so an old email cannot undo a new password.
+
 ### Frontend Route Structure
 
 ```
@@ -433,6 +467,8 @@ one.
 /settings       → SettingsPage (alerts, IBKR config, auto-trade, LLM keys)
 /guide          → GuidePage (IB Gateway setup — Trader only)
 /admin          → AdminPage (provisioning; the ADMIN_EMAIL address only)
+/forgot-password → ForgotPasswordPage (public)
+/reset-password  → ResetPasswordPage (public; reads ?token=)
 /positions /holdings /orders /radar → redirect to /
 /profile        → redirects to /settings
 ```
@@ -518,9 +554,12 @@ matched nothing. Import them.
 `true` — otherwise every anonymous visitor paints a spinner for a frame before
 the public page appears.
 
-**`POST /contact` is the only unauthenticated write on the API** — and, since
-it also records an `access_requests` row, the only unauthenticated *insert* —
-as well as the only endpoint a stranger can use to make the server send mail.
+**`POST /contact` was the only unauthenticated write on the API**; password
+recovery added two more (`/auth/forgot-password`, `/auth/reset-password`), and
+all three are shaped by the same instinct — see *Authentication and access
+tiers* for what recovery adds on top. Contact remains the only endpoint a
+stranger can use to make the server mail *the operator*, and since it also
+records an `access_requests` row, an unauthenticated insert.
 Three rules come with the row: **a honeypot trip persists nothing** (filling the
 queue with what the honeypot exists to absorb defeats the point of having one),
 **a failed write never fails the request** (a dropped queue row is a lost

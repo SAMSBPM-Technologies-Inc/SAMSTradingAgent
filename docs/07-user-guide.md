@@ -34,6 +34,22 @@ There is no sign-up form. Accounts are created by hand, one at a time.
 3. You will be contacted with credentials
 4. Sign in at **sta.samsbpm.com** and change nothing — you are on your dashboard
 
+### If you cannot sign in
+
+Click **Forgot your password?** on the sign-in screen. If that address has an
+account you will be emailed a link; it works once and expires in an hour. On
+the phone the link opens the same page in a browser.
+
+The confirmation screen says the same thing whether or not the address has an
+account — that is deliberate, so nobody can use the form to find out who has
+one. If no email arrives and you are sure the address is right, contact the
+desk and your password can be reset by hand.
+
+To change a password you already know, go to **Settings → Account → Change
+password**. You will need your current one. Changing it signs out every other
+device — which is the point if you think someone else has it — and leaves the
+device you changed it on signed in.
+
 ### What your plan includes
 
 Every account is on one of three plans. Which one you are on is shown in

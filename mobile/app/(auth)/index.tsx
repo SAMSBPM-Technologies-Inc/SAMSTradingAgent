@@ -5,8 +5,10 @@ import {
   TextInput,
   Pressable,
   ScrollView,
+  Linking,
 } from 'react-native'
 import { router } from 'expo-router'
+import Constants from 'expo-constants'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -17,6 +19,13 @@ import { useAuth } from '../../src/lib/auth-context'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import { usePalette } from '../../src/lib/palette'
 import LogoLockup from '../../src/components/LogoLockup'
+
+//: Where password recovery lives. The reset link in the email points at the
+//: web client, so this sends someone to the same place rather than to a second
+//: implementation that would only redirect there.
+const WEB_BASE_URL = String(
+  Constants.expoConfig?.extra?.webBaseUrl ?? 'https://sta.samsbpm.com',
+).replace(/\/$/, '')
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -182,6 +191,19 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
         <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600' }}>
           {isSubmitting ? 'Signing in…' : 'Sign In'}
         </Text>
+      </Pressable>
+
+      {/* Opens the web client rather than reimplementing recovery here.
+          The reset email links to the web app, so a second native flow would
+          hand the user off to that page anyway — and there is no sign-up link
+          to sit beside this, because there is no sign-up. */}
+      <Pressable
+        onPress={() => void Linking.openURL(`${WEB_BASE_URL}/forgot-password`)}
+        accessibilityRole="link"
+        accessibilityLabel="Reset your password in a browser"
+        style={{ alignSelf: 'center', marginTop: 16, paddingVertical: 6 }}
+      >
+        <Text style={{ fontSize: 13, color: C.fgMuted }}>Forgot your password?</Text>
       </Pressable>
     </View>
   )

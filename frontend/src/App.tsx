@@ -4,6 +4,8 @@ import { ThemeProvider } from './lib/theme-context'
 import { AuthProvider, useAuth } from './lib/auth-context'
 import { entitlementsOf } from './lib/entitlements'
 import AuthPage from './pages/AuthPage'
+import ForgotPasswordPage from './pages/ForgotPasswordPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 import HomePage from './pages/HomePage'
 import TradePage from './pages/TradePage'
 import PerformancePage from './pages/PerformancePage'
@@ -116,6 +118,13 @@ function AppRoutes() {
           </AuthGate>
         }
       />
+      {/* Password recovery. Public by necessity — somebody who cannot sign in
+          cannot be behind a session — and both are reachable while signed in
+          too, since neither does anything a signed-in user could not already
+          do from Settings. */}
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+
       {/* The landing page on its own path too, so it stays reachable while
           signed in — and so the future public host has a URL to mirror. */}
       <Route path="/home" element={<HomePage />} />

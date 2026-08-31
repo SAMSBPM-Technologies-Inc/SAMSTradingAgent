@@ -14,6 +14,63 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.19.0] — 2026-08-31
+
+**Forgetting a password no longer means losing the account.** The previous
+release shipped with no way to reset one — the honest note in its Known gaps
+said a forgotten password meant the operator recreating the account from
+scratch, losing its watchlist and history with it. There are now three ways to
+set a password, and none of them destroys anything.
+
+- **You can reset anyone's.** A *Reset password* button on each row of the Admin
+  page sets a new one and shows it once, for you to email on. Nothing can read
+  it back afterwards.
+- **People can change their own.** Settings → Account, on both web and phone.
+  The current password is required even though they are already signed in.
+- **"Forgot your password?"** on the sign-in screen emails a one-time link that
+  works for an hour. The phone opens the same page in a browser rather than
+  running a second copy of the flow.
+
+**Changing a password now ends every other session.** Previously a token stayed
+valid for its full 24 hours no matter what happened to the password behind it —
+so resetting a password somebody else knew would not actually have locked them
+out. Now any password change immediately invalidates every session issued
+before it. The device doing the changing stays signed in; every other one is
+cut off. Nobody is signed out by this release itself — only accounts whose
+password actually changes are affected.
+
+**The reset flow will not tell a stranger whether an address has an account.**
+There is no self-serve signup here, so the list of addresses with accounts is
+one you chose — and it stays private. Asking for a link gives the same answer
+for a real address, a fake one, and a mail server that failed; so does
+redeeming an expired, used or invented link.
+
+Reset links are stored only as a hash, work once, expire in an hour, and are
+cancelled the moment a password is set by any other route — so an old email
+sitting in an inbox cannot undo a new password.
+
+**One new setting.** `PUBLIC_BASE_URL` is the origin reset links point at,
+defaulting to `https://sta.samsbpm.com`. It is configured rather than derived
+from the request, because a `Host` header is attacker-controlled and building a
+reset link out of one is how a reset email ends up pointing somewhere else. If
+no SMTP is configured, the forgot-password endpoint says so plainly instead of
+accepting requests that could never be delivered.
+
+### Known gaps
+
+- **A reset email is only as safe as the mailbox.** Anyone who can read the
+  inbox can take the account. That is true of every emailed reset; it is worth
+  saying because these accounts reach a live brokerage connection.
+- **No second factor**, on sign-in or on reset.
+- **Reset-request rate limits are in-process** and reset when the API container
+  restarts, like every other counter here. The link expiry and single-use rule
+  are in the database and are not affected.
+- The admin reset does not notify the account holder that their password
+  changed — they find out when their session ends.
+- Everything from 1.18.0's Known gaps still stands.
+
+---
+
 ## [1.18.0] — 2026-08-31
 
 **Other people can be let in now, without letting them cost money or reach the

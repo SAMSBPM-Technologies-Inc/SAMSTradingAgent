@@ -55,6 +55,27 @@ const inputClass =
 function UserRow({ user, onChanged }: { user: AdminUser; onChanged: () => void }) {
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
+  // Held in the row rather than a toast: a generated password has to be copied
+  // somewhere before it is gone, and a toast that dismisses itself after four
+  // seconds is the wrong container for a credential nothing can read back.
+  const [issued, setIssued] = useState<string | null>(null)
+
+  const resetPassword = async () => {
+    if (!window.confirm(
+      `Set a new password for ${user.email}?\n\n`
+      + 'It will be shown once, here. Every session that account has open will '
+      + 'be signed out immediately.',
+    )) return
+    setSaving(true)
+    try {
+      const { data } = await adminApi.resetPassword(user.id)
+      setIssued(data.password)
+    } catch (err) {
+      toast(tierRefusal(err)?.message ?? 'Could not reset that password.', 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const patch = useCallback(
     async (
@@ -171,6 +192,28 @@ function UserRow({ user, onChanged }: { user: AdminUser; onChanged: () => void }
 
       <td className="px-2 py-2 text-right text-[11.5px] text-[var(--color-fg-muted)]">
         {user.llm_key_count || '—'}
+      </td>
+
+      <td className="px-2 py-2 text-right">
+        <button
+          type="button"
+          disabled={saving}
+          onClick={resetPassword}
+          className="rounded-[6px] border border-[var(--color-border)] px-2 py-1
+                     text-[11.5px] text-[var(--color-fg)] hover:bg-[var(--color-hover)]
+                     disabled:opacity-50"
+        >
+          Reset password
+        </button>
+        {issued && (
+          <p role="status" className="mt-1 text-[10.5px] text-[var(--color-fg)]">
+            <code className="num select-all">{issued}</code>
+            <br />
+            <span className="text-[var(--color-fg-muted)]">
+              Shown once. Their other sessions are signed out.
+            </span>
+          </p>
+        )}
       </td>
     </tr>
   )
@@ -343,6 +386,7 @@ export default function AdminPage() {
                     <th scope="col" className="px-2 pb-2 font-medium">Tickers</th>
                     <th scope="col" className="px-2 pb-2 text-center font-medium">Nightly research</th>
                     <th scope="col" className="px-2 pb-2 text-right font-medium">Keys</th>
+                    <th scope="col" className="px-2 pb-2 text-right font-medium">Password</th>
                   </tr>
                 </thead>
                 <tbody>
