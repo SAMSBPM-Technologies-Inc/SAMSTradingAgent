@@ -129,11 +129,19 @@ npm run web
    default never silently stops a live system.
 
    **Every order path shares one guard chain.** `_prepare_entry` holds all of
-   them (CIRO, position cap, daily-loss kill switch, cash reserve, refusal to
-   open unbracketed). `execute_entry` and `execute_manual_entry` both go through
-   it — do not add a guard to one path only. A manual order differs in exactly
-   two documented ways: no signal-score threshold (the human is the signal) and
-   no whitelist (that restricts what the *agent* may pick).
+   them (the account's plan, CIRO, position cap, daily-loss kill switch, cash
+   reserve, refusal to open unbracketed). `execute_entry` and
+   `execute_manual_entry` both go through it — do not add a guard to one path
+   only. A manual order differs in exactly two documented ways: no signal-score
+   threshold (the human is the signal) and no whitelist (that restricts what the
+   *agent* may pick).
+
+   The plan check is **first**, because it answers "may this account trade at
+   all" rather than "is this trade sound", and it is the only guard here that a
+   route dependency could not have covered — `pipeline._execute_trades` reaches
+   `execute_entry` on the 5-minute cycle without a request. It is deliberately
+   **absent from `execute_exit`**, which does not run this chain: a downgraded
+   account's open positions must stay closable. See the Authentication section.
 
    **A stop protects a position; a bracket only protects an order.** That
    distinction is the whole of scale-in. A `BUY` on a held ticker adds to the
@@ -256,9 +264,15 @@ npm run web
    `registry.py` (named providers, capability flags, per-provider
    `normalise_schema`), one adapter each for Anthropic/OpenAI/Google, and
    `resolver.py`. `run_agent` walks an ordered chain resolved from the user's
-   `llm_settings`; **the server's own key is appended last to every chain**, so
-   a user who configures nothing still gets dossiers and a single-key
-   deployment behaves exactly as it did before the seam existed.
+   `llm_settings`; **the server's own key is appended last to every chain the
+   caller is entitled to reach it on** (`build_chain(..., allow_server_key=)`),
+   so a trader who configures nothing still gets dossiers and a single-key
+   deployment behaves exactly as it did before the seam existed. A tier that
+   pays for its own tokens does not get that link: its chain is its keys and
+   nothing else, so a key that fails mid-dossier fails the dossier rather than
+   quietly moving the bill to the operator. The default is still `True`, which
+   is what keeps every caller with no user behind it — the pipeline's analyst
+   call above all — unchanged.
 
    **The fallback policy branches on `ErrorKind` and nothing else.** Auth,
    rate-limit, overload, timeout and refusal spend the next key; a 400, an
@@ -277,9 +291,14 @@ npm run web
    scoped the same way and that one is load-bearing: it renders into the ledger
    as citable `O` evidence about how *this desk* read a name, and unscoped it
    leaks one trader's graded record into another's prompt. The daily jobs reach
-   only users with `llm_settings.research_enabled`, which defaults false —
-   research is five to seven calls per ticker per day and is the one cost here
-   that multiplies with users.
+   only users with `llm_settings.research_enabled` **and a plan that allows it**
+   — `research_enabled` defaults false, and on a PRO account the nightly job
+   additionally needs the operator's `research_daily_allowed` grant. Research is
+   five to seven calls per ticker per day and is the one cost here that
+   multiplies with users. The cohort filter uses `$in` over the enrolable
+   tiers, **never `$ne: "BASIC"`**: `$ne` also matches documents where the field
+   is *absent*, which is every account predating the migration, so a failed
+   migration plus a `$ne` would enrol everybody rather than nobody.
 
    **The desk's own record is evidence, not injected prose.** `outcomes.py`
    grades every dossier ~20 days on (`RESEARCH_OUTCOME_HORIZON_DAYS`) against
@@ -324,7 +343,7 @@ npm run web
 
 | Collection | Purpose |
 |---|---|
-| `users` | Accounts, JWT, per-user scoring weights, alert settings, `llm_settings` (Fernet-encrypted provider keys + role chains) |
+| `users` | Accounts, JWT, `access_tier` + `watchlist_cap` + `research_daily_allowed`, per-user scoring weights, alert settings, `llm_settings` (Fernet-encrypted provider keys + role chains) |
 | `stocks_raw` | Latest OHLCV + sentiment per ticker |
 | `stocks_features` | Technical/fundamental/sentiment/macro/catalyst scores |
 | `stocks_signals` | Latest BUY/SELL/HOLD per ticker (per-user aware) |
@@ -335,12 +354,68 @@ npm run web
 | `financial_statements` | Accumulated filings per (ticker, period, timeframe) — append-only, the basis for every trend |
 | `earnings_history` | Reported vs estimated EPS, surprise record, next report date |
 | `research_dossiers` | Deep-research output **per user**, retained as a series; `outcome` added on settlement. Documents with no `user_id` are the pre-1.14 shared series |
+| `access_requests` | Contact-form submissions, so provisioning is a queue rather than an inbox search. Bounded by a 180-day TTL as well as by the per-address rate limit |
 
-### Authentication
+### Authentication and access tiers
 
-JWT-based auth, no feature gating. The tier system (0–3) and the admin portal
-were removed in `f61066f7` when this became a personal tool with master/user
-separation — every authenticated user gets every feature.
+JWT-based auth. Three named access tiers on `users.access_tier` — **BASIC**
+(the portal as a reader), **PRO** (research and full analysis runs, on their own
+provider key, no broker surface at all), **TRADER** (everything). A numeric 0–3
+ladder and an admin portal were removed in `f61066f7`; this is deliberately not
+that. Capabilities are **named**, in one table in `services/entitlements.py`,
+and **routes name capabilities rather than tiers** — `tier >= n` is the numeric
+system coming back through the side door. The field is `access_tier` because
+`CapabilityStatus.tier` already means something else.
+
+**Two gates, and neither is sufficient alone.** The `/trading` router carries
+`Depends(require_trading)`, which covers all fifteen handlers and every one
+added later. But `pipeline._execute_trades` runs on the 5-minute cycle, loads
+every watcher of a ticker and calls `execute_entry` directly — no request, no
+dependency — so the plan check is also the **first guard in `_prepare_entry`**,
+which both entry paths share. Without it a downgraded `mode=AUTO` account keeps
+placing orders on the operator's brokerage account forever with its UI hidden.
+It is deliberately **absent from `execute_exit`**: open positions must stay
+closable. Shipping only the router gate is worse than shipping neither, because
+it looks done.
+
+**The tier is not in the JWT.** `get_current_user` loads the document on every
+request anyway, and a claim would be stale for the token's whole 24-hour life —
+so a downgrade would take effect whenever the user next signed in, which for a
+control whose purpose is to stop a spend now is the wrong direction.
+
+**Hiding a control is presentation; the server check is the gate.** Behind
+`/trading` is *one* brokerage account, the operator's, so a missed route does
+not leak a feature — it leaks balances, holdings and container control. Tests
+assert only the server side, and `test_tier_routes.py` enumerates the app's own
+route table rather than a hand-written list.
+
+**BASIC cannot *initiate* a token spend, which is not the same as costing
+nothing.** The shared pipeline's analyst call is deployment cost, attributed to
+no user, and is bounded by the per-user ticker cap — which is why the cap
+applies to BASIC too, not only to PRO. That cap, not a token budget, is the real
+cost control here: every watched ticker joins the union `market_pipeline` runs
+every five minutes, and `stocks_signals` is one shared document per ticker.
+The check asks *"would this add a row"*, so re-adding a watched ticker at the
+cap still succeeds; it accepts a benign over-by-one race under concurrent adds,
+which the unique index does **not** prevent.
+
+**Registration is closed and stays closed.** There is no register endpoint.
+People ask through `POST /contact`, the operator provisions them at `/admin`
+(or `scripts/create_user.py` for the first account — both build the document
+through `services.auth.new_user_document` so they cannot drift). Admin identity
+is `ADMIN_EMAIL` in config, **not a field on the user document**: a document
+field would create a privilege-escalation path through the admin route itself,
+where one careless `$set` of a request body turns an editable field into an
+admin-granting one. It is deliberately not injected by the deploy workflow, for
+the same reason `CONTACT_EMAIL` is not, and `main._check_admin_email` says so
+loudly at startup — being *silently* locked out of provisioning is the failure
+worth engineering against.
+
+`db._migrate_access_tier` writes TRADER onto every account that predates the
+field, because they were all provisioned with every feature. A document still
+missing it afterwards resolves to **BASIC** — the migration's job is the known
+population; anything else is a bug, and the safe reading of a bug is the small
+one.
 
 ### Frontend Route Structure
 
@@ -356,7 +431,8 @@ separation — every authenticated user gets every feature.
 /calibration    → CalibrationPage (do the thresholds hold up? see below)
 /status         → StatusPage (what the engine is actually running on)
 /settings       → SettingsPage (alerts, IBKR config, auto-trade, LLM keys)
-/guide          → GuidePage (IB Gateway setup)
+/guide          → GuidePage (IB Gateway setup — Trader only)
+/admin          → AdminPage (provisioning; the ADMIN_EMAIL address only)
 /positions /holdings /orders /radar → redirect to /
 /profile        → redirects to /settings
 ```
@@ -442,8 +518,15 @@ matched nothing. Import them.
 `true` — otherwise every anonymous visitor paints a spinner for a frame before
 the public page appears.
 
-**`POST /contact` is the only unauthenticated write on the API**, and the only
-endpoint a stranger can use to make the server send mail. Four things hold it:
+**`POST /contact` is the only unauthenticated write on the API** — and, since
+it also records an `access_requests` row, the only unauthenticated *insert* —
+as well as the only endpoint a stranger can use to make the server send mail.
+Three rules come with the row: **a honeypot trip persists nothing** (filling the
+queue with what the honeypot exists to absorb defeats the point of having one),
+**a failed write never fails the request** (a dropped queue row is a lost
+convenience, a dropped email is a lost person), and **a successful write never
+masks a failed send** — the 502 stands, because that is the exact lie this
+endpoint exists not to tell. Four things hold it:
 a per-address rate limit that counts *every* submission (not just failures, as
 login does — there is no submission that should not be charged for), a honeypot
 field that returns a normal success so a bot learns nothing, length caps in the
@@ -587,9 +670,13 @@ Where the two clients differ, they differ for a reason worth stating. The mobile
 activity card has room for the type-the-ticker input, so a live proposal is
 approvable in place; a web table row does not, so it routes to the transaction
 page instead. The web ticker screen puts that ticker's transactions in the right
-rail; the phone has no rail, so they are a section. `trade-source.ts` is kept
-byte-identical between `frontend/src/lib/` and `mobile/src/lib/` — the two
-clients must not disagree about who decided a trade.
+rail; the phone has no rail, so they are a section. **There is no admin screen
+on mobile and no Models card**, so `may_bring_own_key` has no mobile surface at
+all — provisioning and provider keys are desk work, and the parity rule here is
+about *trading safety behaviours*. `trade-source.ts` and `entitlements.ts` are
+both kept byte-identical between `frontend/src/lib/` and `mobile/src/lib/` — the
+two clients must not disagree about who decided a trade, or about who may do
+what.
 
 The mobile chart is `react-native-svg`, not `lightweight-charts` (DOM-only), but
 reads the same `/chart/{ticker}/series` and the same server-computed moving

@@ -18,7 +18,7 @@ SAMSTradingAgent/
 │   │   │   └── stock.py        # Pydantic request/response models (AnalyzeResponse, etc.)
 │   │   ├── routes/
 │   │   │   ├── analysis.py     # GET /analyze, GET /ticker/search, GET /backtest
-│   │   │   ├── auth.py         # POST /auth/register, POST /auth/login, GET /auth/me
+│   │   │   ├── auth.py         # POST /auth/login, GET/PUT /auth/me (no register — accounts are provisioned)
 │   │   │   ├── watchlist.py    # GET /watchlist, POST /ticker, DELETE /watchlist/{ticker}
 │   │   │   ├── performance.py  # GET /performance, GET /performance/signals
 │   │   │   ├── alerts.py       # GET/PUT /alerts/settings, POST /alerts/test

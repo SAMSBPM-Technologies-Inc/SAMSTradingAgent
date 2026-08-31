@@ -327,3 +327,41 @@ def test_both_entry_paths_run_the_guard_chain():
 
     for fn in (trade_manager.execute_entry, trade_manager.execute_manual_entry):
         assert "_prepare_entry" in inspect.getsource(fn)
+
+
+# ── The rule that keeps the table the only source ─────────────────────────────
+
+def test_no_route_module_names_a_tier():
+    """
+    Routes name *capabilities*, never tiers.
+
+    A route asking `may_trade` keeps working when the table changes; a route
+    asking whether the tier is PRO has quietly become a second, competing copy
+    of the policy — which is how the numeric ladder this replaced became
+    impossible to reason about.
+
+    `routes/admin.py` is the one exception and is excluded: setting an
+    account's tier is its entire job, and it does that through the enum rather
+    than a literal.
+    """
+    from pathlib import Path
+
+    routes = Path(__file__).resolve().parents[1] / "app/routes"
+    offenders = []
+    for path in sorted(routes.glob("*.py")):
+        if path.name == "admin.py":
+            continue
+        text = path.read_text()
+        for tier in ('"BASIC"', "'BASIC'", '"PRO"', "'PRO'", '"TRADER"', "'TRADER'"):
+            if tier in text:
+                offenders.append(f"{path.name} contains {tier}")
+    assert not offenders, offenders
+
+
+def test_the_admin_router_uses_the_enum_rather_than_literals():
+    """Even where naming a tier is the job, the value comes from `AccessTier`."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "app/routes/admin.py").read_text()
+    for tier in ('"BASIC"', '"PRO"', '"TRADER"'):
+        assert tier not in text

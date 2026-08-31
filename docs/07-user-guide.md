@@ -25,15 +25,40 @@ What it is not: a guarantee, a financial advisor, or an automated trading system
 
 ## 2. Getting Started
 
-### Create an Account
+### Get an Account
 
-1. Go to **sta.samsbpm.com** in your browser
-2. Click **Register** (or the "Sign up" link on the login screen)
-3. Enter your **email address**, choose a **password**, and enter a **display name** (this is what appears in your alerts)
-4. Click **Create account**
-5. You will be logged in immediately and taken to your dashboard
+There is no sign-up form. Accounts are created by hand, one at a time.
 
-No credit card is required to get started.
+1. Go to **sta.samsbpm.com** and scroll to the contact section
+2. Fill in your name, email and a short message, and say what you are after
+3. You will be contacted with credentials
+4. Sign in at **sta.samsbpm.com** and change nothing — you are on your dashboard
+
+### What your plan includes
+
+Every account is on one of three plans. Which one you are on is shown in
+**Settings → Account**, along with how many tickers it covers.
+
+| | Basic | Pro | Trader |
+|---|---|---|---|
+| Watchlist, signals and stored analysis in full | ✓ | ✓ | ✓ |
+| The six factors, the risk gate, charts and input coverage | ✓ | ✓ | ✓ |
+| Performance, calibration and system status | ✓ | ✓ | ✓ |
+| Alerts (Slack, WhatsApp, email, daily digest) | ✓ | ✓ | ✓ |
+| Reading a deep-research dossier that already exists | ✓ | ✓ | ✓ |
+| **Running** a new full analysis or deep research | — | ✓ | ✓ |
+| Your own model provider keys | — | ✓ | ✓ |
+| Broker connection, order ticket, positions, auto-trading | — | — | ✓ |
+| Tickers you may watch | 5 | 15 | unlimited |
+
+The ticker counts are defaults and can be raised for your account — ask.
+
+Two things worth knowing on Basic and Pro. **Nothing is hidden from a reading**:
+open any watched ticker and you get the whole verdict, the factors behind it and
+any research already built for that name. What Basic does not have is the
+buttons that *build* something new — those say which plan they belong to rather
+than disappearing. And on Pro, research runs on **your** provider key, so add
+one under Settings → Models before your first run.
 
 ### Add Stocks to Your Watchlist
 

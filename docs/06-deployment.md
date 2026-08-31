@@ -179,6 +179,7 @@ ENABLE_ML_MODEL=false
 DEFAULT_TICKERS=PLTR,AAPL,TSLA,NVDA,MSFT
 INGESTION_INTERVAL_MINUTES=30
 CLOUDFLARE_TUNNEL_TOKEN=<your-cloudflare-tunnel-token>
+ADMIN_EMAIL=<the operator's account email>
 ```
 
 Generate a strong `JWT_SECRET_KEY`:
@@ -186,6 +187,29 @@ Generate a strong `JWT_SECRET_KEY`:
 ```bash
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+**`ADMIN_EMAIL` is set here by hand and is deliberately not injected by the
+deploy workflow**, for the same reason `CONTACT_EMAIL` is not: the workflow's
+`_set_key` writes `KEY=` for a variable it has no value for, and an empty admin
+address makes *nobody* the operator — `/admin` becomes unreachable and account
+provisioning silently stops working. It defaults in `config.py`, and
+`main._check_admin_email` logs a warning at startup when it is empty or matches
+no account. Check the api container's logs after a deploy:
+
+```bash
+docker compose -f docker-compose.prod.yml logs api | grep admin_email
+```
+
+Two other optional values, both cost controls rather than credentials:
+`TIER_WATCHLIST_CAP_BASIC` / `TIER_WATCHLIST_CAP_PRO` (defaults 5 and 15 — the
+number of tickers each plan may watch, which is what bounds how much work the
+five-minute pipeline does on this deployment's own keys) and
+`ANALYSIS_RUNS_PER_DAY` (default 25).
+
+**First deploy after 1.18.0:** every existing account is written `access_tier:
+TRADER` on startup, so nothing anyone was doing stops. New accounts default to
+`BASIC`. Create the operator's account with `--tier TRADER` if it does not exist
+yet, and make sure `ADMIN_EMAIL` matches it exactly.
 
 ### Cloudflare Tunnel Setup
 

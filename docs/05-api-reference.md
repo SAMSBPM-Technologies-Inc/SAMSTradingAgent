@@ -9,7 +9,7 @@
 
 ## Authentication
 
-All endpoints except `/health`, `/auth/register`, and `/auth/login` require a Bearer token in the `Authorization` header.
+All endpoints except `/health`, `/auth/login` and `POST /contact` require a Bearer token in the `Authorization` header. Authenticated endpoints may additionally require an access tier — see *Access tiers*.
 
 ```
 Authorization: Bearer <access_token>
@@ -114,51 +114,60 @@ outside trading hours, so a quiet overnight is the design, not an outage.
 
 ---
 
-### POST /auth/register
+### Registration — there isn't one
 
-**Description:** Creates a new user account and returns an access token. The token can be used immediately to authenticate subsequent requests.
+There is no `POST /auth/register`, and there never will be on this deployment.
+Accounts are provisioned by the operator: people ask through `POST /contact`,
+which records an `access_requests` row, and the operator creates the account
+from `POST /admin/users` (or `scripts/create_user.py` for the very first one)
+and emails the credentials.
 
-**Auth required:** No
+Every account carries an **access tier** — `BASIC`, `PRO` or `TRADER` — which
+decides what it may reach. See *Access tiers* below.
 
-**Request body** (`application/json`):
+---
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| email | string | Yes | Valid email address; must be unique |
-| password | string | Yes | Minimum 8 characters |
-| display_name | string | Yes | Human-readable name shown in the UI |
+## Access tiers
 
-**Response:**
+| | BASIC | PRO | TRADER |
+|---|---|---|---|
+| Stored analysis, watchlist, signals, performance, calibration, status, alerts | ✓ | ✓ | ✓ |
+| `POST /research/{ticker}`, `/analyze?force_refresh=true` | ✗ | ✓ | ✓ |
+| `/settings/llm` key management | ✗ | ✓ | ✓ |
+| Falls back to the deployment's model key | ✗ | ✗ | ✓ |
+| Nightly research enrolment | ✗ | operator grant | ✓ |
+| Every route under `/trading` | ✗ | ✗ | ✓ |
+| Watchlist cap (default) | 5 | 15 | unlimited |
 
-| Field | Type | Description |
-|-------|------|-------------|
-| access_token | string | JWT bearer token |
-| token_type | string | Always `"bearer"` |
+Two behaviours are worth calling out because they are not refusals:
 
-**Error responses:**
+* **Plain `GET /analyze`** (neither `force_refresh` nor `stored_only`) normally
+  rebuilds a signal older than the cache window. For a caller who may not spend
+  tokens it behaves as `stored_only` instead — returning the stored document at
+  any age, or 404 — rather than 403, because the report export and the watchlist
+  warm-up both call it.
+* **`DELETE /settings/llm/keys/{key_id}`** and setting `research_enabled: false`
+  are never refused, whatever the plan. Removing a credential or stopping a
+  recurring spend must always work.
 
-| Status | Condition |
-|--------|-----------|
-| 400 | Email already registered |
-| 422 | Validation error (missing fields, invalid email format) |
+### The refusal shape
 
-**Example:**
+Tier refusals return **403** with a structured `detail` — note that every route
+predating this returns a plain string there, so a client must read both:
 
 ```json
-// POST /auth/register
-// Request body
 {
-  "email": "trader@example.com",
-  "password": "securepassword123",
-  "display_name": "Alice Trader"
-}
-
-// Response 200
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "token_type": "bearer"
+  "detail": {
+    "error": "tier_required",
+    "capability": "may_trade",
+    "tier": "PRO",
+    "message": "Trading and broker access are not part of your plan. Contact the desk to change your plan."
+  }
 }
 ```
+
+`POST /ticker` uses the same envelope with `"error": "watchlist_cap"` plus `cap`
+and `watching`. `/admin/*` uses `"error": "admin_required"`.
 
 ---
 
@@ -218,6 +227,17 @@ username=trader%40example.com&password=securepassword123
 | id | string | Unique user ID (MongoDB ObjectId as string) |
 | email | string | User's email address |
 | display_name | string | User's display name |
+| access_tier | string | `BASIC`, `PRO` or `TRADER` |
+| is_admin | boolean | Whether this address is the configured operator |
+| entitlements | object | What this account may do, resolved by the server |
+
+`entitlements` is the whole resolved object — `may_trade`, `may_spend_tokens`,
+`may_bring_own_key`, `may_use_server_key`, `may_enrol_in_nightly_research` and
+`watchlist_cap` (`null` = unlimited). **Clients read these booleans; they never
+map a tier name to a feature or restate a cap.** A new tier, or a retuned
+default, then needs no client change. It is the same rule `/analyze` follows by
+returning `breakdown` and `gate` from the engine rather than letting the UI keep
+its own copy of the weights.
 
 **Error responses:**
 
@@ -233,7 +253,18 @@ username=trader%40example.com&password=securepassword123
 {
   "id": "64a1f2b3c4d5e6f7a8b9c0d1",
   "email": "trader@example.com",
-  "display_name": "Alice Trader"
+  "display_name": "Alice Trader",
+  "access_tier": "PRO",
+  "is_admin": false,
+  "entitlements": {
+    "tier": "PRO",
+    "may_trade": false,
+    "may_spend_tokens": true,
+    "may_bring_own_key": true,
+    "may_use_server_key": false,
+    "may_enrol_in_nightly_research": false,
+    "watchlist_cap": 15
+  }
 }
 ```
 
@@ -620,6 +651,7 @@ username=trader%40example.com&password=securepassword123
 |-------|------|-------------|
 | items | array | Array of `WatchlistItem` objects |
 | count | integer | Total number of items in watchlist |
+| cap | integer \| null | How many tickers this plan covers. `null` is unlimited; zero is a real cap. Returned so a client can show "7 of 15" and disable the add box before the request — the 403 from `POST /ticker` is the actual gate |
 
 **Error responses:**
 
@@ -1018,6 +1050,86 @@ username=trader%40example.com&password=securepassword123
   }
 }
 ```
+
+---
+
+### Admin
+
+Every route below is under `/admin` and requires the address configured in
+`ADMIN_EMAIL`. **Being `TRADER` is not being the operator** — the highest tier
+is a customer. There is no `is_admin` field on the user document, so no request
+body can grant it.
+
+No response on this router has a field capable of holding a `password_hash` or
+a key ciphertext; that is a type-level guarantee, not a deletion before
+serialising.
+
+#### GET /admin/users
+
+Every account: `id`, `email`, `display_name`, `created_at`, `access_tier`,
+`watchlist_cap_override` (the operator's per-user value, or `null`),
+`watchlist_cap` (what it resolves to), `watching`, `research_enabled`,
+`research_daily_allowed`, `llm_key_count`, `is_admin`.
+
+#### POST /admin/users
+
+Creates an account. Body: `email`, optional `display_name`, `access_tier`
+(defaults `BASIC`), optional `watchlist_cap`, `research_daily_allowed`, and an
+optional `password` — omit it and one is generated.
+
+Returns `{ "user": AdminUserRow, "password": string | null }`. **`password` is
+populated only when this call generated it, and only on this response.** It is
+never stored in plaintext, never logged, and no route can read it back.
+
+| Status | Condition |
+|--------|-----------|
+| 201 | Created |
+| 409 | That email already has an account |
+
+#### PATCH /admin/users/{user_id}
+
+Body: any of `access_tier`, `watchlist_cap`, `clear_watchlist_cap` (a separate
+boolean because `watchlist_cap: null` is indistinguishable from "not supplied"
+in a PATCH), `research_daily_allowed`. Query: `force`.
+
+Downgrading an account out of trading while it holds open positions returns
+**409** naming the tickers, because it removes the interface that closes them.
+`?force=true` proceeds and logs at warning. Nothing rewrites
+`auto_trade_settings` to tidy up: `_prepare_entry` already refuses new entries
+and `execute_exit` still works, so the positions stay closable by the agent —
+what is lost is closing them by hand, which is worth stopping to say.
+
+A downgrade that removes nightly-research eligibility also clears
+`llm_settings.research_enabled` in the same write.
+
+#### GET /admin/access-requests
+
+Contact-form submissions, newest first. Read-only: provisioning is the action,
+and it shows up in `GET /admin/users`. Rows age out after 180 days via a TTL
+index.
+
+**There is no delete and no password reset.** A user document is referenced by
+rows in `watched_tickers`, `trades`, `research_dossiers` and the per-user signal
+series, none of which cascade — shipping half a cascade is worse than shipping
+none. A forgotten password means recreating the account.
+
+---
+
+### POST /contact
+
+The only unauthenticated write, and the only unauthenticated insert. Rate
+limited to 3 per address per hour, counting every submission.
+
+Body: `name`, `email`, `message`, optional `company` (a honeypot — anything in
+it returns a normal success and records nothing), and optional `interest`, one
+of `read` / `research` / `trade`. Deliberately not plan names: a stranger has no
+idea what `PRO` means, and naming plans on a page with no prices invites a
+question the page cannot answer.
+
+Returns `{"sent": true}`. A **502** means the message was not delivered — this
+is the one mail path that reports failure rather than swallowing it. The
+`access_requests` row is written first and never fails the request, but a
+successful write never masks a failed send.
 
 ---
 
