@@ -217,7 +217,7 @@ class Settings(BaseSettings):
     # reports a mismatch loudly on startup — being silently locked out of
     # provisioning is worse than being loudly locked out.
     admin_email: str = Field(
-        default="sudheer.samudrala@samspm.com",
+        default="sudheer.samudrala@samsbpm.com",
         description="Operator address(es), comma-separated; empty means nobody is admin",
     )
 

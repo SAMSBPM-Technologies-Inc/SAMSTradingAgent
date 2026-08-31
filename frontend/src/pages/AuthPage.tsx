@@ -133,15 +133,27 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
         {isSubmitting ? 'Signing in…' : 'Sign In'}
       </button>
 
-      {/* There is no sign-up link to sit beside this, because there is no
-          sign-up. This is the only other thing someone at this screen might
-          need. */}
-      <Link
-        to="/forgot-password"
-        className="self-center text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
-      >
-        Forgot your password?
-      </Link>
+      {/* Two ways to be stuck at this screen, and both need a route out.
+          There is no sign-up form — accounts are provisioned by hand — so
+          somebody who arrives here without one has to be pointed at the
+          contact form rather than left staring at a password box. */}
+      <div className="flex flex-col items-center gap-2">
+        <Link
+          to="/forgot-password"
+          className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+        >
+          Forgot your password?
+        </Link>
+        <p className="text-xs text-[var(--color-fg-muted)]">
+          No account?{' '}
+          <Link
+            to="/home#contact"
+            className="text-brand-500 underline-offset-4 hover:underline"
+          >
+            Request access
+          </Link>
+        </p>
+      </div>
     </form>
   )
 }
