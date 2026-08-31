@@ -1,3 +1,4 @@
+import type { AccessTier, Entitlements } from '../lib/entitlements'
 export type Signal = 'BUY' | 'SELL' | 'HOLD'
 
 /**
@@ -44,6 +45,11 @@ export interface User {
   email: string
   display_name: string
   scoring_weights?: Record<string, number> | null
+  /** The plan this account is on. Label it with `TIER_LABELS`, never raw. */
+  access_tier?: AccessTier
+  is_admin?: boolean
+  /** Resolved by the server. Read it; never derive it from `access_tier`. */
+  entitlements?: Entitlements | null
 }
 
 export interface WatchlistItem {

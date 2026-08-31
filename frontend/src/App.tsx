@@ -2,6 +2,7 @@ import React from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { ThemeProvider } from './lib/theme-context'
 import { AuthProvider, useAuth } from './lib/auth-context'
+import { entitlementsOf } from './lib/entitlements'
 import AuthPage from './pages/AuthPage'
 import HomePage from './pages/HomePage'
 import TradePage from './pages/TradePage'
@@ -12,6 +13,7 @@ import AnalysisPage from './pages/AnalysisPage'
 import SearchPage from './pages/SearchPage'
 import CalibrationPage from './pages/CalibrationPage'
 import StatusPage from './pages/StatusPage'
+import AdminPage from './pages/AdminPage'
 import { SystemStatusProvider } from './lib/system-status'
 import { ToastProvider } from './lib/toast-context'
 import { TradingSettingsProvider } from './lib/trading-context'
@@ -50,6 +52,36 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
  * free of auth entirely: when the landing page moves to its own public host,
  * this branch is what gets deleted, and nothing inside HomePage changes.
  */
+/**
+ * A route only some plans can open.
+ *
+ * Composed inside `ProtectedRoute`, so it never runs before the session has
+ * been verified — `entitlementsOf` fails closed, and without the `AuthGate`
+ * above it every one of these would bounce to `/` for a frame while `/auth/me`
+ * was still in flight.
+ *
+ * Redirects rather than showing a refusal: these are whole screens that are not
+ * part of the plan, and an empty page explaining itself is worse than simply
+ * not being a place you can go. The controls *inside* a shared screen do the
+ * opposite and say why — see the Settings cards and the research buttons.
+ *
+ * This is presentation. Every route behind it is refused by the server too.
+ */
+function CapabilityRoute({
+  allow,
+  children,
+}: {
+  allow: (u: ReturnType<typeof useAuth>['user']) => boolean
+  children: React.ReactNode
+}) {
+  const { user, isLoading } = useAuth()
+  if (isLoading) return null
+  return allow(user) ? <>{children}</> : <Navigate to="/" replace />
+}
+
+const mayTrade = (u: ReturnType<typeof useAuth>['user']) => entitlementsOf(u).may_trade
+const isAdmin = (u: ReturnType<typeof useAuth>['user']) => !!u?.is_admin
+
 function RootRoute() {
   const { token } = useAuth()
   return token ? <TradePage /> : <HomePage />
@@ -126,11 +158,15 @@ function AppRoutes() {
           </ProtectedRoute>
         }
       />
+      {/* One order's record. There are no orders without trading, and the
+          screen is built entirely out of broker state. */}
       <Route
         path="/transaction/:id"
         element={
           <ProtectedRoute>
-            <TradePage />
+            <CapabilityRoute allow={mayTrade}>
+              <TradePage />
+            </CapabilityRoute>
           </ProtectedRoute>
         }
       />
@@ -179,11 +215,27 @@ function AppRoutes() {
         }
       />
       <Route path="/profile" element={<Navigate to="/settings" replace />} />
+      {/* Instructions for connecting a broker, which a plan without trading
+          cannot do. */}
       <Route
         path="/guide"
         element={
           <ProtectedRoute>
-            <GuidePage />
+            <CapabilityRoute allow={mayTrade}>
+              <GuidePage />
+            </CapabilityRoute>
+          </ProtectedRoute>
+        }
+      />
+      {/* Provisioning. One address reaches this, named by ADMIN_EMAIL on the
+          server — `is_admin` is computed there and simply reported here. */}
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <CapabilityRoute allow={isAdmin}>
+              <AdminPage />
+            </CapabilityRoute>
           </ProtectedRoute>
         }
       />

@@ -45,8 +45,14 @@ export const TOKEN_STORAGE_KEY = TOKEN_KEY
    to attach. Kept separate from authApi so it is obvious that reaching it does
    not imply a session. */
 export const contactApi = {
-  send: (body: { name: string; email: string; message: string; company?: string }) =>
-    api.post<{ sent: boolean }>('/contact', body),
+  send: (body: {
+    name: string
+    email: string
+    message: string
+    company?: string
+    /** What they are after, in their terms. Never a plan name — see HomePage. */
+    interest?: 'read' | 'research' | 'trade' | ''
+  }) => api.post<{ sent: boolean }>('/contact', body),
 }
 
 export const authApi = {
@@ -229,4 +235,47 @@ export const llmApi = {
     api.post<import('../types').LLMKeyTestResult>(
       `/settings/llm/keys/${keyId}/test`,
     ),
+}
+
+
+/**
+ * Provisioning. Reachable only by the address in `ADMIN_EMAIL` on the server,
+ * which computes `is_admin` and reports it on `/auth/me` — the client never
+ * decides who is the operator.
+ *
+ * Note what is absent: no delete, and no password read-back. A generated
+ * password is returned once, by the call that generated it.
+ */
+export const adminApi = {
+  users: () => api.get<import('../types').AdminUser[]>('/admin/users'),
+
+  createUser: (body: {
+    email: string
+    display_name?: string
+    access_tier: import('./entitlements').AccessTier
+    watchlist_cap?: number | null
+    research_daily_allowed?: boolean
+    password?: string
+  }) =>
+    api.post<{ user: import('../types').AdminUser; password: string | null }>(
+      '/admin/users',
+      body,
+    ),
+
+  updateUser: (
+    id: string,
+    body: {
+      access_tier?: import('./entitlements').AccessTier
+      watchlist_cap?: number
+      clear_watchlist_cap?: boolean
+      research_daily_allowed?: boolean
+    },
+    force = false,
+  ) =>
+    api.patch<import('../types').AdminUser>(`/admin/users/${id}`, body, {
+      params: force ? { force: true } : undefined,
+    }),
+
+  accessRequests: () =>
+    api.get<import('../types').AccessRequest[]>('/admin/access-requests'),
 }

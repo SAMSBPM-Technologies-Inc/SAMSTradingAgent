@@ -32,6 +32,8 @@ import RiskPanel from '../RiskPanel'
 import SignalBadge from '../SignalBadge'
 import AltDataPanel from './AltDataPanel'
 import { ResearchPanel } from './ResearchPanel'
+import { useAuth } from '../../lib/auth-context'
+import { entitlementsOf } from '../../lib/entitlements'
 
 // Split out: the charting library is ~200 kB and this is the only screen that
 // draws one. Bundled eagerly it loaded on screens that have no chart.
@@ -340,6 +342,8 @@ export function TickerHeader({
   onUnwatch,
 }: TickerHeaderProps) {
   const { toast } = useToast()
+  const { user } = useAuth()
+  const maySpend = entitlementsOf(user).may_spend_tokens
 
   /**
    * Run an export and report a failure.
@@ -475,11 +479,18 @@ export function TickerHeader({
           {/* The only control on the client that starts a pipeline run, and
               styled as the primary action because on a name with no stored
               analysis it is the only thing to do. Everything else on this page
-              is a read. */}
-          <button onClick={onRunAnalysis} disabled={analysing} className="btn-primary disabled:opacity-40">
-            <RefreshCw className={`h-3.5 w-3.5 ${analysing ? 'animate-spin' : ''}`} aria-hidden="true" />
-            {analysing ? 'Analysing…' : data ? 'Run full analysis again' : 'Run full analysis'}
-          </button>
+              is a read — which is why a plan that cannot run one still gets the
+              whole page, and a sentence here rather than a missing button. */}
+          {maySpend ? (
+            <button onClick={onRunAnalysis} disabled={analysing} className="btn-primary disabled:opacity-40">
+              <RefreshCw className={`h-3.5 w-3.5 ${analysing ? 'animate-spin' : ''}`} aria-hidden="true" />
+              {analysing ? 'Analysing…' : data ? 'Run full analysis again' : 'Run full analysis'}
+            </button>
+          ) : (
+            <span className="text-[11.5px] text-[var(--color-fg-muted)]">
+              Running a new analysis is part of the Pro plan.
+            </span>
+          )}
 
           {data && (
             <Menu

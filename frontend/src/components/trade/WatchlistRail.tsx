@@ -5,6 +5,8 @@ import { relativeTime } from '../../lib/format'
 import { useNow } from '../../lib/use-poll'
 import type { Signal, WatchlistItem, WatchlistSetupCounts } from '../../types'
 import LoadingSpinner from '../LoadingSpinner'
+import { useAuth } from '../../lib/auth-context'
+import { entitlementsOf, tierRefusal } from '../../lib/entitlements'
 
 /**
  * Left rail of the Trade screen: the whole watchlist at a glance.
@@ -114,7 +116,21 @@ function SortHeader({ field, sort, onSort, align = 'right', children }: {
 
 // ── Add ticker ────────────────────────────────────────────────────────────────
 
-function AddTicker({ onAdded, onClose }: { onAdded: (t: string) => void; onClose: () => void }) {
+function AddTicker({
+  onAdded,
+  onClose,
+  watching,
+}: {
+  onAdded: (t: string) => void
+  onClose: () => void
+  watching: number
+}) {
+  const { user } = useAuth()
+  // The same number the server enforces, reported by `/auth/me` rather than
+  // restated here. Showing it turns "your plan covers 15" from something you
+  // discover by being refused into something you can see coming.
+  const cap = entitlementsOf(user).watchlist_cap
+  const full = cap !== null && watching >= cap
   const [value, setValue] = useState('')
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([])
   const [busy, setBusy] = useState(false)
@@ -147,8 +163,9 @@ function AddTicker({ onAdded, onClose }: { onAdded: (t: string) => void; onClose
       onAdded(t)
       onClose()
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to add ticker.')
+      // Reads both shapes — the plan gates raise a structured detail, every
+      // older route raises a plain string.
+      setError(tierRefusal(err)?.message ?? 'Failed to add ticker.')
     } finally {
       setBusy(false)
     }
@@ -174,7 +191,7 @@ function AddTicker({ onAdded, onClose }: { onAdded: (t: string) => void; onClose
         />
         <button
           onClick={() => add(value)}
-          disabled={busy || !value.trim()}
+          disabled={busy || !value.trim() || full}
           className="grid h-7 w-7 flex-shrink-0 place-items-center rounded-md bg-brand-500 text-white
                      disabled:opacity-40"
           aria-label="Add ticker"
@@ -210,6 +227,14 @@ function AddTicker({ onAdded, onClose }: { onAdded: (t: string) => void; onClose
       )}
 
       {error && <p className="text-[10.5px] text-[var(--accent-sell)]">{error}</p>}
+
+      {cap !== null && (
+        <p className="text-[10.5px] text-[var(--color-fg-muted)]">
+          {full
+            ? `Your plan covers ${cap} tickers. Remove one to add another.`
+            : `${watching} of ${cap} tickers`}
+        </p>
+      )}
     </div>
   )
 }
@@ -269,7 +294,7 @@ export default function WatchlistRail({
                     bg-[var(--color-surface)]">
       <div className="flex flex-col gap-1.5 border-b border-[var(--color-border)] p-2">
         {adding ? (
-          <AddTicker onAdded={onAdded} onClose={() => setAdding(false)} />
+          <AddTicker onAdded={onAdded} onClose={() => setAdding(false)} watching={items.length} />
         ) : (
           <>
             <div className="flex gap-1.5">

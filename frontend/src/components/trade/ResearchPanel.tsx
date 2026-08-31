@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertCircle, ExternalLink, Loader2, RefreshCw, ShieldAlert } from 'lucide-react'
 
 import { researchApi } from '../../lib/api'
+import { useAuth } from '../../lib/auth-context'
+import { entitlementsOf } from '../../lib/entitlements'
 import type {
   DimensionScore,
   EvidenceItem,
@@ -38,6 +40,10 @@ const ASSESSMENT_TONE: Record<string, { bg: string; fg: string }> = {
 }
 
 export function ResearchPanel({ ticker }: { ticker: string }) {
+  const { user } = useAuth()
+  // Reading a stored dossier is free and stays available to everybody;
+  // building one is five to eleven model calls.
+  const mayResearch = entitlementsOf(user).may_spend_tokens
   const [dossier, setDossier] = useState<ResearchDossier | null>(null)
   const [loading, setLoading] = useState(true)
   const [building, setBuilding] = useState(false)
@@ -90,16 +96,26 @@ export function ResearchPanel({ ticker }: { ticker: string }) {
             No dossier yet for {ticker}.
           </p>
         )}
-        <button
-          onClick={build}
-          disabled={building}
-          className="ml-auto flex items-center gap-1.5 rounded border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-fg)] transition-colors hover:bg-[var(--color-hover)] disabled:opacity-60"
-        >
-          {building
-            ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-            : <RefreshCw className="h-3 w-3" aria-hidden="true" />}
-          {building ? 'Researching…' : dossier ? 'Re-run research' : 'Run deep research'}
-        </button>
+        {mayResearch ? (
+          <button
+            onClick={build}
+            disabled={building}
+            className="ml-auto flex items-center gap-1.5 rounded border border-[var(--color-border)] px-2.5 py-1 text-[11px] font-medium text-[var(--color-fg)] transition-colors hover:bg-[var(--color-hover)] disabled:opacity-60"
+          >
+            {building
+              ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              : <RefreshCw className="h-3 w-3" aria-hidden="true" />}
+            {building ? 'Researching…' : dossier ? 'Re-run research' : 'Run deep research'}
+          </button>
+        ) : (
+          /* A sentence, not a hidden button. This sits beside a dossier the
+             reader can still read in full — a control that simply vanished
+             next to visible content reads as a bug, while naming the plan is
+             something they can act on. The route refuses this too. */
+          <span className="ml-auto text-[11px] text-[var(--color-fg-muted)]">
+            Running research is part of the Pro plan.
+          </span>
+        )}
       </div>
 
       {building && (
