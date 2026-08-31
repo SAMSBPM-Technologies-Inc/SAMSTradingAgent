@@ -187,7 +187,7 @@ def create_app() -> FastAPI:
             "Ingests market data, computes technical indicators, generates "
             "risk scores, and produces BUY/SELL/HOLD signals."
         ),
-        version="1.19.1",
+        version="1.19.2",
         docs_url="/docs",
         redoc_url="/redoc",
         lifespan=lifespan,
@@ -198,7 +198,16 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        # Every verb the app actually serves must be listed here, or the
+        # browser's preflight for it is refused and the request never leaves
+        # the page. PATCH was missing when `/admin/users/{id}` became the first
+        # PATCH route on this API: the endpoint worked perfectly from curl and
+        # was unreachable from the Admin page, which reported only "could not
+        # save" — the failure is a 400 on an OPTIONS nobody thinks to look at.
+        #
+        # `tests/test_cors.py` enumerates the app's own route table against
+        # this list so the next new verb cannot repeat it.
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
         allow_credentials=True,
     )

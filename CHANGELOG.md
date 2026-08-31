@@ -14,6 +14,31 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.19.2] — 2026-08-31
+
+**Changing a user's plan from the Admin page failed.** The page reported
+"Could not save that change" and the request never reached the server.
+
+`PATCH /admin/users/{id}` is the first PATCH endpoint on this API, and the CORS
+allowlist named only GET, POST, PUT and DELETE. So the browser's preflight for
+it was refused with a 400 and the actual request was never sent. The endpoint
+itself was fine the whole time — it worked from a terminal, and every test that
+called it directly passed — which is exactly why nothing caught it: this class
+of fault is invisible to anything that is not a browser.
+
+PATCH is now allowed, and a test enumerates the app's own route table against
+the CORS allowlist so a route added with a new verb cannot repeat it. A second
+test sends the real preflight rather than only reading the configuration,
+because reading the config proves the config and not the middleware.
+
+### Known gaps
+
+- Nothing else on the API uses a verb outside the allowlist today; the test is
+  what keeps that true rather than a note.
+- Everything from 1.19.1, 1.19.0 and 1.18.0's Known gaps still stands.
+
+---
+
 ## [1.19.1] — 2026-08-31
 
 **The Admin page was unreachable.** `ADMIN_EMAIL` shipped defaulting to
