@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, COLL_WATCHED, get_db
 from app.dependencies import get_current_user
+from app.services.entitlements import entitlements_for
 from app.models.stock import (
     TickerAddRequest,
     TickerAddResponse,
@@ -46,10 +47,12 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
     user_id = str(current_user["_id"])
     db = await get_db()
 
+    cap = entitlements_for(current_user).watchlist_cap
+
     watched = await db[COLL_WATCHED].find({"user_id": user_id}, {"ticker": 1}).to_list(length=2000)
     tickers = [d["ticker"] for d in watched]
     if not tickers:
-        return WatchlistResponse(count=0, items=[], setups=WatchlistSetupCounts())
+        return WatchlistResponse(count=0, items=[], setups=WatchlistSetupCounts(), cap=cap)
 
     user_weights = current_user.get("scoring_weights")
 
@@ -130,7 +133,7 @@ async def get_watchlist(current_user: dict = Depends(get_current_user)) -> Watch
         neutral=sum(1 for i in items if i.trigger == "NEUTRAL"),
         pending=sum(1 for i in items if i.trigger == "PENDING"),
     )
-    return WatchlistResponse(count=len(items), items=items, setups=setups)
+    return WatchlistResponse(count=len(items), items=items, setups=setups, cap=cap)
 
 
 @router.post("/ticker", response_model=TickerAddResponse, summary="Add a ticker to the watch list")
@@ -145,13 +148,56 @@ async def add_ticker(
 
     user_id = str(current_user["_id"])
     db = await get_db()
+
+    # ── The plan's ticker cap ────────────────────────────────────────────────
+    #
+    # The question is "would this add a row", not "is the list full". Re-adding
+    # a watched ticker is a no-op upsert and the UI does it deliberately — the
+    # web dashboard re-adds the currently selected name. A bare `count >= cap`
+    # refuses that, and only once a user is *exactly* at their limit, which is
+    # the worst possible time to discover it.
+    #
+    # Unlimited pays nothing: `cap is None` short-circuits before either query.
+    #
+    # The race is real and accepted. Two concurrent adds can both pass the
+    # count and give cap+1. The unique `(user_id, ticker)` index constrains
+    # duplicates, not the total, so nothing here is secretly holding the line —
+    # and a transaction to close a benign over-by-one under a double-click is
+    # not worth what it costs.
+    cap = entitlements_for(current_user).watchlist_cap
+    if cap is not None:
+        already = await db[COLL_WATCHED].find_one(
+            {"user_id": user_id, "ticker": ticker}, {"_id": 1}
+        )
+        if already is None:
+            watching = await db[COLL_WATCHED].count_documents({"user_id": user_id})
+            if watching >= cap:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": "watchlist_cap",
+                        "capability": "watchlist_cap",
+                        "cap": cap,
+                        "watching": watching,
+                        # Names the number and the way out. "Limit reached"
+                        # leaves somebody with nothing they can do.
+                        "message": f"Your plan covers {cap} tickers. "
+                                   f"Remove one to add {ticker}.",
+                    },
+                )
+
     await db[COLL_WATCHED].update_one(
         {"user_id": user_id, "ticker": ticker},
         {"$set": {"user_id": user_id, "ticker": ticker}},
         upsert=True,
     )
 
-    background_tasks.add_task(_run_pipeline_bg, ticker)
+    # Only run the pipeline for a name the engine has never scored. Every
+    # watched ticker joins the 5-minute union anyway, so a name somebody else
+    # already watches needs nothing here — and that spend is on the
+    # deployment's key, which is the whole reason readers are capped at all.
+    if not await db[COLL_SIGNALS].find_one({"ticker": ticker}, {"_id": 1}):
+        background_tasks.add_task(_run_pipeline_bg, ticker)
     logger.info("ticker_added", ticker=ticker, user_id=user_id)
     return TickerAddResponse(
         ticker=ticker,

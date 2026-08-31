@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { alertsApi, authApi, llmApi, watchlistApi } from '../lib/api'
 import { useAuth } from '../lib/auth-context'
+import { entitlementsOf, tierRefusal, TIER_LABELS } from '../lib/entitlements'
 import { useToast } from '../lib/toast-context'
 import { useTradingSettings } from '../lib/trading-context'
 import type {
@@ -825,6 +826,8 @@ const ROLE_BLURBS: { role: LLMRole; label: string; blurb: string }[] = [
 ]
 
 function ModelsCard() {
+  const { user } = useAuth()
+  const ent = entitlementsOf(user)
   const [state, setState] = useState<LLMSettings | null>(null)
   const [loading, setLoading] = useState(true)
   const [provider, setProvider] = useState('anthropic')
@@ -914,6 +917,21 @@ function ModelsCard() {
       const { data } = await llmApi.save(state.roles, state.research_enabled)
       setState(data)
     }, 'Could not save your model settings.')
+  }
+
+  // Named rather than removed. This card sits among five that all still work,
+  // so silently dropping it reads as a bug; saying which plan it belongs to is
+  // information the reader can act on. The routes behind it refuse anyway.
+  if (!ent.may_bring_own_key) {
+    return (
+      <Card title="Models" blurb="Which model reads which part of a company.">
+        <p className="text-[11.5px] leading-relaxed text-[var(--color-fg-muted)]">
+          Bringing your own provider key is part of the Pro plan. Your readings
+          are built by the engine either way — this is the control over which
+          model writes them, and what that costs you rather than us.
+        </p>
+      </Card>
+    )
   }
 
   if (loading) {
@@ -1135,17 +1153,131 @@ function ModelsCard() {
         fall through, because the next provider would reject it identically.
       </p>
 
+      {/* The unattended job, not the on-demand button. On a Pro account this
+          needs the operator to grant it — five to seven model calls per ticker
+          per day, running whether anyone is watching or not, is the one number
+          here that multiplies. Deep research on demand stays available either
+          way, which is why this is a line rather than a hidden control. */}
       <div className="mt-3">
-        <Toggle
-          checked={state.research_enabled}
-          onChange={(v) => setState({ ...state, research_enabled: v })}
-          label="Build deep research daily"
-          note="Five to seven model calls per watched ticker per day, on your own key. Off until you ask for it."
-        />
+        {ent.may_enrol_in_nightly_research ? (
+          <Toggle
+            checked={state.research_enabled}
+            onChange={(v) => setState({ ...state, research_enabled: v })}
+            label="Build deep research daily"
+            note="Five to seven model calls per watched ticker per day, on your own key. Off until you ask for it."
+          />
+        ) : (
+          <p className="text-[11.5px] leading-relaxed text-[var(--color-fg-muted)]">
+            <span className="font-medium text-[var(--color-fg)]">Build deep research daily</span>
+            {' — '}not enabled on your account. You can still run research on any
+            ticker yourself. Ask the desk to turn the nightly job on.
+          </p>
+        )}
       </div>
 
       <SaveRow onSave={save} saving={saving} saved={saved} error={error} />
     </Card>
+  )
+}
+
+/**
+ * Change your own password.
+ *
+ * The current password is required even though this screen is behind a valid
+ * session — the server insists, because a stolen token would otherwise be
+ * enough to lock the real owner out of their own account permanently.
+ *
+ * On success the response carries a **new token**, which has to be stored: the
+ * change ends every session issued before it, including this one. Without the
+ * swap the user would be signed out by the very act of changing their password.
+ */
+function ChangePassword() {
+  const { login } = useAuth()
+  const { toast } = useToast()
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const close = () => {
+    setOpen(false)
+    setCurrent('')
+    setNext('')
+    setError(null)
+  }
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setBusy(true)
+    try {
+      const { data } = await authApi.changePassword(current, next)
+      // Swaps the stored token and re-reads the profile. Every other session
+      // for this account is now dead; this one continues.
+      await login(data.access_token)
+      toast('Password changed. Other sessions have been signed out.', 'success')
+      close()
+    } catch (err) {
+      setError(tierRefusal(err)?.message ?? 'Could not change your password.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="btn-secondary mt-3 w-full">
+        Change password
+      </button>
+    )
+  }
+
+  return (
+    <form onSubmit={submit} className="mt-3 flex flex-col gap-2">
+      <label htmlFor="current-password" className="text-[11px] text-[var(--color-fg-muted)]">
+        Current password
+      </label>
+      <input
+        id="current-password"
+        type="password"
+        autoComplete="current-password"
+        className="input text-sm"
+        value={current}
+        onChange={(e) => setCurrent(e.target.value)}
+        required
+      />
+
+      <label htmlFor="new-password" className="text-[11px] text-[var(--color-fg-muted)]">
+        New password
+      </label>
+      <input
+        id="new-password"
+        type="password"
+        autoComplete="new-password"
+        minLength={12}
+        className="input text-sm"
+        value={next}
+        onChange={(e) => setNext(e.target.value)}
+        required
+      />
+      <p className="text-[10.5px] text-[var(--color-fg-muted)]">
+        At least 12 characters. Every other device signed in as you will be
+        signed out; this one stays.
+      </p>
+
+      {error && <p role="alert" className="text-[11px] text-[var(--accent-sell)]">{error}</p>}
+
+      <div className="flex gap-2">
+        <button type="submit" disabled={busy || !current || next.length < 12} className="btn-primary flex-1">
+          {busy ? <LoadingSpinner size="sm" /> : null}
+          {busy ? 'Changing…' : 'Change password'}
+        </button>
+        <button type="button" onClick={close} className="btn-secondary">
+          Cancel
+        </button>
+      </div>
+    </form>
   )
 }
 
@@ -1174,8 +1306,23 @@ function AccountCard() {
     }, 'Failed to save your name.')
   }
 
+  const ent = entitlementsOf(user)
+
   return (
     <Card title="Account">
+      {/* A user should be able to find out what they have without asking. The
+          cap is the number that will eventually stop them adding a ticker, so
+          it is stated here rather than only in the refusal. */}
+      <div className="flex items-center gap-2 py-2">
+        <span className="flex-1 text-[12px] text-[var(--color-fg-muted)]">Plan</span>
+        <span className="text-[12px] font-medium">{TIER_LABELS[ent.tier]}</span>
+      </div>
+      <div className="flex items-center gap-2 border-t border-[var(--color-border)] py-2">
+        <span className="flex-1 text-[12px] text-[var(--color-fg-muted)]">Tickers</span>
+        <span className="num text-[12px] font-medium">
+          {ent.watchlist_cap === null ? 'Unlimited' : `Up to ${ent.watchlist_cap}`}
+        </span>
+      </div>
       <div className="flex items-center gap-2 border-t border-[var(--color-border)] py-2">
         <span className="flex-1 text-[12px] text-[var(--color-fg-muted)]">Display name</span>
         {editing ? (
@@ -1230,6 +1377,8 @@ function AccountCard() {
       {error && <p className="mt-1.5 text-[11px] text-[var(--accent-sell)]">{error}</p>}
       {saved && <p className="mt-1.5 text-[11px] text-[var(--accent-buy)]">Saved.</p>}
 
+      <ChangePassword />
+
       <button
         onClick={logout}
         className="btn-secondary mt-3 w-full border-[var(--accent-sell)]/30 text-[var(--accent-sell)]
@@ -1249,6 +1398,7 @@ export default function SettingsPage() {
   // order ticket read, so the dollar figures under these sliders describe the
   // account the rest of the app is showing.
   const { settings, account } = useTradingSettings()
+  const { user } = useAuth()
   const equity = account?.connected ? account.net_liquidation : null
   const [scores, setScores] = useState<number[]>([])
 
@@ -1262,6 +1412,7 @@ export default function SettingsPage() {
 
   const threshold = settings?.min_signal_score ?? 0.75
   const aboveScore = scores.filter((s) => s >= threshold).length
+  const ent = entitlementsOf(user)
 
   return (
     <Layout>
@@ -1277,10 +1428,28 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      {/* Six sibling cards, so gating is one conditional each.
+          Two shapes, chosen deliberately:
+
+          The trading cards are **removed**. Autonomy and Broker configure a
+          brokerage connection an account without trading cannot make, and a
+          disabled form for something that will never be available is clutter
+          pretending to be an upsell.
+
+          Models is **shown read-only with a line saying why**. It sits among
+          five cards that all still work; a settings screen that silently loses
+          one of them looks broken, while a card that names the plan is
+          information. Same reasoning as the research buttons on a ticker page,
+          which sit next to a reading the user *can* see.
+
+          All of it is presentation. Every control here has a matching refusal
+          on the server. */}
       <div className="grid items-start gap-3.5 lg:grid-cols-2">
-        <AutonomyCard equity={equity} aboveScore={aboveScore} watched={scores.length} />
+        {ent.may_trade && (
+          <AutonomyCard equity={equity} aboveScore={aboveScore} watched={scores.length} />
+        )}
         <WeightsCard />
-        <BrokerCard />
+        {ent.may_trade && <BrokerCard />}
         <AlertsCard />
         <ModelsCard />
         <AccountCard />

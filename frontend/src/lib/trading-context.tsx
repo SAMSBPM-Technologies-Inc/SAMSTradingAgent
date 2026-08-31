@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { tradingApi } from './api'
 import { useAuth } from './auth-context'
+import { entitlementsOf } from './entitlements'
 import { usePoll } from './use-poll'
 import type {
   AccountSummaryResponse,
@@ -30,6 +31,13 @@ import type {
  * and, worse, let two of them disagree: the strip refreshed every 30 seconds
  * while the ticket read equity once and never again, so the number sizing an
  * order could differ from the number displayed above it.
+ *
+ * **Nothing here fetches for an account whose plan has no trading.** This
+ * provider sits at app level, so without that check every page load for such a
+ * user fires two requests that come back 403 and a poll that repeats one of
+ * them every thirty seconds. Both catch blocks fold an error into `null` — by
+ * design, since a guessed mode is the one thing the header must not show —
+ * which would make the whole loop completely invisible from the UI.
  */
 
 interface TradingContextValue {
@@ -49,14 +57,18 @@ interface TradingContextValue {
 const TradingContext = createContext<TradingContextValue | null>(null)
 
 export function TradingSettingsProvider({ children }: { children: React.ReactNode }) {
-  const { token } = useAuth()
+  const { token, user } = useAuth()
+  // Not "is there a token" but "may this account trade at all". Both are
+  // needed: the token gates an anonymous visitor, the plan gates a signed-in
+  // reader.
+  const mayTrade = !!token && entitlementsOf(user).may_trade
   const [settings, setSettings] = useState<AutoTradeSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [account, setAccount] = useState<AccountSummaryResponse | null>(null)
   const [accountLoading, setAccountLoading] = useState(true)
 
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!mayTrade) {
       setSettings(null)
       setLoading(false)
       return
@@ -71,7 +83,7 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
     } finally {
       setLoading(false)
     }
-  }, [token])
+  }, [mayTrade])
 
   useEffect(() => {
     setLoading(true)
@@ -79,7 +91,7 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
   }, [refresh])
 
   const refreshAccount = useCallback(async () => {
-    if (!token) {
+    if (!mayTrade) {
       setAccount(null)
       setAccountLoading(false)
       return
@@ -94,7 +106,7 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
     } finally {
       setAccountLoading(false)
     }
-  }, [token])
+  }, [mayTrade])
 
   useEffect(() => {
     setAccountLoading(true)
@@ -104,7 +116,7 @@ export function TradingSettingsProvider({ children }: { children: React.ReactNod
   // Balances move intraday. Polled once, here, instead of once per consumer —
   // and paused while the tab is hidden rather than spending broker round-trips
   // on a screen nobody is looking at.
-  usePoll(refreshAccount, 30_000, !!token)
+  usePoll(refreshAccount, 30_000, mayTrade)
 
   const save = useCallback(
     async (patch: Partial<AutoTradeSettings>) => {

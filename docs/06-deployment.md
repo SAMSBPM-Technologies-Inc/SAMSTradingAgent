@@ -179,6 +179,8 @@ ENABLE_ML_MODEL=false
 DEFAULT_TICKERS=PLTR,AAPL,TSLA,NVDA,MSFT
 INGESTION_INTERVAL_MINUTES=30
 CLOUDFLARE_TUNNEL_TOKEN=<your-cloudflare-tunnel-token>
+ADMIN_EMAIL=<the operator's account email>
+PUBLIC_BASE_URL=https://sta.samsbpm.com
 ```
 
 Generate a strong `JWT_SECRET_KEY`:
@@ -186,6 +188,42 @@ Generate a strong `JWT_SECRET_KEY`:
 ```bash
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+**`ADMIN_EMAIL` is set here by hand and is deliberately not injected by the
+deploy workflow**, for the same reason `CONTACT_EMAIL` is not: the workflow's
+`_set_key` writes `KEY=` for a variable it has no value for, and an empty admin
+address makes *nobody* the operator — `/admin` becomes unreachable and account
+provisioning silently stops working. It defaults in `config.py`, and
+`main._check_admin_email` logs a warning at startup when it is empty or matches
+no account. Check the api container's logs after a deploy:
+
+```bash
+docker compose -f docker-compose.prod.yml logs api | grep admin_email
+```
+
+Two other optional values, both cost controls rather than credentials:
+`TIER_WATCHLIST_CAP_BASIC` / `TIER_WATCHLIST_CAP_PRO` (defaults 5 and 15 — the
+number of tickers each plan may watch, which is what bounds how much work the
+five-minute pipeline does on this deployment's own keys) and
+`ANALYSIS_RUNS_PER_DAY` (default 25).
+
+`PUBLIC_BASE_URL` is the origin password-reset links point at — the **web
+client**, not the API. It is configured rather than taken from the request
+because a `Host` header is attacker-controlled, and a reset link built out of
+one is how a reset email ends up pointing at somebody else's site. Password
+reset by email also needs the `SMTP_*` block set; without it
+`POST /auth/forgot-password` returns 503 saying so, and the operator resets
+passwords by hand from `/admin` instead.
+
+**First deploy after 1.18.0:** every existing account is written `access_tier:
+TRADER` on startup, so nothing anyone was doing stops. New accounts default to
+`BASIC`. Create the operator's account with `--tier TRADER` if it does not exist
+yet, and make sure `ADMIN_EMAIL` matches it exactly.
+
+**First deploy after 1.19.0:** nobody is signed out. Sessions are only
+invalidated for accounts whose password actually changes from this point on —
+an account that has never had one changed is unaffected, which is what keeps
+this from ending every live session at once.
 
 ### Cloudflare Tunnel Setup
 

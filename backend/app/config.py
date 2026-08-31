@@ -206,6 +206,48 @@ class Settings(BaseSettings):
         description="Recipient for landing-page contact submissions",
     )
 
+    # ── Access tiers ─────────────────────────────────────────────────────────
+    #
+    # Who the operator is, and how many tickers each tier may watch.
+    #
+    # `admin_email` is deliberately NOT injected by the deploy workflow, for
+    # exactly the reason CONTACT_EMAIL is not: `_set_key` writes `KEY=` for an
+    # unset variable, and an empty admin address means nobody can reach /admin
+    # at all. It is defaulted here instead, and `main._check_admin_email`
+    # reports a mismatch loudly on startup — being silently locked out of
+    # provisioning is worse than being loudly locked out.
+    admin_email: str = Field(
+        default="sudheer.samudrala@samspm.com",
+        description="Operator address(es), comma-separated; empty means nobody is admin",
+    )
+
+    # The ticker cap is the real cost control in this system, not a token
+    # budget. Every watched ticker joins the union that `market_pipeline` runs
+    # every five minutes on the deployment's own key, with an analyst call per
+    # ticker — and `stocks_signals` is one shared document per ticker, so that
+    # spend cannot be attributed to a user. Bounding the list at the point of
+    # entry is what bounds the bill, which is why BASIC is capped too.
+    tier_watchlist_cap_basic: int = Field(default=5, ge=0)
+    tier_watchlist_cap_pro: int = Field(default=15, ge=0)
+
+    # The one path where a PRO user spends the *server's* key: `force_refresh`
+    # runs the pipeline, whose analyst call has no user_id and writes a shared
+    # document. It cannot be moved onto the user's own key without restructuring
+    # the pipeline, so it gets a quota instead of an entitlement.
+    analysis_runs_per_day: int = Field(
+        default=25, ge=1,
+        description="Full-analysis runs per user per day (force_refresh)",
+    )
+
+    # Where a password-reset link points. The API and the web client are on
+    # different hosts, so the server cannot derive this from the request — a
+    # Host header is attacker-controlled, and building a reset link out of one
+    # is how a reset email ends up pointing at somebody else's site.
+    public_base_url: str = Field(
+        default="https://sta.samsbpm.com",
+        description="Public origin of the web client; used to build reset links",
+    )
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)

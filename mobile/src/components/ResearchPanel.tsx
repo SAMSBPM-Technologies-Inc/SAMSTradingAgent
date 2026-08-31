@@ -3,6 +3,8 @@ import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native'
 import { AlertCircle, ExternalLink, RefreshCw, ShieldAlert } from 'lucide-react-native'
 
 import { researchApi } from '../lib/api'
+import { useAuth } from '../lib/auth-context'
+import { entitlementsOf } from '../lib/entitlements'
 import { usePalette, type Palette } from '../lib/palette'
 import type {
   DimensionScore,
@@ -27,6 +29,10 @@ import type {
  */
 export default function ResearchPanel({ ticker }: { ticker: string }) {
   const C = usePalette()
+  const { user } = useAuth()
+  // Reading a stored dossier is free and stays available to everybody;
+  // building one is five to eleven model calls.
+  const mayResearch = entitlementsOf(user).may_spend_tokens
   const [dossier, setDossier] = useState<ResearchDossier | null>(null)
   const [loading, setLoading] = useState(true)
   const [building, setBuilding] = useState(false)
@@ -75,26 +81,35 @@ export default function ResearchPanel({ ticker }: { ticker: string }) {
           : <Text style={{ fontSize: 13, color: C.fgMuted }}>No dossier yet for {ticker}.</Text>}
       </View>
 
-      <Pressable
-        onPress={build}
-        disabled={building}
-        accessibilityRole="button"
-        accessibilityLabel={dossier ? 'Re-run deep research' : 'Run deep research'}
-        style={({ pressed }) => ({
-          flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-          borderWidth: 1, borderColor: C.border, borderRadius: 8,
-          paddingVertical: 10, paddingHorizontal: 14,
-          backgroundColor: pressed ? C.hover : 'transparent',
-          opacity: building ? 0.6 : 1,
-        })}
-      >
-        {building
-          ? <ActivityIndicator size="small" color={C.fgMuted} />
-          : <RefreshCw size={14} color={C.fg} />}
-        <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg }}>
-          {building ? 'Researching…' : dossier ? 'Re-run research' : 'Run deep research'}
+      {mayResearch ? (
+        <Pressable
+          onPress={build}
+          disabled={building}
+          accessibilityRole="button"
+          accessibilityLabel={dossier ? 'Re-run deep research' : 'Run deep research'}
+          style={({ pressed }) => ({
+            flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+            borderWidth: 1, borderColor: C.border, borderRadius: 8,
+            paddingVertical: 10, paddingHorizontal: 14,
+            backgroundColor: pressed ? C.hover : 'transparent',
+            opacity: building ? 0.6 : 1,
+          })}
+        >
+          {building
+            ? <ActivityIndicator size="small" color={C.fgMuted} />
+            : <RefreshCw size={14} color={C.fg} />}
+          <Text style={{ fontSize: 13, fontWeight: '500', color: C.fg }}>
+            {building ? 'Researching…' : dossier ? 'Re-run research' : 'Run deep research'}
+          </Text>
+        </Pressable>
+      ) : (
+        /* A sentence, not a hidden button — the dossier below is still fully
+           readable, and a control that vanished beside it would read as a bug. */
+        <Text style={{ fontSize: 12, color: C.fgMuted, lineHeight: 17 }}>
+          Running research is part of the Pro plan. Anything already built for
+          this name is shown below in full.
         </Text>
-      </Pressable>
+      )}
 
       {building && (
         <Text style={{ fontSize: 12, color: C.fgMuted, lineHeight: 17 }}>

@@ -31,6 +31,7 @@ async def connect_db() -> None:
     # degrade the service, not delete it.
     await _ensure_indexes_safely()
     await _migrate_trading_mode_safely()
+    await _migrate_access_tier_safely()
 
 
 async def _ensure_indexes_safely() -> None:
@@ -81,6 +82,29 @@ async def _migrate_trading_mode_safely() -> None:
         )
 
 
+async def _migrate_access_tier_safely() -> None:
+    """
+    Run the tier migration, but never let it take the API down.
+
+    Same reasoning as the two wrappers above, and the impact is worth stating
+    precisely: `entitlements_for` reads a missing `access_tier` as BASIC, so if
+    this never runs, every existing account loads without trading, without its
+    own provider keys, and with a five-ticker cap. That is loud, visible and
+    reversible by restarting — unlike the alternative reading, where a failed
+    migration would hand full access to accounts nobody has classified.
+    """
+    try:
+        await _migrate_access_tier()
+    except Exception as exc:
+        logger.error(
+            "access_tier_migration_failed_continuing",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            impact="accounts without an explicit access_tier load as BASIC — "
+                   "no trading, no provider keys, and a watchlist cap",
+        )
+
+
 async def _migrate_trading_mode() -> None:
     """
     Preserve existing autonomy when `mode` was introduced.
@@ -109,6 +133,38 @@ async def _migrate_trading_mode() -> None:
             accounts=result.modified_count,
             mode="AUTO",
             reason="preserved pre-existing unattended trading",
+        )
+
+
+async def _migrate_access_tier() -> None:
+    """
+    Preserve existing access when `access_tier` was introduced.
+
+    Every account that exists at this point was provisioned by hand by the
+    operator and had every feature — there was no tier system to put them in.
+    Letting them load as BASIC would strip a live trader's broker access and
+    cap their watchlist without anyone asking for it, which is the same failure
+    `_migrate_trading_mode` exists to prevent: the worst way for a running
+    system to change is silently.
+
+    So existing documents are written TRADER *explicitly*, and everything
+    created from here on carries a tier chosen at creation — `create_user.py`
+    and `POST /admin/users` both default to BASIC.
+
+    Idempotent: the filter only matches documents that have no `access_tier`
+    yet, so a restart is a no-op and a hand-set tier is never overwritten.
+    """
+    db = await get_db()
+    result = await db[COLL_USERS].update_many(
+        {"access_tier": {"$exists": False}},
+        {"$set": {"access_tier": "TRADER"}},
+    )
+    if result.modified_count:
+        logger.info(
+            "access_tier_migrated",
+            accounts=result.modified_count,
+            tier="TRADER",
+            reason="preserved pre-existing full access",
         )
 
 
@@ -145,6 +201,31 @@ async def _ensure_indexes() -> None:
         [("user_id", 1), ("ticker", 1)], unique=True, background=True
     )
     await db[COLL_USERS].create_index("email", unique=True, background=True)
+    # access_requests: the contact-form queue. Newest-first listing, plus a TTL
+    # so the collection is bounded in *time* as well as in rate. The form is
+    # the only unauthenticated insert on this API; the per-address limit bounds
+    # how fast it can grow, and this bounds how large it can ever get.
+    await db[COLL_ACCESS_REQUESTS].create_index([("created_at", -1)], background=True)
+    await db[COLL_ACCESS_REQUESTS].create_index(
+        "created_at", expireAfterSeconds=180 * 24 * 3600, background=True,
+        name="created_at_ttl",
+    )
+    # password_resets: looked up by token hash on every redemption, so that
+    # index is load-bearing rather than an optimisation. Unique because two
+    # documents sharing a hash would mean two live links for one token.
+    #
+    # The TTL is set on `expires_at` with expireAfterSeconds=0, so Mongo deletes
+    # each document at its own deadline rather than at a fixed age. It is a
+    # sweeper, not the enforcement: `redeem` puts the expiry in its filter, so a
+    # token is dead the second it lapses whether or not the collection has been
+    # swept yet.
+    await db[COLL_PASSWORD_RESETS].create_index(
+        "token_hash", unique=True, background=True,
+    )
+    await db[COLL_PASSWORD_RESETS].create_index("user_id", background=True)
+    await db[COLL_PASSWORD_RESETS].create_index(
+        "expires_at", expireAfterSeconds=0, background=True, name="expires_at_ttl",
+    )
     # trades: index by user + ticker for fast position lookups
     await db[COLL_TRADES].create_index([("user_id", 1), ("ticker", 1)], background=True)
     await db[COLL_TRADES].create_index("opened_at", background=True)
@@ -226,6 +307,14 @@ COLL_FUNDAMENTALS_CACHE = "stocks_fundamentals"  # per-ticker provider snapshot
 COLL_STATEMENTS     = "financial_statements"     # accumulated statement history
 COLL_EARNINGS       = "earnings_history"         # estimate vs actual, per ticker
 COLL_DOSSIERS       = "research_dossiers"        # deep-research output per ticker
+#: Contact-form submissions, retained so provisioning is a queue rather than an
+#: inbox search. Bounded by a TTL index as well as by the per-address rate
+#: limit — the form is unauthenticated, so time is the second bound.
+COLL_ACCESS_REQUESTS = "access_requests"         # who asked for an account
+#: Outstanding password-reset links, stored as a hash of the token and never
+#: the token itself. Single-use and short-lived; the TTL index is a backstop
+#: for the ones nobody ever clicks.
+COLL_PASSWORD_RESETS = "password_resets"         # one-time reset links
 #: One document per data source plus one per subsystem — never per ticker, so it
 #: is bounded at a handful of rows forever and does not grow with the watchlist,
 #: the user count or time. Current state only; this is deliberately not a time

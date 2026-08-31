@@ -36,6 +36,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   extra: {
     // Set EXPO_PUBLIC_API_BASE_URL in your .env file
     apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8000',
+    // The web client's origin, which is where password recovery lives. The
+    // reset link in the email points at the web app, so sending someone there
+    // to start the flow keeps one implementation rather than two — and the one
+    // that exists is the one the email will land on.
+    webBaseUrl: process.env.EXPO_PUBLIC_WEB_BASE_URL ?? 'https://sta.samsbpm.com',
     eas: { projectId: '' },
   },
 })

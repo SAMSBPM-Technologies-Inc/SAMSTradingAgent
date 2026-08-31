@@ -771,7 +771,8 @@ async def send_test_email(to: str) -> str | None:
 
 # ── Contact form ──────────────────────────────────────────────────────────────
 
-async def send_contact_message(name: str, email: str, message: str) -> str | None:
+async def send_contact_message(name: str, email: str, message: str,
+                               interest: str | None = None) -> str | None:
     """
     Deliver a landing-page contact submission to `CONTACT_EMAIL`.
 
@@ -792,18 +793,62 @@ async def send_contact_message(name: str, email: str, message: str) -> str | Non
     # Subject lines are headers; a newline in one splits the message.
     safe_name = name.replace("\r", " ").replace("\n", " ").strip()
 
+    # Validated against a fixed set at the schema, so this cannot carry
+    # arbitrary text into a header — but it is still escaped for the HTML part
+    # like everything else here.
+    safe_interest = (interest or "").replace("\r", " ").replace("\n", " ").strip()
+
     subject = f"[STA] Contact from {safe_name}"
     text = (
         f"Name:    {safe_name}\n"
         f"Email:   {email}\n"
-        f"\n"
+        + (f"Wants:   {safe_interest}\n" if safe_interest else "")
+        + f"\n"
         f"{message}\n"
     )
     body_html = html_mod.escape(message).replace("\n", "<br>")
+    interest_html = (
+        f"<br><strong>Wants:</strong> {html_mod.escape(safe_interest)}"
+        if safe_interest else ""
+    )
     html_body = (
         f"<p><strong>Name:</strong> {html_mod.escape(safe_name)}<br>"
-        f"<strong>Email:</strong> {html_mod.escape(email)}</p>"
+        f"<strong>Email:</strong> {html_mod.escape(email)}{interest_html}</p>"
         f"<hr><p>{body_html}</p>"
     )
 
     return await _send_email(to, subject, text, html_body, reply_to=email)
+
+
+# ── Password reset ────────────────────────────────────────────────────────────
+
+async def send_password_reset(email: str, link: str, ttl_minutes: int) -> str | None:
+    """
+    Mail a one-time reset link.
+
+    Returns None on success or a short reason on failure. The route does not
+    surface that reason: telling a stranger the difference between "we sent it"
+    and "there is no such account" is the enumeration this whole flow is shaped
+    to avoid. It is logged instead, which is where somebody debugging a missing
+    email should be looking anyway.
+
+    The mail says what to do if it was not requested, and it does **not** say
+    what the account can do or what plan it is on — a reset email reaches a
+    mailbox that may no longer belong to the account holder.
+    """
+    subject = "Reset your SAMSTradingAgent password"
+    text = (
+        "Someone asked to reset the password for this address.\n\n"
+        f"{link}\n\n"
+        f"The link works once and expires in {ttl_minutes} minutes.\n\n"
+        "If that was not you, nothing has changed and you can ignore this "
+        "message. Your current password still works.\n"
+    )
+    html = (
+        "<p>Someone asked to reset the password for this address.</p>"
+        f'<p><a href="{link}">Set a new password</a></p>'
+        f"<p>The link works once and expires in {ttl_minutes} minutes.</p>"
+        "<p>If that was not you, nothing has changed and you can ignore this "
+        "message. Your current password still works.</p>"
+    )
+    return await _send_email(email, subject, text, html)

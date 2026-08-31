@@ -737,7 +737,8 @@ otherwise forge a token granting every endpoint including order placement.
 
 **9.7 Privileged account management.** [GAP] There are no privileged accounts —
 the tier system and admin portal were removed in `f61066f7` when this became a
-personal tool; every authenticated user gets every feature. Server access is
+personal tool. As of 1.18.0 there are three access tiers — BASIC, PRO and
+TRADER — and only TRADER reaches the broker. Server access is
 SSH with a key held by one person.
 
 **9.8 Credential rotation.** [GAP] No policy and no schedule. Secrets live in

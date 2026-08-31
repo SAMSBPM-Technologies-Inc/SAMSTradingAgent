@@ -589,6 +589,12 @@ function ContactForm() {
   // Honeypot. A real visitor never sees this field, so anything in it came
   // from a bot filling every input on the page.
   const [company, setCompany] = useState('')
+  // What they are after, in a visitor's terms. Deliberately not "Basic / Pro /
+  // Trader": a stranger has no idea what those mean, and naming plans on a page
+  // that quotes no prices invites a question the page cannot answer. A static
+  // list, because this page reads no context and makes no request on load —
+  // that property is what keeps moving it to a public host a one-line change.
+  const [interest, setInterest] = useState<'' | 'read' | 'research' | 'trade'>('')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -598,7 +604,7 @@ function ContactForm() {
     setError(null)
     setSending(true)
     try {
-      await contactApi.send({ name, email, message, company })
+      await contactApi.send({ name, email, message, company, interest })
       setSent(true)
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -651,6 +657,23 @@ function ContactForm() {
           maxLength={254}
           autoComplete="email"
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="contact-interest" className="label-micro">
+          What are you after
+        </label>
+        <select
+          id="contact-interest"
+          className="input"
+          value={interest}
+          onChange={(e) => setInterest(e.target.value as typeof interest)}
+        >
+          <option value="">Not sure yet</option>
+          <option value="read">Just want to see the analysis</option>
+          <option value="research">In-depth research on my own names</option>
+          <option value="trade">Trading through my own IB account</option>
+        </select>
       </div>
 
       <div className="flex flex-col gap-1.5">

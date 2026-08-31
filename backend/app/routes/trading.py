@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 # auto-trade settings endpoint), which shadows the config accessor otherwise.
 from app.config import get_settings as get_env_settings
 from app.db import COLL_SIGNALS, COLL_TRADES, COLL_USERS, get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_trading
 from app.models.trade import (
     AccountSummaryResponse,
     AutoTradeSettings,
@@ -34,7 +34,22 @@ from app.services import gateway_control
 from app.services.trade_manager import BrokerUnavailable, execute_exit, execute_manual_entry
 from app.utils.logger import get_logger
 
-router = APIRouter(prefix="/trading", tags=["trading"])
+# Gated at the router, not per route. Fifteen handlers live in this file —
+# `POST /order`, `POST /close/{ticker}`, and `POST /broker/restart`, which
+# bounces the shared IB Gateway container for the whole deployment — and a
+# per-route list is a list somebody extends without remembering. Behind this
+# prefix is *one* brokerage account belonging to the operator, so a missed
+# route does not leak a feature, it leaks balances and holdings.
+#
+# This does not cover the automated path: `pipeline._execute_trades` calls
+# `execute_entry` for every watcher on the 5-minute cycle and never touches a
+# route. That guard is the first check in `trade_manager._prepare_entry`, and
+# neither of the two is sufficient alone.
+router = APIRouter(
+    prefix="/trading",
+    tags=["trading"],
+    dependencies=[Depends(require_trading)],
+)
 logger = get_logger(__name__)
 
 

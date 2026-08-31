@@ -673,6 +673,13 @@ class WatchlistResponse(BaseModel):
     count: int
     items: list[WatchlistItem]
     setups: WatchlistSetupCounts = WatchlistSetupCounts()
+    #: How many tickers this plan covers. `None` is unlimited — zero would be a
+    #: cap of nothing, and the two must stay distinguishable.
+    #:
+    #: Returned so the client can show "7 / 15" and disable the add box before
+    #: the request rather than after a refusal. That is presentation; the 403
+    #: from `POST /ticker` is the gate.
+    cap: Optional[int] = None
 
 
 class TickerAddRequest(BaseModel):
@@ -717,7 +724,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.17.0"
+    version: str = "1.19.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

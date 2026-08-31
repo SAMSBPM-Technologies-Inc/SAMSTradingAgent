@@ -161,7 +161,8 @@ The application bootstraps via FastAPI's `lifespan` context manager, which:
 | Router Module | Prefix | Key Endpoints |
 |---|---|---|
 | `routes/health.py` | `/health` | `GET /health` — liveness check |
-| `routes/auth.py` | `/auth` | `POST /auth/register`, `POST /auth/login`, `GET /auth/me`, `PUT /auth/me` |
+| `routes/auth.py` | `/auth` | `POST /auth/login`, `GET /auth/me`, `PUT /auth/me`. There is no register endpoint — accounts are provisioned |
+| `routes/admin.py` | `/admin` | `GET/POST /admin/users`, `PATCH /admin/users/{id}`, `GET /admin/access-requests`. Gated on `ADMIN_EMAIL` |
 | `routes/analysis.py` | — | `GET /analyze` — trigger/return signal for a single ticker |
 | `routes/signals.py` | `/signals` | `GET /signals` — fetch current signal documents |
 | `routes/watchlist.py` | `/watchlist` | `GET`, `POST /watchlist/add`, `DELETE /watchlist/remove` |
