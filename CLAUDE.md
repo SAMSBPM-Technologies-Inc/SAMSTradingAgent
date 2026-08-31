@@ -729,6 +729,29 @@ engine), `approved` (agent proposed, human accepted — biased by what the human
 declined, so it measures the pair), and `manual` (human chose it). Never pool
 them.
 
+**`agent_originated` is the one exception, and it is additive.** It is
+`signal_driven + approved` — every trade the *tool* picked, however it reached
+the venue — and it exists because the dashboard's "Agent vs you" panel asks a
+question the three cannot: whose ideas were better. For *that* question who
+pressed the button is not part of it; for "does the engine work" it is
+everything, which is why the original three are untouched and
+`signal_driven` remains the only clean read. Two rules come with it: it is
+named `agent_originated` rather than `agent` so nothing reads it as the
+engine's report card, and **any surface showing it must also show the
+auto/semi split it was built from**, because half of it is filtered by whatever
+the trader declined.
+
+**A dollar total cannot be compared across buckets; a rate can.** Each bucket
+carries `capital_deployed`/`return_on_capital` and their `_net` twins. The
+denominator is **turnover, not account size** — ten sequential $1,000 trades
+deploy $10,000 — and every surface showing the rate must say so, or it gets
+read as a return on the account. A trade whose basis cannot be known leaves
+**both** sides of the ratio rather than just the denominator; keeping its P&L
+in the numerator would inflate the return invisibly, in one direction, every
+time. The basis is blended entry × filled qty, which is what `pnl` is computed
+against, so a scaled-in position is divided by what it actually cost. Empty
+stays `None`, never `0.0` — the `commission_paid` rule.
+
 Key shared infrastructure: `AuthContext` (JWT persistence), `ThemeContext` (light/dark), `ToastContext` (`toast` / `toastWithUndo` — destructive actions defer their request for the length of the undo window), `lib/api.ts` (Axios with bearer token). The mobile app mirrors this structure using Expo Router.
 
 **Mobile is at parity with web.** Order ticket, activity trail with inline

@@ -887,6 +887,35 @@ export interface TradeStats {
   avg_loss: number | null
   best: number | null
   worst: number | null
+  /**
+   * Capital these trades turned over — each round trip's own basis (blended
+   * entry × filled qty, so scale-ins are included), summed.
+   *
+   * It is turnover, NOT account size and NOT capital at risk: ten sequential
+   * $1,000 trades deploy $10,000. Right base for "did these trades earn their
+   * keep", wrong one for "how is the account doing" — that is net liquidation.
+   */
+  capital_deployed: number | null
+  /** Gross P&L as a fraction of `capital_deployed`, over the same trades. */
+  return_on_capital: number | null
+  /** The same two, narrowed to trades with a complete fee total. */
+  capital_deployed_net: number | null
+  return_on_capital_net: number | null
+
+  // ── Benchmark-relative ──────────────────────────────────────────────────
+  // Served since benchmark measurement shipped; typed here late, so treat
+  // every one as possibly absent from an older response.
+  benchmark_ticker?: string | null
+  /** Closed trades carrying an alpha — alpha's own denominator, never `closed`. */
+  alpha_measured?: number
+  /** Priced, but closed before alpha existed or with an unreadable benchmark. */
+  alpha_unknown?: number
+  avg_alpha?: number | null
+  alpha_win_rate?: number | null
+  /** What holding the index over the same windows returned — the bar to clear. */
+  avg_benchmark_return?: number | null
+  /** Made money and still lost to the index. */
+  wins_lost_to_benchmark?: number
 }
 
 export interface ClosedTrade {
@@ -924,6 +953,17 @@ export interface TradePerformanceResponse {
   approved: TradeStats
   /** A human chose it. Says nothing about the engine. */
   manual: TradeStats
+  /**
+   * `signal_driven` + `approved`: every trade the *tool* picked, however it
+   * reached the venue. The one legitimate pooling, because it answers a
+   * question the three separate buckets cannot — whose ideas were better,
+   * the tool's or yours — and who pressed the button is irrelevant to it.
+   *
+   * Not a clean read of the engine and must never be labelled as one: half of
+   * it passed a human filter. Anything showing this must also show the
+   * auto/semi split it was built from.
+   */
+  agent_originated: TradeStats
   all: TradeStats
   recent_closed: ClosedTrade[]
 }
