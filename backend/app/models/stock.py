@@ -140,16 +140,52 @@ class ScoreBreakdown(BaseModel):
     composite: float
 
 
+class AnalystGate(BaseModel):
+    """
+    What the AI analyst asked for, and what the gate made of it.
+
+    `None` on the parent means the analyst did not produce this verdict at all.
+    `checked: False` means it did, but before the gate existed — the honest
+    reading of a signal document written prior to 1.22.0, which is not the same
+    fact as "the gate ran and agreed".
+    """
+    checked: bool
+    wanted: Optional[str] = None
+    #: "buy_refused" | "sell_restored" — a token, not prose to be parsed.
+    override: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SignalGate(BaseModel):
     """
     The thresholds behind the verdict, so the UI can explain a signal instead of
     restating the rule in its own hardcoded copy.
+
+    It used to report only the raw rule — `score > 0.70` — regardless of what
+    actually produced the verdict, so it printed a failing BUY gate beside a
+    published BUY and read as the engine ignoring itself. Two things were
+    missing and both are here now: the hysteresis band, which makes a standing
+    verdict sticky, and who decided.
     """
     buy_threshold: float
     sell_threshold: float
     risk_max_for_buy: float
     score_passes_buy: bool
     risk_passes_buy: bool
+
+    #: Width of the one-sided band that holds an established verdict in place.
+    hysteresis: float
+    #: What this score must clear *right now*, given the verdict already
+    #: standing. Equal to `buy_threshold` unless a BUY is in force, in which
+    #: case it is the lower level at which that BUY would be given up.
+    #: `score_passes_buy` is measured against this, not against the raw rule.
+    effective_buy_threshold: float
+
+    #: Which component produced the published verdict: "rule" or "analyst". An
+    #: analyst verdict the gate overrode counts as "rule" — the rule's answer
+    #: is the one that was published.
+    decided_by: str
+    analyst: Optional[AnalystGate] = None
 
 
 # ── Signal ────────────────────────────────────────────────────────────────────
@@ -731,7 +767,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.22.0"
+    version: str = "1.23.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

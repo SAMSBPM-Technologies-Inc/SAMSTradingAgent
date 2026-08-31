@@ -242,6 +242,65 @@ function GateRow({ label, passed, detail }: {
   )
 }
 
+/**
+ * Who decided this verdict, and what the analyst wanted instead. Mirrors the
+ * web `AnalystVerdict` in `RiskPanel.tsx`.
+ *
+ * The gate rows above describe a rule. Until 1.22.0 the AI analyst published
+ * verdicts that rule never saw, so a BUY at 62 rendered "✗ Score above
+ * threshold" beside a BUY badge with nothing to say the two described
+ * different decisions. Renders nothing in the ordinary case.
+ */
+function AnalystVerdict({ gate }: { gate: SignalGate }) {
+  const C = usePalette()
+  const analyst = gate.analyst
+  if (!analyst) return null
+
+  if (!analyst.checked) {
+    return (
+      <View style={{
+        flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+        backgroundColor: C.hover, borderRadius: 8, padding: 10, marginTop: 2,
+      }}>
+        <Info size={14} color={C.fgMuted} style={{ marginTop: 1 }} />
+        <Text style={{ flex: 1, fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+          The AI analyst decided this one, and it was recorded before the gate above
+          was applied to that path. The thresholds shown describe the rule, not
+          necessarily this verdict.
+        </Text>
+      </View>
+    )
+  }
+
+  if (analyst.override) {
+    const restored = analyst.override === 'sell_restored'
+    return (
+      <View style={{
+        flexDirection: 'row', gap: 8, alignItems: 'flex-start',
+        backgroundColor: `${C.amber}1a`, borderRadius: 8, padding: 10, marginTop: 2,
+      }}>
+        <ShieldAlert size={14} color={C.amber} style={{ marginTop: 1 }} />
+        <Text style={{ flex: 1, fontSize: 11, color: C.amber, lineHeight: 16 }}>
+          <Text style={{ fontWeight: '600' }}>
+            The AI analyst read this as {analyst.wanted}; the gate
+            {restored ? ' overruled it' : ' refused'}.
+          </Text>{' '}
+          {analyst.reason}{' '}
+          {restored
+            ? 'An exit is never held back — not by the risk gate, not by research, and not by the analyst.'
+            : 'The analyst may talk the engine out of buying. It cannot talk it into it.'}
+        </Text>
+      </View>
+    )
+  }
+
+  return (
+    <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 15 }}>
+      The AI analyst produced this verdict and the gate above agreed with it.
+    </Text>
+  )
+}
+
 export function RiskPanel({ risk, gate, signal, score }: {
   risk: RiskAssessment
   gate?: SignalGate | null
@@ -305,8 +364,20 @@ export function RiskPanel({ risk, gate, signal, score }: {
           <GateRow
             label="Score above threshold"
             passed={gate.score_passes_buy}
-            detail={`${score.toFixed(2)} vs ${gate.buy_threshold.toFixed(2)}`}
+            detail={`${score.toFixed(2)} vs ${gate.effective_buy_threshold.toFixed(2)}`}
           />
+          {/* The band, stated only when it is doing something. A standing BUY
+              holds to a lower level than it took to open, and testing against
+              the entry threshold printed ✗ underneath a correct BUY. */}
+          {gate.effective_buy_threshold < gate.buy_threshold && (
+            <Text style={{
+              fontSize: 10, color: C.fgMuted, lineHeight: 15, marginTop: -4, marginLeft: 22,
+            }}>
+              A BUY already in force holds to {gate.effective_buy_threshold.toFixed(2)};
+              opening one needs the full {gate.buy_threshold.toFixed(2)}. The band is
+              one-sided, so it can never make a BUY easier to acquire.
+            </Text>
+          )}
           <GateRow
             label="Risk below veto"
             passed={gate.risk_passes_buy}
@@ -326,6 +397,8 @@ export function RiskPanel({ risk, gate, signal, score }: {
               </Text>
             </View>
           )}
+
+          <AnalystVerdict gate={gate} />
 
           <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 15 }}>
             Only BUY is risk-gated. Refusing to exit a position because conditions look

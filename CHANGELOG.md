@@ -14,6 +14,67 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.23.0] — 2026-08-31
+
+**1.22.0 shut the gate and left the screen still describing the old one.** The
+BUY-gate panel computed `score > 0.70` from the rule constants regardless of
+what had produced the verdict, so it printed "✗ Score above threshold" beneath a
+published BUY — for two different reasons, both of them legitimate. That
+contradiction is what an external review hit four separate times before
+concluding the engine ignored its own rules. The same release also left the
+mirror-image hole open: the analyst could still hold an exit shut.
+
+- **The panel reports the threshold this verdict is actually held to.** A
+  standing BUY is kept by the hysteresis band down to 0.67; opening one still
+  needs the full 0.70. The gate now carries both numbers and tests against the
+  right one, and says so in a line underneath — but only while the band is doing
+  something, since a note that is always present stops being read.
+- **It says who decided.** `decided_by` distinguishes the rule from the AI
+  analyst, and an `analyst` block carries what the model wanted, whether the
+  gate refused it, and why. An **overridden** analyst read reports the *rule* as
+  the decider, because the rule's answer is the one that got published.
+- **A document written before the gate existed says so** rather than passing for
+  one the gate approved. Those age out within the analyst cache window, but for
+  as long as they exist the panel refuses to imply a check that never ran.
+- **The "Why" band leads with the refusal.** On an overridden BUY the analyst's
+  `thesis` argues for a verdict that was never published — a bullish case
+  printed unlabelled under a HOLD is the same contradiction as the ✗, moved one
+  band up the page. The refusal comes first now, and the model's case follows it,
+  attributed.
+- **A personalized score gets no analyst attribution.** With your own weights
+  the verdict is recomputed through `classify_signal`, so it is rule-derived by
+  construction; the stored gate record describes a different number and pinning
+  it to this one would be the same category error.
+
+**The analyst can no longer suppress an exit.** A model HOLD — or a model BUY —
+over a rule SELL is overruled back to SELL. SELL already skips the risk gate,
+skips confirmation and dwell, and cannot be reached by the research veto;
+leaving this open would have made the analyst the one component in the system
+able to brake an exit, through the one path that also places orders. The exit
+clause is tested first and outranks the refused-BUY clause, so the worst case —
+the rule wants out, the model wants in — closes rather than holds. Recorded as
+`sell_restored`, kept apart from `buy_refused`, because they are different bets
+and pooling them in calibration would measure neither.
+
+Also: the analyst's SELL advice now prints an exit line instead of nothing.
+1.22.0 removed the "Short near $X" text from the entry field but
+`_exit_suggestion` had never handled SELL at all, so a sell verdict briefly
+carried no guidance whatsoever.
+
+**Known gaps.** `/performance/research-calibration` still cannot answer whether
+these overrides were worth having — `analyst_gate` is recorded on every signal
+and nothing aggregates it, so "would the gate have saved anything" remains the
+question that should decide how strict this stays, with no number behind it.
+**The four positions opened under the old behaviour are untouched**, and at
+least one of them would be refused today. The panel copy is verified by
+typecheck, lint and unit tests over `_build_gate`, **not by a screenshot of the
+rendered page** — and the analyst-override states in particular have never been
+seen rendered, because producing one requires a live cycle where the model and
+the rule disagree. Mobile carries the same panel and the same gaps; it has three
+pre-existing `tsc` errors in unrelated screens, unchanged here.
+
+---
+
 ## [1.22.0] — 2026-08-31
 
 **The analyst could buy things the engine had refused.** `analyst.py` wrote the
