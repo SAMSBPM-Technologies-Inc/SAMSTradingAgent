@@ -37,19 +37,41 @@ const ANALYSIS_TTL_MS = 30 * 60 * 1000
  * Prefers the model's own words. Where there are none it derives a sentence
  * from the gate the engine actually applied — never invents a rationale, which
  * on a screen that routes orders would be the worst possible place to do it.
+ *
+ * One case comes before the model's words rather than after: when the gate
+ * overrode the analyst, `thesis` argues for a verdict that was *not published*.
+ * Printing a bullish case unlabelled beneath a HOLD is the same contradiction
+ * the gate rows used to carry, moved one band up the page. The refusal leads,
+ * and the model's case follows it, attributed.
  */
 function whyText(data: AnalyzeResponse): string {
   const own = data.thesis?.trim() || data.explanation?.trim()
+  const score = Math.round(data.score * 100)
+  const override = data.gate?.analyst?.override
+
+  if (data.gate && override) {
+    const sell = Math.round(data.gate.sell_threshold * 100)
+    const lead = override === 'buy_refused'
+      ? `Scored ${score}/100. The AI analyst read this as a buy; the gate refused it, so the verdict is HOLD.`
+      : `Scored ${score}/100, below the ${sell} that triggers a sell. The AI analyst wanted to hold on, and an exit is never held back.`
+    return own ? `${lead} The analyst's case, for what it is worth: ${own}` : lead
+  }
+
   if (own) return own
 
-  const score = Math.round(data.score * 100)
   if (!data.gate) return `${data.signal} at ${score}/100. No further rationale was recorded.`
 
   const buy = Math.round(data.gate.buy_threshold * 100)
   const sell = Math.round(data.gate.sell_threshold * 100)
+  const held = Math.round(data.gate.effective_buy_threshold * 100)
 
   if (data.signal === 'BUY') {
-    return `Scored ${score}/100, clearing the ${buy} needed to buy, and risk stayed under the veto.`
+    // A BUY under the entry threshold is one the hysteresis band is holding
+    // open, not one that cleared the bar. Saying it "cleared the 70" would be
+    // false on exactly the readings a sceptical reader checks.
+    return held < buy && score < buy
+      ? `Scored ${score}/100. That is under the ${buy} needed to open a buy, but an established one holds until ${held}, and risk stayed under the veto.`
+      : `Scored ${score}/100, clearing the ${buy} needed to buy, and risk stayed under the veto.`
   }
   if (data.signal === 'SELL') {
     return `Scored ${score}/100, below the ${sell} that triggers a sell. Exits are not risk-gated.`

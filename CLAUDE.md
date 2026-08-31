@@ -116,14 +116,22 @@ npm run web
 
 4. **AI Analyst** (`analyst.py`): Claude API generates structured JSON bull/bear report, cached per ticker with invalidation triggers (price change ≥3%, score change ≥0.12, VIX spike ≥30). The model is `ANALYST_MODEL` in `.env` (default `claude-sonnet-5` — see `config.py`); do not restate it in docs or UI, both read it from config via `AnalyzeResponse.analyst_model`.
 
-   **The analyst may veto a BUY. It may never create one.** Same rule as deep
-   research, on the path that actually places orders.
-   `_gate_analyst_signal` reconciles the model's verdict against
+   **The analyst may veto a BUY. It may never create one, and it may not hold
+   an exit shut.** Same rule as deep research, on the path that actually places
+   orders. `_gate_analyst_signal` reconciles the model's verdict against
    `classify_signal` before anything is published: a model BUY the rule refuses
-   is published as HOLD, a model HOLD over a rule BUY passes through, and a
-   SELL is never gated at any score — refusing to buy costs an opportunity,
-   refusing to sell costs money. `previous_signal` reaches it from the
-   pipeline, so both paths share one hysteresis band.
+   is published as HOLD (`override: "buy_refused"`), a model HOLD over a rule
+   BUY passes through, and a model HOLD or BUY over a **rule SELL is overruled
+   back to SELL** (`override: "sell_restored"`). `previous_signal` reaches it
+   from the pipeline, so both paths share one hysteresis band.
+
+   The exit clause is tested **first** and outranks the BUY clause — when the
+   rule wants out and the model wants in, the exit wins. SELL already skips the
+   risk gate in `classify_signal`, skips confirmations and dwell in
+   `signal_stability`, and is unreachable by the research veto; letting the
+   analyst alone suppress one would have made it the single component that can
+   brake an exit, through the one path that also places orders. So the model
+   can talk the engine out of buying and cannot talk it out of selling.
 
    This was missing until 1.22.0, and it was not theoretical.
    `analyst_gate_margin` is 0.08, so the analyst is called on exactly the band
@@ -671,6 +679,24 @@ engine — `scoring.explain_score` and `signal_generator`'s constants — never 
 constants restated in the UI. `explain_score` sets `attributable: false` on the
 XGBoost path, where the weights did not produce the score and a decomposition
 would be a fabrication.
+
+**A gate panel that can contradict the badge beside it is worse than none.**
+`_build_gate` reported `score > 0.70` and nothing else, whatever had actually
+decided the verdict, so both the hysteresis band and an analyst verdict rendered
+"✗ Score above threshold" underneath a published BUY. It now carries
+`effective_buy_threshold` (the level *this* verdict is held to — lower than
+`buy_threshold` only while a BUY is standing, since the band is one-sided) and
+`decided_by` plus an `analyst` block saying what the model wanted and whether
+the gate refused it. `score_passes_buy` is measured against the effective
+threshold. Two rules: an **overridden** analyst verdict reports
+`decided_by: "rule"`, because the rule's answer is the one that was published;
+and `analyst.checked: false` marks a document written before the gate existed,
+which is not the same fact as the gate having agreed. A **personalized** score
+is rule-derived by construction (`compute_personalized_score` calls
+`classify_signal`), so no analyst attribution is offered against it — the stored
+gate describes a different number. `whyText` leads with the refusal rather than
+the model's `thesis`, which on an overridden BUY argues for a verdict that was
+never published. Mirrored in mobile's `ScorePanels.RiskPanel`.
 
 **Every realised return is measured against a benchmark.**
 `services/benchmark.py` (`BENCHMARK_TICKER`, default SPY) is the only source;

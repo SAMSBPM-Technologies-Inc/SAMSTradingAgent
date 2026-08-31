@@ -77,8 +77,16 @@ export function buildExportText(data: AnalyzeResponse): string {
       `  BUY needs score > ${pct(g.buy_threshold)} and risk < ${g.risk_max_for_buy}`,
       `  SELL below score ${pct(g.sell_threshold)}`,
       `  Score test: ${g.score_passes_buy ? 'PASS' : 'FAIL'}   Risk test: ${g.risk_passes_buy ? 'PASS' : 'FAIL'}`,
-      '',
     )
+    if (g.effective_buy_threshold < g.buy_threshold) {
+      lines.push(`  Standing BUY holds to ${pct(g.effective_buy_threshold)} (hysteresis band)`)
+    }
+    lines.push(`  Decided by: ${g.decided_by === 'analyst' ? 'AI analyst' : 'rule'}`)
+    if (g.analyst?.override) {
+      lines.push(`  Analyst wanted ${g.analyst.wanted}; gate ${
+        g.analyst.override === 'sell_restored' ? 'overruled it' : 'refused'}`)
+    }
+    lines.push('')
   }
 
   // ── Score breakdown ────────────────────────────────────────────────────────
@@ -316,7 +324,15 @@ export async function downloadPdf(data: AnalyzeResponse) {
     body(`BUY needs score above ${pct(g.buy_threshold)} and risk below ${g.risk_max_for_buy}. `
        + `SELL below score ${pct(g.sell_threshold)}. `
        + `Score test: ${g.score_passes_buy ? 'PASS' : 'FAIL'}. `
-       + `Risk test: ${g.risk_passes_buy ? 'PASS' : 'FAIL'}.`)
+       + `Risk test: ${g.risk_passes_buy ? 'PASS' : 'FAIL'}.`
+       + (g.effective_buy_threshold < g.buy_threshold
+           ? ` A BUY already in force holds to ${pct(g.effective_buy_threshold)}.`
+           : '')
+       + ` Decided by the ${g.decided_by === 'analyst' ? 'AI analyst' : 'rule'}.`
+       + (g.analyst?.override
+           ? ` The analyst read this as ${g.analyst.wanted} and the gate ${
+               g.analyst.override === 'sell_restored' ? 'overruled it' : 'refused'}.`
+           : ''))
     gap(10)
   }
 

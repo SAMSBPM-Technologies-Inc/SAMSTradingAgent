@@ -35,6 +35,7 @@ from app.services.research.agents.base import AgentSpec, run_agent
 from app.services.risk_engine import RISK_MAX_FOR_BUY, assess_risk
 from app.services.signal_generator import (
     BUY_THRESHOLD,
+    SELL_THRESHOLD,
     boundary_confidence,
     classify_signal,
 )
@@ -150,9 +151,20 @@ def _gate_analyst_signal(
     paper record sits: AMZN at 0.62, AVGO 0.63, NVDA 0.64, CBRS 0.66 on a risk
     score of 6.3, past a veto that is supposed to be unconditional.
 
-    A model HOLD over a rule BUY is left alone, and so is a SELL at any score:
-    the asymmetry that governs everything else here governs this too — refusing
-    to buy costs an opportunity, refusing to sell costs money.
+    A model HOLD over a rule BUY is left alone — refusing an entry is exactly
+    what a second opinion is for. **The exit is not symmetrical.** A model SELL
+    publishes at any score, and a model HOLD or BUY over a *rule* SELL does
+    not: the rule's SELL is restored. Suppressing an exit is a brake on the
+    exit path, and this system has never allowed one — SELL skips the risk
+    gate in `classify_signal`, skips confirmations and dwell in
+    `signal_stability`, and is unreachable by the research veto. Letting the
+    analyst alone hold a position open below the sell threshold would have made
+    it the only component that can, through the one path that also places
+    orders.
+
+    So the model can talk the engine out of buying, and cannot talk it out of
+    selling. Refusing to buy costs an opportunity; refusing to sell costs
+    money.
 
     `previous_signal` engages the same hysteresis band the rule uses, so an
     established BUY the analyst still likes is not torn down the moment the
@@ -168,8 +180,23 @@ def _gate_analyst_signal(
 
     published = model_signal
     reason: str | None = None
-    if model_signal == "BUY" and rule_signal != "BUY":
+    kind: str | None = None
+
+    if rule_signal == "SELL" and model_signal != "SELL":
+        # Tested first, and it outranks the BUY clause: when the rule wants out
+        # and the model wants in, the exit wins. A model BUY on a name scoring
+        # under the sell threshold is the single worst case this function has
+        # to handle, and "publish HOLD" would be the wrong answer to it.
+        published = "SELL"
+        kind = "sell_restored"
+        reason = (
+            f"The analyst read this as {model_signal}; the score of {score:.2f} is "
+            f"under the {SELL_THRESHOLD:.2f} that triggers a sell, and an exit is "
+            f"never held back. Published as SELL."
+        )
+    elif model_signal == "BUY" and rule_signal != "BUY":
         published = "HOLD"
+        kind = "buy_refused"
         if risk_score >= RISK_MAX_FOR_BUY:
             # Named first because it is the unconditional one: no score
             # rescues a BUY above the risk veto, so reporting the score here
@@ -190,6 +217,11 @@ def _gate_analyst_signal(
         "rule_signal": rule_signal,
         "published_signal": published,
         "overridden": published != model_signal,
+        # Which of the two overrides fired, as a token rather than as prose to
+        # be parsed. `/performance/calibration` has to be able to bucket these
+        # separately: a refused BUY and a restored SELL are different bets and
+        # pooling them would measure neither.
+        "override": kind,
         "reason": reason,
         "score": round(score, 4),
         "risk_score": round(risk_score, 2),
@@ -588,16 +620,12 @@ def _entry_suggestion(output: dict, price: float) -> Optional[str]:
         if pt:
             parts.append(f"target ${pt:.2f}")
         return " | ".join(parts)
-    if signal == "SELL":
-        # SELL means "exit the position", never "open a short" — the same
-        # correction `signal_generator._price_suggestions` already carries.
-        # Shorting is not permitted in a TFSA and `trade_manager` has no path
-        # that opens one, so "Short near $X | cover target $Y" described a trade
-        # this system cannot place. The analyst path kept printing it.
-        return (
-            f"Exit at ${price:.2f} (current). "
-            f"No position — no action; this is not a short signal."
-        )
+    # No entry line on a SELL. There is nothing to enter: SELL means "exit the
+    # position", never "open a short" — shorting is not permitted in a TFSA and
+    # `trade_manager` has no path that opens one. This used to read
+    # "Short near $X | cover target $Y", describing a trade this system cannot
+    # place; `signal_generator._price_suggestions` had that corrected long ago
+    # and returns None here for the same reason.
     return None
 
 
@@ -617,6 +645,15 @@ def _exit_suggestion(output: dict, price: float) -> Optional[str]:
         return " | ".join(parts) if parts else None
     if signal == "HOLD":
         return f"Monitor over {horizon}" if horizon else f"Monitor; re-evaluate on ±5% move from ${price:.2f}"
+    if signal == "SELL" and price > 0:
+        # The exit line the SELL path never had: `_exit_suggestion` returned
+        # None for it, so the only text a SELL produced was the short
+        # suggestion above, on the *entry* field. Mirrors the wording
+        # `signal_generator` uses so the two paths read alike.
+        return (
+            f"Exit at ${price:.2f} (current) or limit near ${price * 1.005:.2f}. "
+            f"No position — no action; this is not a short signal."
+        )
     return None
 
 

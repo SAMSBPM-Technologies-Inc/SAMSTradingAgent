@@ -1,4 +1,4 @@
-import { Check, ShieldAlert, X } from 'lucide-react'
+import { Check, Info, ShieldAlert, X } from 'lucide-react'
 import type { RiskAssessment, Signal, SignalGate } from '../types'
 
 /**
@@ -31,6 +31,60 @@ function GateRow({ label, passed, detail }: { label: string; passed: boolean; de
         <span className="text-xs text-[var(--color-fg-muted)] ml-1.5 tabular-nums">{detail}</span>
       </div>
     </div>
+  )
+}
+
+/**
+ * Who decided this verdict, and what the analyst wanted instead.
+ *
+ * The gate rows above describe a rule. Until 1.22.0 the AI analyst published
+ * verdicts that rule never saw — so a BUY at 62 rendered "✗ Score above
+ * threshold" beside a BUY badge, with nothing on the page to say the two were
+ * describing different decisions. That reads as the engine ignoring itself, and
+ * it is exactly what an external review concluded four times over.
+ *
+ * Renders nothing when the rule decided and no analyst was involved — the
+ * ordinary case, and a panel that always speaks stops being read.
+ */
+function AnalystVerdict({ gate }: { gate: SignalGate }) {
+  const analyst = gate.analyst
+  if (!analyst) return null
+
+  if (!analyst.checked) {
+    return (
+      <div className="mt-1 flex items-start gap-2 rounded-lg bg-[var(--color-hover)] px-3 py-2">
+        <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[var(--color-fg-muted)]" />
+        <p className="text-xs leading-relaxed text-[var(--color-fg-muted)]">
+          The AI analyst decided this one, and it was recorded before the gate
+          above was applied to that path. The thresholds shown describe the rule,
+          not necessarily this verdict.
+        </p>
+      </div>
+    )
+  }
+
+  if (analyst.override) {
+    const restored = analyst.override === 'sell_restored'
+    return (
+      <div className="mt-1 flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2
+                      text-amber-700 dark:text-amber-400">
+        <ShieldAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+        <p className="text-xs leading-relaxed">
+          <strong>The AI analyst read this as {analyst.wanted}; the gate
+          {restored ? ' overruled it' : ' refused'}.</strong>{' '}
+          {analyst.reason}{' '}
+          {restored
+            ? 'An exit is never held back — not by the risk gate, not by research, and not by the analyst.'
+            : 'The analyst may talk the engine out of buying. It cannot talk it into it.'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <p className="mt-1 text-[0.65rem] leading-relaxed text-[var(--color-fg-muted)]">
+      The AI analyst produced this verdict and the gate above agreed with it.
+    </p>
   )
 }
 
@@ -97,8 +151,19 @@ export default function RiskPanel({
           <GateRow
             label="Score above threshold"
             passed={gate.score_passes_buy}
-            detail={`${score.toFixed(2)} vs ${gate.buy_threshold.toFixed(2)}`}
+            detail={`${score.toFixed(2)} vs ${gate.effective_buy_threshold.toFixed(2)}`}
           />
+          {/* The band, stated only when it is actually doing something. A
+              standing BUY is held to a lower level than one it took to open,
+              and testing against the entry threshold is what used to print ✗
+              underneath a perfectly correct BUY. */}
+          {gate.effective_buy_threshold < gate.buy_threshold && (
+            <p className="-mt-1 ml-5 text-[0.65rem] leading-relaxed text-[var(--color-fg-muted)]">
+              A BUY already in force holds to {gate.effective_buy_threshold.toFixed(2)};
+              opening one needs the full {gate.buy_threshold.toFixed(2)}. The band is
+              one-sided, so it can never make a BUY easier to acquire.
+            </p>
+          )}
           <GateRow
             label="Risk below veto"
             passed={gate.risk_passes_buy}
@@ -116,6 +181,8 @@ export default function RiskPanel({
               </p>
             </div>
           )}
+
+          <AnalystVerdict gate={gate} />
 
           <p className="text-[0.65rem] text-[var(--color-fg-muted)] leading-relaxed mt-1">
             Only BUY is risk-gated. Refusing to exit a position because conditions

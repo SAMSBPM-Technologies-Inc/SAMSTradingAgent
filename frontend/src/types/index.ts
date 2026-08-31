@@ -128,13 +128,34 @@ export interface ScoreBreakdown {
   composite: number
 }
 
-/** The thresholds behind the verdict, read from the engine rather than restated. */
+/** What the AI analyst asked for, and what the gate made of it. */
+export interface AnalystGate {
+  /** False on a signal stored before the gate existed — not the same as "it agreed". */
+  checked: boolean
+  wanted?: Signal | null
+  override?: 'buy_refused' | 'sell_restored' | null
+  reason?: string | null
+}
+
+/**
+ * The thresholds behind the verdict, read from the engine rather than restated.
+ *
+ * `score_passes_buy` is measured against `effective_buy_threshold`, not the raw
+ * `buy_threshold`: a standing BUY is held by the hysteresis band down to the
+ * lower level, and testing it against the entry threshold is what printed a
+ * failing gate underneath a published BUY.
+ */
 export interface SignalGate {
   buy_threshold: number
   sell_threshold: number
   risk_max_for_buy: number
   score_passes_buy: boolean
   risk_passes_buy: boolean
+  hysteresis: number
+  effective_buy_threshold: number
+  /** Which component produced the verdict. An overridden analyst read is `rule`. */
+  decided_by: 'rule' | 'analyst'
+  analyst?: AnalystGate | null
 }
 
 /** One factor's share of measured input. */

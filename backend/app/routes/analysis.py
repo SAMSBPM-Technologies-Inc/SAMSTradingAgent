@@ -15,15 +15,17 @@ from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
 from app.dependencies import get_current_user, tier_refusal
 from app.models.stock import (
-    AnalyzeResponse, FactorInput, QuoteResponse, ScoreBreakdown, SignalGate,
-    SignalInputs,
+    AnalystGate, AnalyzeResponse, FactorInput, QuoteResponse, ScoreBreakdown,
+    SignalGate, SignalInputs,
 )
 from app.services import rate_limit
 from app.services.entitlements import entitlements_for
 from app.services.pipeline import run_pipeline
 from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.services.scoring import compute_personalized_score, explain_score
-from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD
+from app.services.signal_generator import (
+    BUY_THRESHOLD, SELL_THRESHOLD, SIGNAL_HYSTERESIS,
+)
 from app.services.signal_stability import STABILITY_FIELD
 from app.utils.logger import get_logger
 
@@ -340,22 +342,65 @@ async def _personalized_response(doc: dict, current_user: dict, db) -> AnalyzeRe
     return _doc_to_response(doc, breakdown=breakdown, user_weights=user_weights)
 
 
-def _build_gate(doc: dict) -> SignalGate:
+def _build_gate(doc: dict, personalized: bool = False) -> SignalGate:
     """
     The thresholds behind the verdict, read from the engine rather than restated.
 
     The dashboard's setup legend hardcodes its thresholds in TSX and will drift;
     this exists so the ticker page does not repeat that mistake.
+
+    Two things it withheld until 1.22.0, both of which let it contradict the
+    badge printed beside it. It tested `score > BUY_THRESHOLD` and nothing
+    else — so a BUY held in place by the hysteresis band, or one the analyst
+    produced, rendered a failing gate under a published BUY, and four separate
+    reviewers read that as the engine ignoring its own rules. The band is now
+    reported (`effective_buy_threshold`) and so is the author of the verdict.
+
+    `personalized` says the score in `doc` was recomputed from the reader's own
+    weights, which `compute_personalized_score` does through `classify_signal`.
+    That verdict is the rule's by construction, so no analyst attribution is
+    offered against it — the stored `analyst_gate` describes a different number.
     """
     score = float(doc.get("score", 0.0) or 0.0)
     risk = doc.get("risk") or {}
     risk_score = float(risk.get("risk_score", 10.0) or 0.0)
+
+    # The band is one-sided: it makes a standing BUY sticky, never easier to
+    # acquire. Read off the verdict currently in force, which is precisely what
+    # `classify_signal` was given when it produced it.
+    standing_buy = doc.get("signal") == "BUY"
+    effective_buy = BUY_THRESHOLD - SIGNAL_HYSTERESIS if standing_buy else BUY_THRESHOLD
+
+    analyst: Optional[AnalystGate] = None
+    decided_by = "rule"
+    if doc.get("analyst_used") and not personalized:
+        stored = doc.get("analyst_gate")
+        if stored is None:
+            # Written before the gate existed. Saying "the analyst decided and
+            # nothing checked it" is the true statement about these documents;
+            # they age out within the analyst cache window.
+            analyst = AnalystGate(checked=False)
+            decided_by = "analyst"
+        else:
+            analyst = AnalystGate(
+                checked=True,
+                wanted=stored.get("model_signal"),
+                override=stored.get("override"),
+                reason=stored.get("reason"),
+            )
+            # An overridden analyst verdict was not published; the rule's was.
+            decided_by = "rule" if stored.get("overridden") else "analyst"
+
     return SignalGate(
         buy_threshold=BUY_THRESHOLD,
         sell_threshold=SELL_THRESHOLD,
         risk_max_for_buy=RISK_MAX_FOR_BUY,
-        score_passes_buy=score > BUY_THRESHOLD,
+        score_passes_buy=score > effective_buy,
         risk_passes_buy=risk_score < RISK_MAX_FOR_BUY,
+        hysteresis=SIGNAL_HYSTERESIS,
+        effective_buy_threshold=round(effective_buy, 4),
+        decided_by=decided_by,
+        analyst=analyst,
     )
 
 
@@ -434,7 +479,7 @@ def _doc_to_response(
         analyst_model=_analyst_model(),
         pending_signal=(doc.get(STABILITY_FIELD) or {}).get("pending_signal"),
         breakdown=ScoreBreakdown(**breakdown) if breakdown else None,
-        gate=_build_gate(doc),
+        gate=_build_gate(doc, personalized=bool(user_weights)),
         data_sources=doc.get("data_sources"),
         inputs=_build_inputs(doc, user_weights),
     )

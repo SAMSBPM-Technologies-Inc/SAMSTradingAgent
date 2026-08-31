@@ -487,5 +487,75 @@ def test_sell_advice_does_not_suggest_shorting(monkeypatch):
     doc = _run(monkeypatch, feat={"composite_score": 0.20}, signal="SELL")
 
     assert doc["signal"] == "SELL"
-    assert "short" not in (doc["exit_suggestion"] or "").lower()
-    assert "Short near" not in (doc["entry_suggestion"] or "")
+    # Nothing to *enter* on a SELL, so no entry line at all — which is where
+    # the short suggestion used to be printed.
+    assert doc["entry_suggestion"] is None
+    # And the exit line says what a SELL is, so it cannot be read as one.
+    assert "not a short signal" in doc["exit_suggestion"]
+    assert "cover target" not in doc["exit_suggestion"].lower()
+
+
+# ── The exit the model must not be able to hold shut ──────────────────────────
+#
+# The mirror of the gate above, and the reason it is not symmetrical. SELL skips
+# the risk gate in `classify_signal`, skips confirmations and dwell in
+# `signal_stability`, and cannot be reached by the research veto. The analyst was
+# the one component that could suppress an exit — through the one path that also
+# places orders.
+
+from app.services.signal_generator import SELL_THRESHOLD  # noqa: E402
+
+
+def test_a_model_hold_cannot_suppress_a_rule_sell(monkeypatch):
+    doc = _run(monkeypatch, feat={"composite_score": 0.22}, signal="HOLD")
+
+    assert doc["signal"] == "SELL"
+    assert doc["analyst_gate"]["override"] == "sell_restored"
+    assert doc["analyst_gate"]["model_signal"] == "HOLD"
+
+
+def test_a_model_buy_under_the_sell_threshold_still_exits(monkeypatch):
+    """
+    The worst case the gate has to handle: the rule wants out, the model wants
+    in. Publishing HOLD would be the wrong answer — the exit wins outright, and
+    it must not fall through to the refused-BUY branch.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.18}, signal="BUY")
+
+    assert doc["signal"] == "SELL"
+    assert doc["analyst_gate"]["override"] == "sell_restored"
+
+
+def test_the_sell_band_is_the_rules_own(monkeypatch):
+    """
+    Just above the threshold the analyst's HOLD stands — this restores the
+    rule's SELL, it does not invent a stricter one.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": SELL_THRESHOLD + 0.05},
+               signal="HOLD")
+
+    assert doc["signal"] == "HOLD"
+    assert doc["analyst_gate"]["overridden"] is False
+
+
+def test_a_restored_sell_carries_an_exit_line_not_a_buy_plan(monkeypatch):
+    doc = _run(monkeypatch, feat={"composite_score": 0.18}, signal="BUY")
+
+    assert doc["entry_suggestion"] is None
+    assert "Exit at" in doc["exit_suggestion"]
+    assert "Gate:" in doc["explanation"]
+
+
+def test_the_two_overrides_are_told_apart(monkeypatch):
+    """
+    A refused BUY and a restored SELL are different bets. Pooling them in
+    calibration would measure neither, so the record carries a token rather
+    than prose to be parsed.
+    """
+    refused = _run(monkeypatch, feat={"composite_score": 0.62}, signal="BUY")
+    restored = _run(monkeypatch, feat={"composite_score": 0.18}, signal="HOLD")
+    agreed = _run(monkeypatch, feat={"composite_score": 0.72}, signal="BUY")
+
+    assert refused["analyst_gate"]["override"] == "buy_refused"
+    assert restored["analyst_gate"]["override"] == "sell_restored"
+    assert agreed["analyst_gate"]["override"] is None
