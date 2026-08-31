@@ -1,6 +1,8 @@
 import React from 'react'
 import { Tabs } from 'expo-router'
 import { Briefcase, LineChart, Settings as SettingsIcon } from 'lucide-react-native'
+import { useAuth } from '../../src/lib/auth-context'
+import { entitlementsOf } from '../../src/lib/entitlements'
 import { usePalette } from '../../src/lib/palette'
 
 /**
@@ -14,6 +16,12 @@ import { usePalette } from '../../src/lib/palette'
  */
 export default function AppLayout() {
   const C = usePalette()
+  const { user } = useAuth()
+  // Positions is holdings and order history on one shared brokerage account.
+  // An account whose plan has no trading gets no tab for it — but the screen
+  // stays *registered* so a deep link still resolves rather than throwing, and
+  // guards itself. `href: null` hides a tab; it does not close a route.
+  const mayTrade = entitlementsOf(user).may_trade
 
   return (
     <Tabs
@@ -44,10 +52,12 @@ export default function AppLayout() {
       />
       <Tabs.Screen
         name="positions"
-        options={{
-          title: 'Positions',
-          tabBarIcon: ({ color, size }) => <Briefcase size={size} color={color} />,
-        }}
+        options={mayTrade
+          ? {
+            title: 'Positions',
+            tabBarIcon: ({ color, size }) => <Briefcase size={size} color={color} />,
+          }
+          : { href: null }}
       />
       <Tabs.Screen
         name="settings"

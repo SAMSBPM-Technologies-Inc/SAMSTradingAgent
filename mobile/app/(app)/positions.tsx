@@ -3,9 +3,11 @@ import {
   ActivityIndicator, Pressable, RefreshControl, ScrollView, Text, View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { router } from 'expo-router'
+import { Redirect, router } from 'expo-router'
 import { AlertCircle } from 'lucide-react-native'
 import { tradingApi } from '../../src/lib/api'
+import { useAuth } from '../../src/lib/auth-context'
+import { entitlementsOf } from '../../src/lib/entitlements'
 import { useToast } from '../../src/lib/toast-context'
 import { useRefreshOnFocus } from '../../src/lib/use-refresh'
 import type { Holding, TradeRecord } from '../../src/types'
@@ -63,6 +65,7 @@ function SectionTitle({ children, note }: { children: string; note?: string }) {
 
 export default function PositionsScreen() {
   const C = usePalette()
+  const { user } = useAuth()
   const { toast, toastWithUndo } = useToast()
   const [orders, setOrders] = useState<TradeRecord[]>([])
   const [holdings, setHoldings] = useState<Holding[]>([])
@@ -126,6 +129,11 @@ export default function PositionsScreen() {
   }
 
   const waiting = orders.filter((o) => o.status === 'PROPOSED').length
+
+  // `href: null` hides the tab; it does not close the route. A deep link, an
+  // old alert or a back-stack entry still lands here, so the screen refuses on
+  // its own. The server refuses every request behind it either way.
+  if (!entitlementsOf(user).may_trade) return <Redirect href="/(app)" />
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['top']}>

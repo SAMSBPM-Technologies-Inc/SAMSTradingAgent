@@ -14,6 +14,7 @@ import { router } from 'expo-router'
 import { alertsApi, authApi, tradingApi } from '../../src/lib/api'
 import type { AlertSettings, AutoTradeSettings, TradingMode } from '../../src/types'
 import { useAuth } from '../../src/lib/auth-context'
+import { entitlementsOf, TIER_LABELS } from '../../src/lib/entitlements'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
 import { usePalette, type Palette } from '../../src/lib/palette'
@@ -598,6 +599,7 @@ export default function SettingsScreen() {
   const card = cardStyle(C)
   const { theme, toggleTheme } = useTheme()
   const { user, logout } = useAuth()
+  const ent = entitlementsOf(user)
   const [isEditing, setIsEditing] = useState(false)
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
   const [isSaving, setIsSaving] = useState(false)
@@ -796,11 +798,15 @@ export default function SettingsScreen() {
           }}>
             More
           </Text>
+          {/* The guide is instructions for a broker connection a plan without
+              trading cannot make. Everything else is a stored read and stays. */}
           {([
             { icon: BarChart2, label: 'Performance', note: 'Signal accuracy and win rate', to: '/(app)/performance' },
             { icon: Target, label: 'Calibration', note: 'Do the thresholds hold up?', to: '/(app)/calibration' },
             { icon: Activity, label: 'System status', note: 'What is working, and what each gap costs', to: '/(app)/status' },
-            { icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' },
+            ...(ent.may_trade
+              ? [{ icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' }]
+              : []),
           ] as const).map(({ icon: Icon, label, note, to }) => (
             <Pressable
               key={label}
@@ -829,8 +835,35 @@ export default function SettingsScreen() {
           ))}
         </View>
 
+        {/* The plan, stated where someone would look for it. The cap is the
+            number that will eventually stop them adding a ticker, so it is
+            said here rather than only in the refusal. */}
+        <View style={card}>
+          <Text style={{
+            fontSize: 11, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12,
+          }}>
+            Plan
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+            <Text style={{ fontSize: 13, color: C.fgMuted }}>Access</Text>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: C.fg }}>
+              {TIER_LABELS[ent.tier]}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+            <Text style={{ fontSize: 13, color: C.fgMuted }}>Tickers</Text>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: C.fg }}>
+              {ent.watchlist_cap === null ? 'Unlimited' : `Up to ${ent.watchlist_cap}`}
+            </Text>
+          </View>
+        </View>
+
         <AlertSettingsCard />
-        <AutoTradingCard />
+        {/* Mobile has no Broker or Models card, so `may_trade` is the only
+            plan gate on this screen. That is a deliberate difference from web,
+            not a parity gap — provider keys are configured at a desk. */}
+        {ent.may_trade && <AutoTradingCard />}
 
         {/* Sign out */}
         <View style={card}>
