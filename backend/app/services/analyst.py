@@ -28,6 +28,7 @@ from typing import Any, Optional
 
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
+from app.services import source_health
 from app.services.research.agents.base import AgentSpec, run_agent
 from app.services.risk_engine import assess_risk
 from app.utils.helpers import utcnow
@@ -135,7 +136,26 @@ async def run_analysis(ticker: str, client: Any = None) -> Optional[dict]:
         )
     except Exception as exc:
         logger.warning("analyst_claude_failed", ticker=ticker, error=str(exc))
+        await source_health.record_attempt(
+            "analyst", source_health.FAILED, error=str(exc), ticker=ticker,
+        )
         return None
+
+    # The status page's analyst row had no writer of any kind before this: the
+    # analyst does not touch `stocks_raw`, so `source_health.observe` cannot see
+    # it, and nothing recorded it as a subsystem either. The row therefore read
+    # "No reading yet" permanently on a server where the analyst was working —
+    # which is the page reporting on its own instrumentation rather than on the
+    # system.
+    #
+    # Recorded on a *call*, not on a cache hit. The 60-minute cache means most
+    # cycles never reach Claude, and a cache hit confirms nothing about whether
+    # the API would answer — the same reason `signal_stability` refuses to count
+    # one as a confirmation. `last_success_at` carries the age of the last real
+    # answer, which is the fact a reader is actually after.
+    await source_health.record_attempt(
+        "analyst", source_health.OK, ticker=ticker, model=settings.analyst_model,
+    )
 
     # Build a signal doc compatible with stocks_signals schema
     price = feat.get("current_price", 0.0)

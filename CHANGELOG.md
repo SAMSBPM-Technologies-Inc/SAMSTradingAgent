@@ -14,6 +14,48 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.19.3] — 2026-08-31
+
+**The status page was reporting on itself.** It read **Degraded** on a server
+where every weighted factor was live. Three separate faults, none of them in the
+engine:
+
+- **Options and insider flow was red, and it should not have been.** The put/call
+  ratio comes from unkeyed Yahoo scraping, and some symbol always misses — one
+  exception out of thirteen tickers was recorded as the whole source having
+  failed, which then set the banner. A cycle that answered for *anybody* now
+  reads **degraded**, and only a cycle that answered for nobody reads *failed*.
+  The row says how partial it was: "Answered for 12 of 13 tickers on the last
+  cycle."
+- **A failure that cannot change a number no longer sets the headline.**
+  Alternative data is an additive modifier centred on 0.50, so an absent reading
+  moves a score by 0.00 — the row's own text said so while the banner it
+  triggered claimed the factors it fed had gone neutral. The banner and the
+  alerting channel now weigh consequence rather than counting red rows. It is
+  still named in the summary and still shown on its row; it just no longer
+  shouts. **The exemption is not granted by tier** — news sentiment is in the
+  same tier and is 0.20 of every composite, and it still degrades the banner.
+- **AI analyst and Deep research said "no reading yet" permanently.** Neither
+  writes to `stocks_raw`, so passive health observation could not see them, and
+  nothing recorded them as subsystems either — the rows would have read that way
+  forever, on a server where both were working. Both now report. The analyst
+  records on an actual model call, not on a cache hit, so the timestamp means
+  what it says.
+
+**"Switched on but nobody opted in" is now a sentence, not a silence.** Deep
+research is per-user and `research_enabled` defaults off, so a server with
+`RESEARCH_AGENTS_ENABLED=true` and no opted-in account builds nothing. That is a
+setting, not an outage, and the row now says which. A run that reached tickers
+but could build no dossier for any of them says that too.
+
+**Known gaps.** Fundamentals still reads *degraded* whenever any one ticker has a
+cold cache — that reading is correct (the factor really is neutral for that name
+until the backfill lands) but it is easy to mistake for a provider problem, and
+the row does not name the ticker. Nothing here changes what a score is; every
+factor and every verdict is unaffected.
+
+---
+
 ## [1.19.2] — 2026-08-31
 
 **Changing a user's plan from the Admin page failed.** The page reported

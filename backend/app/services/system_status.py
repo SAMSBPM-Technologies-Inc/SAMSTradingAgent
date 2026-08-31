@@ -35,7 +35,7 @@ from datetime import datetime, timedelta
 from app.services import source_health as sh
 from app.utils.helpers import is_market_hours, utcnow
 
-__all__ = ["CAPABILITIES", "Capability", "build_status", "TIERS"]
+__all__ = ["CAPABILITIES", "Capability", "build_status", "TIERS", "alters_scores"]
 
 #: What losing a capability costs, worst first. The same three words the
 #: document groups by and the status page renders as headings, so a reader
@@ -68,6 +68,21 @@ class Capability:
     impact: str
     #: The factor it feeds and that factor's default weight, where it feeds one.
     feeds: str | None = None
+    #: Whether losing this changes a number the trader reads.
+    #:
+    #: Almost everything here does, and the one exception is the reason this
+    #: field exists: alternative data is an *additive modifier centred on 0.50*,
+    #: so an absent reading moves the composite by 0.00 rather than by a
+    #: fallback. Its own `impact` line already says "costs exactly nothing" —
+    #: and the banner was calling the whole system degraded on the strength of
+    #: it, in a sentence that then claimed the factors it feeds had gone
+    #: neutral. The row and the summary contradicted each other.
+    #:
+    #: This is the same judgement as refusing to paint an unset key red. A page
+    #: that shouts about a failure which is arithmetically free is a page people
+    #: stop opening, and then it is not there for the failure that matters.
+    #: It suppresses the *banner and the alert*, never the row.
+    alters_scores: bool = True
 
 
 #: Ordered as a reader should meet them: what can stop trading, then what
@@ -151,12 +166,29 @@ CAPABILITIES: tuple[Capability, ...] = (
         required_key=None,
         impact="Costs exactly nothing. Alternative data is an additive modifier "
                "centred on 0.50, so an absent one moves the composite by 0.00 "
-               "rather than by a fallback.",
+               "rather than by a fallback. The option chain is unkeyed "
+               "best-effort scraping and misses a symbol regularly; that is "
+               "shown here and is not worth a banner.",
         feeds="An additive ±0.05 modifier, not a weighted share",
+        alters_scores=False,
     ),
 )
 
 _BY_ID = {c.id: c for c in CAPABILITIES}
+
+
+def alters_scores(capability_id: str) -> bool:
+    """
+    Whether a failure in *capability_id* changes a number a trader reads.
+
+    Exposed as a lookup rather than as a field on the served row so the flag
+    stays a server-side judgement: both clients render `overall` and `summary`
+    as given, and adding a boolean they could branch on is how web and mobile
+    start disagreeing about what "degraded" means. Unknown ids answer `True` —
+    a capability nobody classified is assumed to matter.
+    """
+    cap = _BY_ID.get(capability_id)
+    return cap.alters_scores if cap else True
 
 
 def _configured(cap: Capability, settings) -> bool:
@@ -285,12 +317,23 @@ def _detail(cap: Capability, record: dict | None, state: str) -> str:
         if method == "xgboost":
             return "Scores are coming from the ML model."
         return "Scores are coming from the six weighted factors."
+
+    # A sentence the writer supplied, for the states whose generic line gets it
+    # wrong. "Deep research is switched on for this server but no account has
+    # opted into it" is not something the status word can express, and it is the
+    # difference between a fault and a setting. Always rewritten on the next
+    # attempt, including to nothing, so it cannot outlive its condition.
+    recorded = (record or {}).get("status_detail")
+    if recorded:
+        return recorded
+
+    ok, total = (record or {}).get("tickers_ok"), (record or {}).get("tickers_total")
     if state == sh.NOT_CONFIGURED:
         if cap.required_key:
             return f"Not configured on this server — set {cap.required_key} to switch it on."
         return "Not configured on this server."
     if state == sh.NEVER_RUN:
-        return "No reading yet. It has not been reached since the last restart."
+        return "No reading yet — nothing has recorded a result for it."
     if state == sh.FAILED:
         failures = int((record or {}).get("consecutive_failures") or 0)
         suffix = f" ({failures} cycles in a row)" if failures > 1 else ""
@@ -298,8 +341,10 @@ def _detail(cap: Capability, record: dict | None, state: str) -> str:
     if state == sh.STALE:
         return "Serving a cached answer past its freshness window."
     if state == sh.DEGRADED:
+        if total and ok:
+            return (f"Answered for {ok} of {total} tickers on the last cycle. "
+                    f"The rest fell back to neutral.")
         return "Answering, but with less than it should."
-    ok, total = (record or {}).get("tickers_ok"), (record or {}).get("tickers_total")
     if total:
         return f"Answered for {ok} of {total} tickers on the last cycle."
     return "Working."
@@ -330,6 +375,10 @@ def _cycle(record: dict | None, *, now: datetime, market_open: bool) -> dict:
     }
 
 
+def _names(rows: list[dict]) -> str:
+    return ", ".join(r["label"] for r in rows)
+
+
 def _verdict(rows: list[dict], cycle: dict, *, market_open: bool) -> tuple[str, str]:
     """
     One word and one sentence, decided on the server.
@@ -337,13 +386,20 @@ def _verdict(rows: list[dict], cycle: dict, *, market_open: bool) -> tuple[str, 
     Both clients render this rather than composing their own, so web and mobile
     cannot end up disagreeing about what "degraded" means — the same reasoning
     behind `restart_unavailable_reason`.
+
+    **The headline word is decided on consequence, not on the count of red
+    rows.** A failure that cannot change a number the trader reads is reported
+    on its row and does not set the banner — see `Capability.alters_scores`.
+    Not doing this is how the page came to say *degraded* while every weighted
+    factor was live, on the strength of a Yahoo option chain that had missed one
+    symbol; and the summary it generated then contradicted that row's own impact
+    line by claiming the factors it fed had gone neutral.
     """
     failing = [r for r in rows if r["state"] == sh.FAILED]
     halting = [r for r in failing if r["tier"] == "stops"]
 
     if halting:
-        names = ", ".join(r["label"] for r in halting)
-        return "halted", f"{names} is not working. Trading is paused."
+        return "halted", f"{_names(halting)} is not working. Trading is paused."
     if cycle["stale"]:
         age = cycle["age_minutes"]
         when = (
@@ -354,23 +410,38 @@ def _verdict(rows: list[dict], cycle: dict, *, market_open: bool) -> tuple[str, 
             f"The market is open but {when}. Everything below describes that "
             f"cycle."
         )
-    if failing:
-        names = ", ".join(r["label"] for r in failing)
+
+    material = [r for r in failing if alters_scores(r["id"])]
+    if material:
         return "degraded", (
-            f"{names} is failing. Scores still publish; the factors it feeds "
-            f"are neutral placeholders until it recovers."
+            f"{_names(material)} is failing. Scores still publish; the factors "
+            f"it feeds are neutral placeholders until it recovers."
         )
 
-    unconfigured = [r for r in rows if r["state"] == sh.NOT_CONFIGURED and r["tier"] == "quiet"]
+    # Past this point the verdict is "ok". What is left still gets said — the
+    # point is to stop it colouring the banner, not to hide it.
+    free = [r for r in failing if not alters_scores(r["id"])]
+    unconfigured = [r for r in rows
+                    if r["state"] == sh.NOT_CONFIGURED and r["tier"] == "quiet"]
+
+    parts = ["Everything that can move a score is working."
+             if free else "Everything configured is working."]
+    if free:
+        parts.append(
+            f"{_names(free)} is failing, which changes no score — it feeds an "
+            f"additive modifier centred on neutral, so an absent reading moves "
+            f"the composite by 0.00."
+        )
     if unconfigured:
-        names = ", ".join(r["label"] for r in unconfigured)
         plural = len(unconfigured) > 1
-        return "ok", (
-            f"Everything configured is working. {names} "
-            f"{'are' if plural else 'is'} switched off on this server, so the "
+        parts.append(
+            f"{_names(unconfigured)} {'are' if plural else 'is'} switched off "
+            f"on this server, so the "
             f"{'factors they feed sit' if plural else 'factor it feeds sits'} "
             f"at neutral."
         )
+    if len(parts) > 1:
+        return "ok", " ".join(parts)
     if not market_open:
         return "ok", "Everything is working. The market is closed, so no cycle is due."
     return "ok", "Everything is working."

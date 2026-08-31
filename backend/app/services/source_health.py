@@ -42,8 +42,8 @@ logger = get_logger(__name__)
 
 __all__ = [
     "OK", "STALE", "DEGRADED", "FAILED", "NOT_CONFIGURED", "NEVER_RUN",
-    "SOURCES", "classify", "observe", "flush", "record_subsystem", "read_all",
-    "scrub", "aware",
+    "SOURCES", "classify", "observe", "flush", "record_subsystem",
+    "record_attempt", "read_all", "scrub", "aware",
 ]
 
 #: The source answered and the data is current.
@@ -171,6 +171,55 @@ _SEVERITY = {
 }
 
 
+def _resolved(entry: dict) -> str:
+    """
+    The reading for a whole cycle, from the readings for each ticker.
+
+    Worst-wins above decides *which* fault to name; this decides how bad it is,
+    and the two are not the same question. A source that answered for twelve
+    tickers and errored on the thirteenth has not failed — it degraded, which is
+    the word `_accumulate`'s own docstring already uses for that case. Only a
+    source nothing got an answer out of is `failed`.
+
+    This is what left "Options and insider flow" permanently red. The option
+    chain is unkeyed best-effort scraping of Yahoo and some symbol always
+    misses, so one exception in thirteen was reporting the whole capability as
+    down — which then set the banner to *degraded* on a server where every
+    weighted factor was fine.
+    """
+    if entry["status"] == FAILED and entry["ok"] > 0:
+        return DEGRADED
+    return entry["status"]
+
+
+def _update_for(source: str, status: str, now: datetime, *,
+                detail: str | None = None, error: str | None = None,
+                extra: dict | None = None) -> dict:
+    """
+    The Mongo update for one reading. Shared by the per-cycle flush and the
+    per-attempt record so the two cannot disagree about what a status implies
+    for `last_success_at`, `last_error` and the failure streak.
+    """
+    update: dict = {
+        "$set": {
+            "source": source,
+            "last_status": status,
+            "last_attempt_at": now,
+            "last_detail": detail,
+            **(extra or {}),
+        },
+    }
+    if status == FAILED:
+        # The streak counts whole-source outages, which is what the alerting
+        # threshold is asking about. A cycle that answered for anybody breaks it.
+        update["$inc"] = {"consecutive_failures": 1}
+        update["$set"]["last_error_at"] = now
+        update["$set"]["last_error"] = scrub(error if error is not None else detail)
+    else:
+        update["$set"]["consecutive_failures"] = 0
+    return update
+
+
 async def flush() -> None:
     """
     Write the accumulated readings. One bulk write of at most five upserts.
@@ -190,25 +239,20 @@ async def flush() -> None:
         db = await get_db()
         ops = []
         for source, entry in readings.items():
-            status = entry["status"]
-            update: dict = {
-                "$set": {
-                    "source": source,
-                    "last_status": status,
-                    "last_attempt_at": now,
-                    "last_detail": entry.get("detail"),
-                    "tickers_ok": entry["ok"],
-                    "tickers_total": entry["total"],
-                },
-            }
-            if status in (OK, STALE):
-                update["$set"]["last_success_at"] = now
-                update["$set"]["consecutive_failures"] = 0
-            elif status == FAILED:
-                update["$inc"] = {"consecutive_failures": 1}
-                update["$set"]["last_error_at"] = now
-                update["$set"]["last_error"] = scrub(entry.get("detail"))
-            ops.append(UpdateOne({"source": source}, update, upsert=True))
+            status = _resolved(entry)
+            extra = {"tickers_ok": entry["ok"], "tickers_total": entry["total"]}
+            if entry["ok"]:
+                # Recorded off the ticker count rather than off the status, so a
+                # partially-failing cycle still says when the source last
+                # answered anybody. That timestamp is the whole difference
+                # between "flaky" and "gone".
+                extra["last_success_at"] = now
+            ops.append(UpdateOne(
+                {"source": source},
+                _update_for(source, status, now,
+                            detail=entry.get("detail"), extra=extra),
+                upsert=True,
+            ))
         if ops:
             await db[COLL_SOURCE_HEALTH].bulk_write(ops, ordered=False)
     except Exception as exc:
@@ -232,6 +276,48 @@ async def record_subsystem(name: str, status: str, **fields) -> None:
                 "source": name, "last_status": status,
                 "last_attempt_at": utcnow(), **fields,
             }},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning("source_health_record_failed", source=name, error=str(exc))
+
+
+async def record_attempt(name: str, status: str, *, error: str | None = None,
+                         detail: str | None = None,
+                         succeeded: bool | None = None, **fields) -> None:
+    """
+    Record one observed attempt at a subsystem, with the success/failure
+    bookkeeping `flush` does for the sources.
+
+    This exists because the analyst and the deep-research module had **no
+    writer at all**. Neither touches `stocks_raw`, so `observe` cannot see them,
+    and nothing called `record_subsystem` for them either — so their rows read
+    "No reading yet" permanently, on a server where both were working. A status
+    page that cannot tell "never instrumented" from "never ran" is reporting on
+    itself rather than on the system.
+
+    `detail` is a human sentence rendered in place of the generic line for the
+    state, for the cases the state alone gets wrong — chiefly research being
+    switched on for the server while no account has opted into it. It is always
+    written, including as `None`, so a resolved condition cannot leave its
+    explanation behind on the row.
+
+    `succeeded` separates "did this produce something" from the status word,
+    because `DEGRADED` covers both a run that delivered less than it should and
+    one that delivered nothing at all, and only the first should move
+    `last_success_at`.
+    """
+    try:
+        now = utcnow()
+        if succeeded is None:
+            succeeded = status in (OK, STALE)
+        db = await get_db()
+        await db[COLL_SOURCE_HEALTH].update_one(
+            {"source": name},
+            _update_for(name, status, now, detail=detail, error=error,
+                        extra={"status_detail": detail,
+                               **({"last_success_at": now} if succeeded else {}),
+                               **fields}),
             upsert=True,
         )
     except Exception as exc:

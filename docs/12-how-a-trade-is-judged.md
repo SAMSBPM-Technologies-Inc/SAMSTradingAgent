@@ -127,7 +127,7 @@ screen looks different.
 | **`FINNHUB_API_KEY`** | Sentiment pinned to 0.50 for every ticker. It stops *distinguishing* between names rather than scoring them badly. Headlines also vanish from the analyst's prompt. | 0.20 of the composite |
 | **`FRED_API_KEY`** | Macro pinned to 0.50 market-wide. The VIX-spike trigger that forces a fresh analyst read never fires. | 0.15 |
 | **`MASSIVE_API_KEY` / `ALPHAVANTAGE_API_KEY`** | The fundamental factor blends toward 0.50 **in proportion to what is missing**, so a thin read lands near neutral rather than scoring whatever happened to arrive. | 0.20, plus part of catalyst |
-| **Alternative data** | **Costs exactly nothing.** It is an additive modifier centred on 0.50, so an absent one moves the composite by 0.00 rather than by a fallback. | 0.00 |
+| **Alternative data** | **Costs exactly nothing.** It is an additive modifier centred on 0.50, so an absent one moves the composite by 0.00 rather than by a fallback. The option chain is unkeyed best-effort scraping and misses a symbol regularly; that is shown on its status row and is deliberately the one failure that does **not** set the banner or send an alert — see `Capability.alters_scores`. | 0.00 |
 
 The coverage weighting in row three is worth stating plainly, because the naive
 alternative is worse. Cerebras listed in May 2026 with no annual report, so P/E,
