@@ -468,7 +468,12 @@ async def get_calibration(
         query,
         {"ticker": 1, "score": 1, "signal": 1, "confidence": 1,
          "risk_score": 1, "return_20d": 1, "generated_at": 1,
-         "alpha_20d": 1, "benchmark_return_20d": 1},
+         "alpha_20d": 1, "benchmark_return_20d": 1,
+         # Kept in step with the projection in `calibration.calibration_report`
+         # — two explicit field lists over the same collection, and a field
+         # added to one and not the other is a silent hole.
+         "analyst_used": 1, "analyst_override": 1, "analyst_wanted": 1,
+         "rule_signal": 1},
     ).to_list(length=100_000)
 
     report = calibration_summary(

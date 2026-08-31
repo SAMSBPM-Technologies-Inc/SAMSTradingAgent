@@ -141,9 +141,23 @@ npm run web
    the system prompt. AMZN was bought at 0.62 and CBRS at 0.66 on a risk score
    of 6.3, past a veto documented here as unconditional.
 
-   Three properties are load-bearing. `analyst_output` keeps the model's own
-   answer **unrewritten** — it is the only evidence the override can be judged
-   from later. `analyst_gate` is written **whenever the analyst ran**, agreeing
+   **The override is retained, not just published.** `stocks_signals` holds one
+   document per ticker and is replaced every cycle, so an `analyst_gate`
+   written there survives about five minutes. `_append_history` therefore
+   flattens it onto the `stocks_signal_history` row —
+   `analyst_override` / `analyst_wanted` / `rule_signal` — which is the only
+   retained series and the sole basis on which the counterfactual ("were these
+   refusals worth making?") can ever be computed. `None` on those fields means
+   the gate ran and had nothing to override; the key being **absent** means the
+   row predates 1.24.0 and must be excluded rather than counted as agreement.
+   Two explicit projections read this collection — `calibration_report` and the
+   `/performance/calibration` route — and a field added to one and not the
+   other is dropped silently by Mongo, so `test_history_retention.py` pins them
+   together.
+
+   Three further properties are load-bearing. `analyst_output` keeps the
+   model's own answer **unrewritten** — it is the only evidence the override
+   can be judged from later. `analyst_gate` is written **whenever the analyst ran**, agreeing
    or not, because "the gate ran and agreed" and "no gate ran" are different
    facts and only one can be argued from (the `citation_audit` rule). And every
    derived field — entry suggestion, exit suggestion, explanation, confidence —

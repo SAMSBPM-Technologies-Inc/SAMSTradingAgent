@@ -255,7 +255,13 @@ async def calibration_report(
         query,
         {"ticker": 1, "score": 1, "signal": 1, "confidence": 1,
          "risk_score": 1, "return_20d": 1, "generated_at": 1,
-         "alpha_20d": 1, "benchmark_return_20d": 1},
+         "alpha_20d": 1, "benchmark_return_20d": 1,
+         # Carried so the analyst-override counterfactual has something to read.
+         # This projection is an explicit field list: a field absent from it is
+         # dropped silently, which would make a stored override look like a
+         # missing one and read as agreement.
+         "analyst_used": 1, "analyst_override": 1, "analyst_wanted": 1,
+         "rule_signal": 1},
     ).to_list(length=100_000)
 
     report = summarise(records, risk_max=risk_max)
