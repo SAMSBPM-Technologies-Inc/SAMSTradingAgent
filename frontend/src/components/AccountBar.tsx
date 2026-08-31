@@ -1,5 +1,7 @@
 import { Link } from 'react-router-dom'
 import { AlertTriangle } from 'lucide-react'
+import { useAuth } from '../lib/auth-context'
+import { entitlementsOf } from '../lib/entitlements'
 import { useSystemStatus } from '../lib/system-status'
 import { useTradingSettings } from '../lib/trading-context'
 
@@ -106,6 +108,14 @@ export default function AccountBar() {
   // ticket sizes from the same object, so the equity shown here and the equity
   // an order is sized against cannot drift apart.
   const { account, accountLoading: loading } = useTradingSettings()
+  const { user } = useAuth()
+
+  // There is one brokerage account behind this strip and it belongs to the
+  // operator, not to whoever is signed in. An account whose plan has no
+  // trading gets no chrome for it at all — and the provider is not fetching
+  // for them either, so `loading` would otherwise sit true forever and paint a
+  // skeleton on every screen.
+  if (!entitlementsOf(user).may_trade) return null
 
   if (loading) {
     return (

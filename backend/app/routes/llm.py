@@ -24,11 +24,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.db import COLL_USERS, get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, require_own_keys, tier_refusal
 from app.models.llm import (
     AddKeyRequest, KeyStatus, KeyTestResult, LLMSettingsResponse,
     LLMSettingsUpdate, RoleChains,
 )
+from app.services.entitlements import entitlements_for
 from app.services.encryption import encrypt
 from app.services.llm.base import Candidate
 from app.services.llm.registry import ROLES, default_model, fingerprint, get_provider
@@ -36,6 +37,11 @@ from app.services.llm.resolver import adapter_for, server_candidate
 from app.utils.logger import get_logger
 
 router = APIRouter(tags=["llm"])
+
+#: An update that assigns nothing to any role — the shape a client sends when
+#: it is clearing its configuration rather than changing it. Compared against
+#: rather than special-cased so "clearing" stays one definition.
+_EMPTY_ROLES = RoleChains().model_dump()
 logger = get_logger(__name__)
 
 #: The probe used to validate a key. Deliberately tiny and schema-constrained:
@@ -126,7 +132,24 @@ async def update_llm_settings(
     unknown id here rather than skipping it at call time is the difference
     between a form that tells you it is wrong and a chain that silently drops a
     link you believe is configured.
+
+    Two separate plan checks, because this endpoint does two separate things.
+    Editing the role chains needs `may_bring_own_key`. Switching the nightly
+    job *on* needs `may_enrol_in_nightly_research`, which for a PRO account is
+    an admin grant rather than a tier default — it is five to seven model calls
+    per ticker per day, running unattended.
+
+    **Switching it off is never refused.** Turning a recurring cost off must
+    work whatever the plan says, including for an account that was downgraded
+    while enrolled. Same instinct as `execute_exit` skipping the guard chain:
+    the direction that stops spending is not the one to put a gate in front of.
     """
+    ent = entitlements_for(current_user)
+    if not ent.may_bring_own_key and body.roles.model_dump() != _EMPTY_ROLES:
+        raise tier_refusal("may_bring_own_key", ent)
+    if body.research_enabled and not ent.may_enrol_in_nightly_research:
+        raise tier_refusal("may_enrol_in_nightly_research", ent)
+
     db = await get_db()
     user = await db[COLL_USERS].find_one(
         {"_id": current_user["_id"]}, {"llm_settings": 1}
@@ -161,7 +184,8 @@ async def update_llm_settings(
 
 
 @router.post("/settings/llm/keys", response_model=LLMSettingsResponse,
-             summary="Add a provider key")
+             summary="Add a provider key",
+             dependencies=[Depends(require_own_keys)])
 async def add_key(
     body: AddKeyRequest,
     current_user: dict = Depends(get_current_user),
@@ -216,6 +240,11 @@ async def add_key(
     return _response(settings)
 
 
+# Deliberately not plan-gated, unlike every other route in this file. Removing
+# a credential you own must work whatever your plan says — an account
+# downgraded out of `may_bring_own_key` still owns its keys and must be able to
+# take them back. The same reason `execute_exit` skips the trading guard chain:
+# never put a gate in front of the direction that reduces exposure.
 @router.delete("/settings/llm/keys/{key_id}", response_model=LLMSettingsResponse,
                summary="Remove a provider key")
 async def delete_key(
@@ -256,7 +285,8 @@ async def delete_key(
 
 
 @router.post("/settings/llm/keys/{key_id}/test", response_model=KeyTestResult,
-             summary="Re-check a stored key")
+             summary="Re-check a stored key",
+             dependencies=[Depends(require_own_keys)])
 async def test_key(
     key_id: str,
     current_user: dict = Depends(get_current_user),

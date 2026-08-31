@@ -222,11 +222,53 @@ def test_research_reaches_nobody_who_has_not_opted_in():
     """
     Five to seven calls per ticker per day, times users, is the one number here
     that can run away. The cohort query is the bound.
+
+    Two clauses now, so this asserts them separately rather than pinning one
+    literal: the user asked for it, and their plan allows it.
     """
     from pathlib import Path
 
     text = (Path(__file__).resolve().parents[1] / "app/jobs/scheduler.py").read_text()
-    assert '{"llm_settings.research_enabled": True}' in text
+    assert '"llm_settings.research_enabled": True' in text
+    assert '"access_tier": {"$in": ENROLABLE_TIERS}' in text
+
+
+def test_the_cohort_filter_never_uses_ne():
+    """
+    `$ne: "BASIC"` also matches documents where the field is *absent*, which is
+    every account predating `db._migrate_access_tier`. A failed migration plus a
+    `$ne` filter would therefore enrol everybody rather than nobody — cost
+    inverted rather than contained, by one operator's worth of difference.
+
+    Scoped to this one function's source. `$ne` is used correctly elsewhere in
+    the file, always paired with `$exists`, and banning it outright would be a
+    test about a character rather than about the bug.
+    """
+    import inspect
+
+    from app.jobs import scheduler
+
+    source = inspect.getsource(scheduler._research_users)
+    body = source.split('"""')[-1]  # past the docstring, which names the trap
+    assert "$ne" not in body
+    assert "$in" in body
+
+
+def test_a_pro_account_needs_the_grant_as_well_as_the_tier():
+    """
+    The tier query gets us to the candidates; the table makes the final call,
+    because a PRO account's nightly enrolment is an admin grant on top of its
+    tier and that rule must not be restated as a second Mongo clause.
+    """
+    from app.services.entitlements import entitlements_for
+
+    assert not entitlements_for(
+        {"access_tier": "PRO", "llm_settings": {"research_enabled": True}}
+    ).may_enrol_in_nightly_research
+    assert entitlements_for(
+        {"access_tier": "PRO", "research_daily_allowed": True}
+    ).may_enrol_in_nightly_research
+    assert entitlements_for({"access_tier": "TRADER"}).may_enrol_in_nightly_research
 
 
 async def _async(value):

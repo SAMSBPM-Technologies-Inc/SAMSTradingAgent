@@ -132,16 +132,52 @@ function LoginForm({ onSuccess }: { onSuccess: () => void }) {
         {isSubmitting ? <LoadingSpinner size="sm" /> : <LogIn className="w-4 h-4" />}
         {isSubmitting ? 'Signing in…' : 'Sign In'}
       </button>
+
+      {/* Two ways to be stuck at this screen, and both need a route out.
+          There is no sign-up form — accounts are provisioned by hand — so
+          somebody who arrives here without one has to be pointed at the
+          contact form rather than left staring at a password box. */}
+      <div className="flex flex-col items-center gap-2">
+        <Link
+          to="/forgot-password"
+          className="text-xs text-[var(--color-fg-muted)] hover:text-[var(--color-fg)]"
+        >
+          Forgot your password?
+        </Link>
+        <p className="text-xs text-[var(--color-fg-muted)]">
+          No account?{' '}
+          <Link
+            to="/home#contact"
+            className="text-brand-500 underline-offset-4 hover:underline"
+          >
+            Request access
+          </Link>
+        </p>
+      </div>
     </form>
   )
 }
 
 // ── Auth Page ─────────────────────────────────────────────────────────────────
 
-export default function AuthPage() {
-  const navigate = useNavigate()
-  const onSuccess = () => navigate('/', { replace: true })
-
+/**
+ * The chrome every signed-out screen shares.
+ *
+ * Exported so the password-recovery pages use *this* rather than drawing their
+ * own approximation of it. That is not hypothetical tidiness — this page drew
+ * its own gradient "S" and orange wordmark for long enough that signing in
+ * looked like a different product from the app behind it, which is what the
+ * comment below still records.
+ */
+export function AuthShell({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string
+  subtitle: string
+  children: React.ReactNode
+}) {
   return (
     <div className="relative min-h-dvh flex flex-col overflow-hidden bg-[var(--color-bg)] transition-colors duration-200">
       {/* Ground for the page. Purely decorative and behind everything — see
@@ -166,18 +202,25 @@ export default function AuthPage() {
               className="text-3xl font-light text-[var(--color-fg)] mb-1"
               style={{ fontFamily: 'Fraunces, Georgia, serif' }}
             >
-              Welcome back
+              {title}
             </h1>
-            <p className="text-sm text-[var(--color-fg-muted)]">
-              Sign in to your trading dashboard
-            </p>
+            <p className="text-sm text-[var(--color-fg-muted)]">{subtitle}</p>
           </div>
 
-          <div className="card p-6">
-            <LoginForm onSuccess={onSuccess} />
-          </div>
+          <div className="card p-6">{children}</div>
         </div>
       </div>
     </div>
+  )
+}
+
+export default function AuthPage() {
+  const navigate = useNavigate()
+  const onSuccess = () => navigate('/', { replace: true })
+
+  return (
+    <AuthShell title="Welcome back" subtitle="Sign in to your trading dashboard">
+      <LoginForm onSuccess={onSuccess} />
+    </AuthShell>
   )
 }

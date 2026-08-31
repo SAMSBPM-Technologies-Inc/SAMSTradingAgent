@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
-  View, Text, TextInput, Pressable, ScrollView, Switch, Linking,
+  ActivityIndicator, View, Text, TextInput, Pressable, ScrollView, Switch, Linking,
 } from 'react-native'
 import Slider from '@react-native-community/slider'
 import {
@@ -14,6 +14,8 @@ import { router } from 'expo-router'
 import { alertsApi, authApi, tradingApi } from '../../src/lib/api'
 import type { AlertSettings, AutoTradeSettings, TradingMode } from '../../src/types'
 import { useAuth } from '../../src/lib/auth-context'
+import { useToast } from '../../src/lib/toast-context'
+import { entitlementsOf, TIER_LABELS } from '../../src/lib/entitlements'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
 import Disclaimer from '../../src/components/Disclaimer'
 import { usePalette, type Palette } from '../../src/lib/palette'
@@ -593,11 +595,151 @@ function AutoTradingCard() {
 
 // ── Profile Screen ────────────────────────────────────────────────────────────
 
+/**
+ * Change your own password.
+ *
+ * The current password is required even though this screen sits behind a valid
+ * session — a token can be stolen, and without it whoever stole one could set
+ * a new password and lock the real owner out permanently.
+ *
+ * The response carries a **new token**, which must be stored: the change ends
+ * every session issued before it, this one included. Swapping it is what keeps
+ * this device signed in while the others are cut off, which is the behaviour
+ * somebody changing a password they think is known elsewhere is asking for.
+ */
+function ChangePasswordCard() {
+  const C = usePalette()
+  const card = cardStyle(C)
+  const { login } = useAuth()
+  const { toast } = useToast()
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const close = () => {
+    setOpen(false)
+    setCurrent('')
+    setNext('')
+    setError(null)
+  }
+
+  const submit = async () => {
+    setError(null)
+    setBusy(true)
+    try {
+      const { data } = await authApi.changePassword(current, next)
+      await login(data.access_token)
+      toast('Password changed. Other devices have been signed out.', 'success')
+      close()
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })
+        ?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Could not change your password.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const field = {
+    borderWidth: 1, borderColor: C.border, borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 9, fontSize: 14,
+    color: C.fg, backgroundColor: C.bg, marginBottom: 8,
+  } as const
+
+  return (
+    <View style={card}>
+      <Text style={{
+        fontSize: 11, fontWeight: '700', color: C.fgMuted,
+        textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12,
+      }}>
+        Password
+      </Text>
+
+      {!open ? (
+        <Pressable
+          onPress={() => setOpen(true)}
+          accessibilityRole="button"
+          style={({ pressed }) => ({
+            paddingVertical: 11, borderRadius: 9, alignItems: 'center',
+            borderWidth: 1, borderColor: C.border,
+            backgroundColor: pressed ? C.hover : 'transparent',
+          })}
+        >
+          <Text style={{ fontSize: 14, fontWeight: '600', color: C.fg }}>
+            Change password
+          </Text>
+        </Pressable>
+      ) : (
+        <>
+          <TextInput
+            style={field}
+            value={current}
+            onChangeText={setCurrent}
+            placeholder="Current password"
+            placeholderTextColor={C.fgMuted}
+            secureTextEntry
+            autoCapitalize="none"
+            textContentType="password"
+          />
+          <TextInput
+            style={field}
+            value={next}
+            onChangeText={setNext}
+            placeholder="New password (12+ characters)"
+            placeholderTextColor={C.fgMuted}
+            secureTextEntry
+            autoCapitalize="none"
+            textContentType="newPassword"
+          />
+          <Text style={{ fontSize: 11, color: C.fgMuted, marginBottom: 10, lineHeight: 16 }}>
+            Every other device signed in as you will be signed out. This one stays.
+          </Text>
+
+          {error && (
+            <Text style={{ fontSize: 12, color: C.red, marginBottom: 8 }}>{error}</Text>
+          )}
+
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Pressable
+              onPress={submit}
+              disabled={busy || !current || next.length < 12}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                flex: 1, paddingVertical: 11, borderRadius: 9, alignItems: 'center',
+                backgroundColor: C.brand,
+                opacity: busy || !current || next.length < 12 ? 0.5 : pressed ? 0.85 : 1,
+              })}
+            >
+              {busy
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={{ fontSize: 14, fontWeight: '700', color: '#fff' }}>Change</Text>}
+            </Pressable>
+            <Pressable
+              onPress={close}
+              accessibilityRole="button"
+              style={({ pressed }) => ({
+                paddingHorizontal: 16, paddingVertical: 11, borderRadius: 9,
+                borderWidth: 1, borderColor: C.border,
+                backgroundColor: pressed ? C.hover : 'transparent',
+              })}
+            >
+              <Text style={{ fontSize: 14, color: C.fg }}>Cancel</Text>
+            </Pressable>
+          </View>
+        </>
+      )}
+    </View>
+  )
+}
+
 export default function SettingsScreen() {
   const C = usePalette()
   const card = cardStyle(C)
   const { theme, toggleTheme } = useTheme()
   const { user, logout } = useAuth()
+  const ent = entitlementsOf(user)
   const [isEditing, setIsEditing] = useState(false)
   const [displayName, setDisplayName] = useState(user?.display_name ?? '')
   const [isSaving, setIsSaving] = useState(false)
@@ -796,11 +938,15 @@ export default function SettingsScreen() {
           }}>
             More
           </Text>
+          {/* The guide is instructions for a broker connection a plan without
+              trading cannot make. Everything else is a stored read and stays. */}
           {([
             { icon: BarChart2, label: 'Performance', note: 'Signal accuracy and win rate', to: '/(app)/performance' },
             { icon: Target, label: 'Calibration', note: 'Do the thresholds hold up?', to: '/(app)/calibration' },
             { icon: Activity, label: 'System status', note: 'What is working, and what each gap costs', to: '/(app)/status' },
-            { icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' },
+            ...(ent.may_trade
+              ? [{ icon: BookOpen, label: 'Trading guide', note: 'IB Gateway setup', to: '/(app)/guide' }]
+              : []),
           ] as const).map(({ icon: Icon, label, note, to }) => (
             <Pressable
               key={label}
@@ -829,8 +975,37 @@ export default function SettingsScreen() {
           ))}
         </View>
 
+        {/* The plan, stated where someone would look for it. The cap is the
+            number that will eventually stop them adding a ticker, so it is
+            said here rather than only in the refusal. */}
+        <View style={card}>
+          <Text style={{
+            fontSize: 11, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12,
+          }}>
+            Plan
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+            <Text style={{ fontSize: 13, color: C.fgMuted }}>Access</Text>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: C.fg }}>
+              {TIER_LABELS[ent.tier]}
+            </Text>
+          </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 4 }}>
+            <Text style={{ fontSize: 13, color: C.fgMuted }}>Tickers</Text>
+            <Text style={{ fontSize: 13, fontWeight: '600', color: C.fg }}>
+              {ent.watchlist_cap === null ? 'Unlimited' : `Up to ${ent.watchlist_cap}`}
+            </Text>
+          </View>
+        </View>
+
         <AlertSettingsCard />
-        <AutoTradingCard />
+        {/* Mobile has no Broker or Models card, so `may_trade` is the only
+            plan gate on this screen. That is a deliberate difference from web,
+            not a parity gap — provider keys are configured at a desk. */}
+        {ent.may_trade && <AutoTradingCard />}
+
+        <ChangePasswordCard />
 
         {/* Sign out */}
         <View style={card}>

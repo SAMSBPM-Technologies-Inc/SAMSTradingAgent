@@ -61,6 +61,18 @@ export const authApi = {
 
   updateProfile: (data: { display_name?: string; scoring_weights?: Record<string, number> | null }) =>
     api.put<{ status: string }>('/auth/me', data),
+
+  /**
+   * Change your own password. The fresh token in the response has to be
+   * stored: the change invalidates every token issued before it, including the
+   * one this request was sent with, so without the swap the app signs itself
+   * out the moment it succeeds.
+   */
+  changePassword: (current_password: string, new_password: string) =>
+    api.put<{ access_token: string; token_type: string }>('/auth/password', {
+      current_password,
+      new_password,
+    }),
 }
 
 export const watchlistApi = {

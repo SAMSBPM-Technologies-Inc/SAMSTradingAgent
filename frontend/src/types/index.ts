@@ -1,3 +1,4 @@
+import type { AccessTier, Entitlements } from '../lib/entitlements'
 export type Signal = 'BUY' | 'SELL' | 'HOLD'
 
 /**
@@ -54,6 +55,11 @@ export interface User {
   email: string
   display_name: string
   scoring_weights?: ScoringWeights | null
+  /** The plan this account is on. Label it with `TIER_LABELS`, never raw. */
+  access_tier?: AccessTier
+  is_admin?: boolean
+  /** Resolved by the server. Read it; never derive it from `access_tier`. */
+  entitlements?: Entitlements | null
 }
 
 export interface WatchlistItem {
@@ -1041,4 +1047,32 @@ export interface ResearchCalibrationReport {
    *  being citation-filtered away — a different problem from it not running. */
   lessons_recorded: number
   min_samples_for_signal: number
+}
+
+/** One account, as the Admin page sees it. Carries no credential of any kind. */
+export interface AdminUser {
+  id: string
+  email: string
+  display_name: string
+  created_at?: string | null
+  access_tier: AccessTier
+  /** The operator's per-user override, or null when the plan default applies. */
+  watchlist_cap_override?: number | null
+  /** What that resolves to. null is unlimited. */
+  watchlist_cap?: number | null
+  watching: number
+  research_enabled: boolean
+  research_daily_allowed: boolean
+  llm_key_count: number
+  is_admin: boolean
+}
+
+/** A contact-form submission, waiting to be turned into an account. */
+export interface AccessRequest {
+  id: string
+  name: string
+  email: string
+  message: string
+  interest?: string | null
+  created_at?: string | null
 }

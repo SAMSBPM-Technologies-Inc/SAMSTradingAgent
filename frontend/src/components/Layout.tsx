@@ -10,8 +10,10 @@ import {
   Search,
   Settings as SettingsIcon,
   Target,
+  Users,
 } from 'lucide-react'
 import { useAuth } from '../lib/auth-context'
+import { entitlementsOf } from '../lib/entitlements'
 import { useTheme } from '../lib/theme-context'
 import { useToast } from '../lib/toast-context'
 import { useTradingSettings } from '../lib/trading-context'
@@ -37,14 +39,27 @@ const primaryNav = [
   { to: '/settings', label: 'Settings', icon: SettingsIcon, exact: false },
 ]
 
-/** Kept, not retired — reachable here and from ⌘K. */
-const overflowNav = [
-  { to: '/performance', label: 'Performance', icon: BarChart2 },
-  { to: '/calibration', label: 'Calibration', icon: Target },
-  { to: '/status', label: 'System status', icon: Activity },
-  { to: '/search', label: 'Search tickers', icon: Search },
-  { to: '/guide', label: 'IB Gateway guide', icon: BookOpen },
-]
+/**
+ * Kept, not retired — reachable here and from ⌘K.
+ *
+ * A function of the plan rather than a constant. Two entries are conditional:
+ * the IB Gateway guide is instructions for a broker connection an account
+ * without trading cannot make, and Admin exists for one address. Everything
+ * else is a stored read and stays for everybody — a reader is meant to see the
+ * whole product, just not to spend on it.
+ */
+function overflowFor(
+  { mayTrade, isAdmin }: { mayTrade: boolean; isAdmin: boolean },
+) {
+  return [
+    { to: '/performance', label: 'Performance', icon: BarChart2 },
+    { to: '/calibration', label: 'Calibration', icon: Target },
+    { to: '/status', label: 'System status', icon: Activity },
+    { to: '/search', label: 'Search tickers', icon: Search },
+    ...(mayTrade ? [{ to: '/guide', label: 'IB Gateway guide', icon: BookOpen }] : []),
+    ...(isAdmin ? [{ to: '/admin', label: 'Admin', icon: Users }] : []),
+  ]
+}
 
 const MODE_LABEL: Record<TradingMode, string> = {
   MANUAL: 'Manual',
@@ -162,6 +177,10 @@ function DesktopHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
   const navigate = useNavigate()
   const location = useLocation()
 
+  const overflowNav = overflowFor({
+    mayTrade: entitlementsOf(user).may_trade,
+    isAdmin: !!user?.is_admin,
+  })
   const overflowActive = overflowNav.some((n) => location.pathname.startsWith(n.to))
 
   const tabClass = (isActive: boolean) =>

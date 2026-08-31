@@ -23,6 +23,8 @@ import {
 } from 'lucide-react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { watchlistApi, analyzeApi } from '../../src/lib/api'
+import { useAuth } from '../../src/lib/auth-context'
+import { entitlementsOf, tierRefusal } from '../../src/lib/entitlements'
 import type { Signal, Trigger, WatchlistItem, WatchlistSetupCounts } from '../../src/types'
 import SignalBadge from '../../src/components/SignalBadge'
 import LoadingSpinner from '../../src/components/LoadingSpinner'
@@ -360,8 +362,16 @@ function WatchlistRow({ item, expanded, onToggle, onRemove }: {
 
 // ── Add ticker form ───────────────────────────────────────────────────────────
 
-function AddTickerForm({ onAdded }: { onAdded: () => void }) {
+function AddTickerForm({ onAdded, watching }: { onAdded: () => void; watching: number }) {
   const C = usePalette()
+  const { user } = useAuth()
+  const ent = entitlementsOf(user)
+  const maySpend = ent.may_spend_tokens
+  // The same number the server enforces, reported by `/auth/me` rather than
+  // restated here — so the cap is something you can see coming rather than
+  // something you discover by being refused.
+  const cap = ent.watchlist_cap
+  const full = cap !== null && watching >= cap
   const [value, setValue] = useState('')
   const [suggestions, setSuggestions] = useState<{ symbol: string; name: string }[]>([])
   const [isSearching, setIsSearching] = useState(false)
@@ -404,13 +414,24 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
       // change: adding a name to the watchlist *is* asking the engine to cover
       // it. Without this the row sits blank until the five-minute cycle reaches
       // it, which reads as a broken add.
-      analyzeApi.run(t)
-        .then(() => onAdded())
-        .catch(() => {})
-        .finally(() => setAnalyzingTicker(null))
+      //
+      // Skipped for a plan that cannot run one — the server refuses it, and a
+      // refusal here would land after the add had already succeeded. The row
+      // fills in on the next five-minute cycle instead, which is exactly what
+      // adding a ticker asks for.
+      if (maySpend) {
+        analyzeApi.run(t)
+          .then(() => onAdded())
+          .catch(() => {})
+          .finally(() => setAnalyzingTicker(null))
+      } else {
+        setAnalyzingTicker(null)
+      }
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-      setError(msg ?? 'Failed to add ticker.')
+      // Reads both shapes — the plan gates raise a structured detail, every
+      // older route raises a plain string. The cap refusal is the one message
+      // here a user can actually act on.
+      setError(tierRefusal(err)?.message ?? 'Failed to add ticker.')
     } finally {
       setIsAdding(false)
     }
@@ -510,6 +531,14 @@ function AddTickerForm({ onAdded }: { onAdded: () => void }) {
           <AlertCircle size={13} color={C.red} />
           <Text style={{ fontSize: 12, color: C.red }}>{error}</Text>
         </View>
+      )}
+
+      {cap !== null && (
+        <Text style={{ fontSize: 11, color: C.fgMuted, marginTop: 8 }}>
+          {full
+            ? `Your plan covers ${cap} tickers. Remove one to add another.`
+            : `${watching} of ${cap} tickers`}
+        </Text>
       )}
     </View>
   )
@@ -637,7 +666,7 @@ export default function DashboardScreen() {
               <AccountStrip />
 
               {/* Add ticker */}
-              <AddTickerForm onAdded={fetchWatchlist} />
+              <AddTickerForm onAdded={fetchWatchlist} watching={items.length} />
 
               {/* Error */}
               {error && (

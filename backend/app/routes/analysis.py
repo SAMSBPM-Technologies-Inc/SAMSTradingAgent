@@ -13,11 +13,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, tier_refusal
 from app.models.stock import (
     AnalyzeResponse, FactorInput, QuoteResponse, ScoreBreakdown, SignalGate,
     SignalInputs,
 )
+from app.services import rate_limit
+from app.services.entitlements import entitlements_for
 from app.services.pipeline import run_pipeline
 from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.services.scoring import compute_personalized_score, explain_score
@@ -207,6 +209,10 @@ async def analyze(
     `force_refresh` is the explicit run. Plain `/analyze` keeps its original
     behaviour — stored if fresh, rebuild if not — because the report export and
     the watchlist warm-up still want it.
+
+    **A caller who may not spend tokens gets the stored reading rather than a
+    refusal.** See the note on the degradation below; it is the one gate in the
+    tier system that does not raise.
     """
     ticker = ticker.upper().strip()
     if not ticker:
@@ -216,6 +222,44 @@ async def analyze(
             status_code=400,
             detail="stored_only and force_refresh ask for opposite things",
         )
+
+    ent = entitlements_for(current_user)
+
+    # This route cannot be gated by a dependency: whether it costs anything
+    # depends on the query string. Two checks, deliberately different in kind.
+    if force_refresh and not ent.may_spend_tokens:
+        # The explicit run — what the "Run full analysis" button calls. A
+        # refusal is the honest answer to something deliberately asked for.
+        raise tier_refusal("may_spend_tokens", ent)
+
+    if not ent.may_spend_tokens:
+        # The subtle half. Plain `/analyze` rebuilds whenever the cached signal
+        # is older than the TTL — a full pipeline run plus an analyst call
+        # nobody asked for. But 403ing it would break the report export and the
+        # watchlist warm-up, which both call it, so it degrades to the stored
+        # reading instead of failing.
+        #
+        # Removing this does not fail loudly. It just means readers quietly
+        # start running pipelines again on the deployment's key — the same
+        # silent-regression shape `tests/test_stored_analysis.py` exists to
+        # catch, and it is tested in that style.
+        stored_only = True
+
+    if force_refresh:
+        # The quota, not the entitlement — see `services/rate_limit`. The
+        # analyst call inside `run_pipeline` carries no user_id and writes one
+        # shared document per ticker, so this spend belongs to the deployment
+        # however it was triggered.
+        user_key = str(current_user.get("_id") or "")
+        decision = rate_limit.check_analysis_allowed(user_key)
+        if not decision.allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="You have used today's full-analysis runs. "
+                       "Stored readings are still available.",
+                headers={"Retry-After": str(decision.retry_after)},
+            )
+        rate_limit.record_analysis_run(user_key)
 
     db = await get_db()
 

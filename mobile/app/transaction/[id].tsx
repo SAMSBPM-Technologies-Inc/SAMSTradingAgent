@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native'
-import { useLocalSearchParams, router } from 'expo-router'
+import { Redirect, router, useLocalSearchParams } from 'expo-router'
 import { LineChart } from 'lucide-react-native'
 import { tradingApi } from '../../src/lib/api'
+import { useAuth } from '../../src/lib/auth-context'
+import { entitlementsOf } from '../../src/lib/entitlements'
 import { formatDate, formatTime } from '../../src/lib/format'
 import { SOURCE_DESCRIPTION, SOURCE_LABEL, displaySource } from '../../src/lib/trade-source'
 import { exitReasonLabel } from '../../src/lib/exit-reason'
@@ -47,6 +49,7 @@ function Field({ label, value, tone }: { label: string; value: string; tone?: st
 export default function TransactionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>()
   const C = usePalette()
+  const { user } = useAuth()
 
   const [orders, setOrders] = useState<TradeRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -76,6 +79,11 @@ export default function TransactionScreen() {
     () => (trade ? tickerHistory(orders, trade.ticker) : null),
     [orders, trade],
   )
+
+  // `href: null` hides the tab; it does not close the route. A deep link, an
+  // old alert or a back-stack entry still lands here, so the screen refuses on
+  // its own. The server refuses every request behind it either way.
+  if (!entitlementsOf(user).may_trade) return <Redirect href="/(app)" />
 
   if (loading) {
     return (

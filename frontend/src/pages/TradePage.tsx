@@ -3,6 +3,8 @@ import { useMatch, useNavigate, useParams } from 'react-router-dom'
 import { PanelLeft, X } from 'lucide-react'
 import { analyzeApi, watchlistApi } from '../lib/api'
 import { useToast } from '../lib/toast-context'
+import { useAuth } from '../lib/auth-context'
+import { entitlementsOf, tierRefusal } from '../lib/entitlements'
 import { usePoll } from '../lib/use-poll'
 import { PortfolioProvider, usePortfolio } from '../lib/portfolio-context'
 import type {
@@ -54,6 +56,8 @@ function TradeScreen() {
   const { symbol } = useParams<{ symbol: string }>()
   const navigate = useNavigate()
   const { toast, toastWithUndo } = useToast()
+  const { user } = useAuth()
+  const ent = entitlementsOf(user)
 
   const [items, setItems] = useState<WatchlistItem[]>([])
   const [setups, setSetups] = useState<WatchlistSetupCounts>(EMPTY_SETUPS)
@@ -286,7 +290,15 @@ function TradeScreen() {
     if (!selected) return
     watchlistApi.add(selected)
       .then(() => addToWatchlist(selected))
-      .catch(() => toast(`Could not add ${selected} to your watchlist.`, 'error'))
+      // The server's own message, not a generic one. This used to discard the
+      // response body entirely, which is fine for "the network failed" and
+      // useless for "your plan covers 15 tickers, remove one" — the only
+      // refusal here that the user can actually do something about.
+      .catch((err) =>
+        toast(
+          tierRefusal(err)?.message ?? `Could not add ${selected} to your watchlist.`,
+          'error',
+        ))
   }
 
   const onAgentChanged = () => { void reload() }
@@ -317,12 +329,29 @@ function TradeScreen() {
       // Back rather than a push, so opening and closing five names does not
       // bury the dashboard under five history entries.
       onClose={() => navigate('/')}
-      footer={<OrderPanel data={data} onOrderPlaced={onAgentChanged} />}
+      footer={ent.may_trade
+        ? <OrderPanel data={data} onOrderPlaced={onAgentChanged} />
+        : undefined}
     />
   ) : transactionId ? (
     <TransactionDetail />
-  ) : (
+  ) : ent.may_trade ? (
     <PositionsDashboard />
+  ) : (
+    // The dashboard is holdings and order history, which an account without
+    // trading has none of. A substitute rather than a blank: the watchlist is
+    // beside this column already, so the useful thing to say is which name to
+    // open, not that a table is empty.
+    <div className="flex min-h-[50vh] flex-col items-center justify-center px-6 text-center">
+      <p className="text-[13.5px] font-medium text-[var(--color-fg)]">
+        Pick a ticker to read its analysis
+      </p>
+      <p className="mt-1.5 max-w-sm text-[12px] leading-relaxed text-[var(--color-fg-muted)]">
+        {items.length === 0
+          ? 'Your watchlist is empty. Add a ticker and the engine will start covering it.'
+          : 'Every verdict comes with the six factors behind it, the thresholds it was judged against, and which inputs were actually available.'}
+      </p>
+    </div>
   )
 
   const rail = (
@@ -445,6 +474,12 @@ function TradeScreen() {
           className="contents lg:block lg:min-h-0 lg:overflow-y-auto lg:border-l
                      lg:border-[var(--color-border)] lg:bg-[var(--color-surface)]"
         >
+          {/* The whole right column is the brokerage account: a session
+              status, a queue of proposed orders and a log of placed ones. An
+              account whose plan has no trading has none of those things, so
+              this is removed rather than shown empty — and the server refuses
+              every request behind it regardless. */}
+          {ent.may_trade && (
           <div className="order-3 border-b border-[var(--color-border)]
                           bg-[var(--color-surface)] lg:order-none lg:border-b-0">
             {/* Broker session first: when it is down every action on this
@@ -460,7 +495,9 @@ function TradeScreen() {
                 the sheet that is covering the screen. */}
             <ApprovalsPanel proposals={proposals} onProposalsChanged={onAgentChanged} />
           </div>
+          )}
 
+          {ent.may_trade && (
           <div className="mb-bottom-bar order-5 border-t border-[var(--color-border)]
                           bg-[var(--color-surface)] lg:order-none lg:mb-0 lg:border-t-0">
             {/* Scoped to the name being read, when there is one: what was
@@ -468,6 +505,7 @@ function TradeScreen() {
                 context that turns a verdict into a decision. */}
             <ActivityPanel orders={orders} ticker={selected ?? undefined} />
           </div>
+          )}
         </div>
       </div>
     </Layout>

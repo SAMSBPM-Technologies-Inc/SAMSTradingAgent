@@ -3,6 +3,8 @@ import { ArrowLeft, ExternalLink } from 'lucide-react'
 import type { AnalyzeResponse, Holding, Quote, TradeRecord, WatchlistItem } from '../../types'
 import AnalysisProgress from './AnalysisProgress'
 import { TickerAnalysis, TickerHeader } from './TickerDetail'
+import { useAuth } from '../../lib/auth-context'
+import { entitlementsOf } from '../../lib/entitlements'
 
 /**
  * One name's analysis, in the centre column.
@@ -57,6 +59,9 @@ export default function TickerPanel({
   loading, analysing, neverAnalysed, error,
   onRunAnalysis, onWatch, onUnwatch, onRetry, onClose, footer,
 }: Props) {
+  const { user } = useAuth()
+  const maySpend = entitlementsOf(user).may_spend_tokens
+
   return (
     <div className="overflow-hidden rounded-lg border border-[var(--color-border)]
                     bg-[var(--color-bg)]">
@@ -112,7 +117,15 @@ export default function TickerPanel({
             news, fundamentals and macro data and putting an analyst over the
             result — tens of seconds of work, so it happens when you ask for it.
           </p>
-          <button onClick={onRunAnalysis} className="btn-primary">Run full analysis</button>
+          {maySpend ? (
+            <button onClick={onRunAnalysis} className="btn-primary">Run full analysis</button>
+          ) : (
+            <p className="m-0 max-w-[46ch] text-[12px] text-[var(--color-fg-muted)]">
+              Running one is part of the Pro plan. Adding this ticker to your
+              watchlist puts it on the engine&rsquo;s five-minute cycle, which
+              scores it without anyone asking.
+            </p>
+          )}
         </div>
       ) : data ? (
         <>

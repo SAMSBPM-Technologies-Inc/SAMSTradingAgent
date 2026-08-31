@@ -14,7 +14,7 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
-## [1.17.1] — 2026-08-30
+## [1.19.3] — 2026-08-31
 
 **The status page was reporting on itself.** It read **Degraded** on a server
 where every weighted factor was live. Three separate faults, none of them in the
@@ -53,6 +53,200 @@ cold cache — that reading is correct (the factor really is neutral for that na
 until the backfill lands) but it is easy to mistake for a provider problem, and
 the row does not name the ticker. Nothing here changes what a score is; every
 factor and every verdict is unaffected.
+
+---
+
+## [1.19.2] — 2026-08-31
+
+**Changing a user's plan from the Admin page failed.** The page reported
+"Could not save that change" and the request never reached the server.
+
+`PATCH /admin/users/{id}` is the first PATCH endpoint on this API, and the CORS
+allowlist named only GET, POST, PUT and DELETE. So the browser's preflight for
+it was refused with a 400 and the actual request was never sent. The endpoint
+itself was fine the whole time — it worked from a terminal, and every test that
+called it directly passed — which is exactly why nothing caught it: this class
+of fault is invisible to anything that is not a browser.
+
+PATCH is now allowed, and a test enumerates the app's own route table against
+the CORS allowlist so a route added with a new verb cannot repeat it. A second
+test sends the real preflight rather than only reading the configuration,
+because reading the config proves the config and not the middleware.
+
+### Known gaps
+
+- Nothing else on the API uses a verb outside the allowlist today; the test is
+  what keeps that true rather than a note.
+- Everything from 1.19.1, 1.19.0 and 1.18.0's Known gaps still stands.
+
+---
+
+## [1.19.1] — 2026-08-31
+
+**The Admin page was unreachable.** `ADMIN_EMAIL` shipped defaulting to
+`sudheer.samudrala@sams**pm**.com` — a missing letter — so it matched no
+account and nobody was the operator. There was no error to see: being nobody's
+admin looks exactly like an ordinary account until you go looking for the page.
+Corrected to `@samsbpm.com`, and a test now pins the default to the company
+domain so the two cannot drift apart again quietly.
+
+**The landing page now tells a new visitor how to get in.** Both buttons at the
+top said *Sign in* — a door with no key, since there is no signup form and
+never has been. The only explanation of how to get an account was in section 06,
+below four screens of argument.
+
+- **Request access** is the primary action in the hero and the nav; *Sign in* is
+  still there, quieter, for the people it applies to.
+- A line under the hero buttons says plainly that accounts are provisioned by
+  hand and credentials arrive by email.
+- The sign-in screen has a **No account? Request access** link, so somebody who
+  lands there without one is not left staring at a password box. It goes to the
+  contact form and now actually scrolls to it — the page ignored the anchor
+  before, dropping people at the top.
+
+### Known gaps
+
+- If `ADMIN_EMAIL` was already set by hand in `.env.production` on the server,
+  the corrected default does not override it — check that file, not just this
+  release.
+- Everything from 1.19.0 and 1.18.0's Known gaps still stands.
+
+---
+
+## [1.19.0] — 2026-08-31
+
+**Forgetting a password no longer means losing the account.** The previous
+release shipped with no way to reset one — the honest note in its Known gaps
+said a forgotten password meant the operator recreating the account from
+scratch, losing its watchlist and history with it. There are now three ways to
+set a password, and none of them destroys anything.
+
+- **You can reset anyone's.** A *Reset password* button on each row of the Admin
+  page sets a new one and shows it once, for you to email on. Nothing can read
+  it back afterwards.
+- **People can change their own.** Settings → Account, on both web and phone.
+  The current password is required even though they are already signed in.
+- **"Forgot your password?"** on the sign-in screen emails a one-time link that
+  works for an hour. The phone opens the same page in a browser rather than
+  running a second copy of the flow.
+
+**Changing a password now ends every other session.** Previously a token stayed
+valid for its full 24 hours no matter what happened to the password behind it —
+so resetting a password somebody else knew would not actually have locked them
+out. Now any password change immediately invalidates every session issued
+before it. The device doing the changing stays signed in; every other one is
+cut off. Nobody is signed out by this release itself — only accounts whose
+password actually changes are affected.
+
+**The reset flow will not tell a stranger whether an address has an account.**
+There is no self-serve signup here, so the list of addresses with accounts is
+one you chose — and it stays private. Asking for a link gives the same answer
+for a real address, a fake one, and a mail server that failed; so does
+redeeming an expired, used or invented link.
+
+Reset links are stored only as a hash, work once, expire in an hour, and are
+cancelled the moment a password is set by any other route — so an old email
+sitting in an inbox cannot undo a new password.
+
+**One new setting.** `PUBLIC_BASE_URL` is the origin reset links point at,
+defaulting to `https://sta.samsbpm.com`. It is configured rather than derived
+from the request, because a `Host` header is attacker-controlled and building a
+reset link out of one is how a reset email ends up pointing somewhere else. If
+no SMTP is configured, the forgot-password endpoint says so plainly instead of
+accepting requests that could never be delivered.
+
+### Known gaps
+
+- **A reset email is only as safe as the mailbox.** Anyone who can read the
+  inbox can take the account. That is true of every emailed reset; it is worth
+  saying because these accounts reach a live brokerage connection.
+- **No second factor**, on sign-in or on reset.
+- **Reset-request rate limits are in-process** and reset when the API container
+  restarts, like every other counter here. The link expiry and single-use rule
+  are in the database and are not affected.
+- The admin reset does not notify the account holder that their password
+  changed — they find out when their session ends.
+- Everything from 1.18.0's Known gaps still stands.
+
+---
+
+## [1.18.0] — 2026-08-31
+
+**Other people can be let in now, without letting them cost money or reach the
+brokerage account.** Until this release every account had every feature: the
+broker, the deep-research agents, the model keys, an unbounded watchlist. There
+was no way to give somebody a look at the analysis without also handing them the
+IB Gateway.
+
+Three plans, set per account by the operator:
+
+- **Basic** — the whole portal as a reader. Stored analysis, the watchlist,
+  signals, performance, calibration, system status and alerts. Nothing that
+  starts a model call.
+- **Pro** — all of that, plus deep research and full analysis runs, and their
+  own provider keys. No trading or broker surface at all: the account strip, the
+  order ticket, the approvals queue, the Broker and Autonomy settings and the IB
+  Gateway guide are simply not there.
+- **Trader** — everything, exactly as before.
+
+**Existing accounts are unchanged.** Every one of them becomes a Trader
+explicitly on first startup after the upgrade; nothing you were doing stops.
+
+**Watchlists now have a size.** Basic covers 5 tickers and Pro 15 by default,
+both adjustable per account; Trader is unlimited. The number is shown next to
+the add box — "7 of 15" — rather than only appearing as a refusal, and the
+refusal itself names the count and what to do about it. Re-adding a ticker you
+already watch still works at the cap, because it does not add anything.
+
+**Reading is unaffected by any of this.** Opening a ticker on a Basic account
+shows the stored verdict, the six factors behind it, the risk gate, the chart,
+the input coverage and any research dossier that already exists — in full. What
+changes is the buttons that would *build* something new, which say which plan
+they belong to instead of disappearing.
+
+**Accounts are provisioned from the browser.** A new Admin page — reachable only
+by the address in `ADMIN_EMAIL` — creates accounts, sets plans and caps, and
+lists who has asked through the contact form. Creating an account generates a
+password and shows it once. This replaces SSH-ing to the server to run
+`create_user.py`, which still exists for the first account.
+
+**The contact form is the way in, and now keeps a record.** It asks what you are
+after — "just want to see the analysis" / "in-depth research on my own names" /
+"trading through my own IB account" — and each real submission is stored so
+provisioning is a queue rather than an inbox search. An SMTP outage no longer
+loses the enquiry. Bot submissions are still absorbed silently, and a message
+that fails to send still reports the failure.
+
+**A Pro account spends its own key, not ours.** Deep research on a Pro plan runs
+on the provider keys that account configured, with no silent fallback to the
+server's — and the refusal comes before the work starts, saying "add a provider
+key", rather than after a dossier has been half-assembled.
+
+### Known gaps
+
+- **Basic still costs the deployment money, indirectly.** Every watched ticker
+  joins the union the engine re-runs every five minutes, analyst call included,
+  on the server's key — and that spend is attributed to no user, because the
+  scored document is shared by everyone watching the name. A Basic account
+  cannot *start* a spend; it can still add to the standing one. The ticker cap
+  bounds this and is the reason Basic is capped at all. Per-user cost
+  attribution for the five-minute pipeline still does not exist.
+- **The ticker cap can be exceeded by one** under two genuinely concurrent adds.
+  The uniqueness index constrains duplicate rows, not the total, and a
+  transaction to close a double-click race is not worth what it costs.
+- **Hiding a control is not the gate.** Every hidden control has a matching
+  server refusal today, and a test enumerates the app's own route table to keep
+  the trading surface covered — but a future `/trading` route added outside that
+  router would be reachable.
+- **There is no password reset.** A forgotten password means the operator
+  recreates the account. There is also no self-serve upgrade and no way to
+  delete an account: a user document is referenced by watched tickers, trades
+  and dossiers, none of which cascade.
+- **Rate-limit and quota counters are in-process** and reset when the API
+  container restarts — including the daily cap on full analysis runs. Same
+  trade-off the login and contact limiters already state.
+- The Admin page has no mobile counterpart, and mobile has no Models card, so
+  provider keys can only be configured on the web client.
 
 ---
 

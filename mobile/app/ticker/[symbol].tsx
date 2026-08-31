@@ -23,6 +23,8 @@ import { FactorBreakdown, RiskPanel } from '../../src/components/ScorePanels'
 import ActivityList from '../../src/components/ActivityList'
 import { useNow } from '../../src/lib/use-refresh'
 import { usePalette, type Palette } from '../../src/lib/palette'
+import { useAuth } from '../../src/lib/auth-context'
+import { entitlementsOf } from '../../src/lib/entitlements'
 
 
 const cardStyle = (C: Palette) => ({
@@ -407,13 +409,33 @@ function LivePrice({ quote, fallback }: { quote: Quote | null; fallback?: Analyz
   )
 }
 
-/** The only control on this client that starts a pipeline run. */
+/**
+ * The only control on this client that starts a pipeline run.
+ *
+ * Reads the plan itself rather than being gated at each call site — there are
+ * two of them, and a control this expensive should not depend on both
+ * remembering. Renders a sentence rather than nothing: it sits beside a stored
+ * reading the user can see in full, and a button that vanished next to visible
+ * content reads as a bug rather than as a plan.
+ */
 function RunAnalysisButton({ analysing, hasData, onPress }: {
   analysing: boolean
   hasData: boolean
   onPress: () => void
 }) {
   const C = usePalette()
+  const { user } = useAuth()
+
+  if (!entitlementsOf(user).may_spend_tokens) {
+    return (
+      <Text style={{ marginTop: 12, fontSize: 12, lineHeight: 18, color: C.fgMuted }}>
+        Running a new analysis is part of the Pro plan. Adding this ticker to
+        your watchlist puts it on the engine&rsquo;s five-minute cycle, which
+        scores it without anyone asking.
+      </Text>
+    )
+  }
+
   return (
     <Pressable
       onPress={onPress}
@@ -468,6 +490,8 @@ function TickerTransactions({ ticker, orders, onChanged }: {
 export default function TickerScreen() {
   const C = usePalette()
   const card = cardStyle(C)
+  const { user } = useAuth()
+  const ent = entitlementsOf(user)
   const { symbol } = useLocalSearchParams<{ symbol: string }>()
   const ticker = symbol?.toUpperCase() ?? ''
   const [data, setData] = useState<AnalyzeResponse | null>(null)
@@ -662,10 +686,14 @@ export default function TickerScreen() {
           </View>
 
           {/* Act on it. A verdict with no action was a dead end — you read BUY,
-              then switched to the broker app. */}
-          <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.border }}>
-            <OrderTicket data={data} />
-          </View>
+              then switched to the broker app. Removed rather than disabled for
+              a plan without trading: there is no broker connection to make, so
+              a dimmed ticket would be an upsell where a control should be. */}
+          {ent.may_trade && (
+            <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: C.border }}>
+              <OrderTicket data={data} />
+            </View>
+          )}
 
           {/* Actions row */}
           <View style={{

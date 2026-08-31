@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowRight, ArrowUpRight, Check } from 'lucide-react'
 import { contactApi } from '../lib/api'
@@ -59,11 +59,20 @@ function HomeNav() {
           ))}
         </ul>
 
+        {/* Same ordering as the hero, and for the same reason: the button a
+            stranger can actually use is the one that asks for an account. */}
         <div className="flex items-center gap-1.5">
           <ThemeToggle />
-          <Link to="/auth" className="btn-primary whitespace-nowrap">
+          <Link
+            to="/auth"
+            className="hidden whitespace-nowrap px-2 text-[13px] text-[var(--color-fg-muted)]
+                       transition-colors hover:text-[var(--color-fg)] sm:inline"
+          >
             Sign in
           </Link>
+          <a href="#contact" className="btn-primary whitespace-nowrap">
+            Request access
+          </a>
         </div>
       </nav>
     </header>
@@ -233,15 +242,33 @@ function Hero() {
               loop, on your rules.
             </p>
 
+            {/* Request access is primary and Sign in is not, because almost
+                everybody reading this page does not have an account — there is
+                no self-serve signup, so "Sign in" is a door they cannot open.
+                Leading with it left a first-time visitor no route at all: the
+                only explanation of how to get in was section 06, below four
+                screens of argument. */}
             <div className="mt-9 flex flex-wrap items-center gap-3">
-              <Link to="/auth" className="btn-primary h-11 px-6">
-                Sign in
+              <a href="#contact" className="btn-primary h-11 px-6">
+                Request access
                 <ArrowRight className="h-4 w-4" aria-hidden="true" />
-              </Link>
+              </a>
               <a href="#loop" className="btn-secondary h-11 px-5">
                 How it works
               </a>
+              <Link
+                to="/auth"
+                className="h-11 px-2 text-[13.5px] leading-[2.75rem] text-[var(--color-fg-muted)]
+                           underline-offset-4 transition-colors hover:text-[var(--color-fg)] hover:underline"
+              >
+                Already have an account?
+              </Link>
             </div>
+
+            <p className="mt-5 text-[13px] leading-relaxed text-[var(--color-fg-muted)]">
+              Accounts are provisioned by hand — there is no signup form. Tell us
+              what you trade and you will get credentials by email.
+            </p>
           </div>
 
           <div className="home-rise lg:col-span-5" style={{ animationDelay: '120ms' }}>
@@ -589,6 +616,12 @@ function ContactForm() {
   // Honeypot. A real visitor never sees this field, so anything in it came
   // from a bot filling every input on the page.
   const [company, setCompany] = useState('')
+  // What they are after, in a visitor's terms. Deliberately not "Basic / Pro /
+  // Trader": a stranger has no idea what those mean, and naming plans on a page
+  // that quotes no prices invites a question the page cannot answer. A static
+  // list, because this page reads no context and makes no request on load —
+  // that property is what keeps moving it to a public host a one-line change.
+  const [interest, setInterest] = useState<'' | 'read' | 'research' | 'trade'>('')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -598,7 +631,7 @@ function ContactForm() {
     setError(null)
     setSending(true)
     try {
-      await contactApi.send({ name, email, message, company })
+      await contactApi.send({ name, email, message, company, interest })
       setSent(true)
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -651,6 +684,23 @@ function ContactForm() {
           maxLength={254}
           autoComplete="email"
         />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="contact-interest" className="label-micro">
+          What are you after
+        </label>
+        <select
+          id="contact-interest"
+          className="input"
+          value={interest}
+          onChange={(e) => setInterest(e.target.value as typeof interest)}
+        >
+          <option value="">Not sure yet</option>
+          <option value="read">Just want to see the analysis</option>
+          <option value="research">In-depth research on my own names</option>
+          <option value="trade">Trading through my own IB account</option>
+        </select>
       </div>
 
       <div className="flex flex-col gap-1.5">
@@ -771,6 +821,26 @@ function Footer() {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function HomePage() {
+  // Arriving at `/home#contact` — which is where the sign-in screen sends
+  // somebody who has no account — must actually land on the contact form.
+  // React Router does not act on a hash fragment by itself, so a link that
+  // looks like it works would quietly drop the visitor at the top of the page,
+  // four screens above the only thing they came for.
+  //
+  // Reading `window.location.hash` is not a violation of this page making no
+  // request and reading no context on load: it touches neither the API nor any
+  // provider, so moving this page to its own public host stays a one-line
+  // change.
+  useEffect(() => {
+    const id = window.location.hash.slice(1)
+    if (!id) return
+    // After paint, or the target does not exist to scroll to yet.
+    const frame = requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
   return (
     <div className="home-scroll min-h-dvh bg-[var(--color-bg)] text-[var(--color-fg)]">
       <HomeNav />

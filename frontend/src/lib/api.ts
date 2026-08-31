@@ -45,8 +45,14 @@ export const TOKEN_STORAGE_KEY = TOKEN_KEY
    to attach. Kept separate from authApi so it is obvious that reaching it does
    not imply a session. */
 export const contactApi = {
-  send: (body: { name: string; email: string; message: string; company?: string }) =>
-    api.post<{ sent: boolean }>('/contact', body),
+  send: (body: {
+    name: string
+    email: string
+    message: string
+    company?: string
+    /** What they are after, in their terms. Never a plan name — see HomePage. */
+    interest?: 'read' | 'research' | 'trade' | ''
+  }) => api.post<{ sent: boolean }>('/contact', body),
 }
 
 export const authApi = {
@@ -65,6 +71,30 @@ export const authApi = {
 
   updateProfile: (data: { display_name?: string; scoring_weights?: import('../types').ScoringWeights | null }) =>
     api.put<{ status: string }>('/auth/me', data),
+
+  /**
+   * Change your own password. Returns a fresh token, and that is not a
+   * convenience: the change invalidates every token issued before it,
+   * including the one this request was sent with. The caller must store the
+   * new one or it signs itself out.
+   */
+  changePassword: (current_password: string, new_password: string) =>
+    api.put<{ access_token: string; token_type: string }>('/auth/password', {
+      current_password,
+      new_password,
+    }),
+
+  /** Ask for a reset link. The response is identical whether or not the
+   *  address has an account — do not try to read anything into it. */
+  forgotPassword: (email: string) =>
+    api.post<{ sent: boolean }>('/auth/forgot-password', { email }),
+
+  /** Redeem a link. Returns a token, so the caller lands signed in. */
+  resetPassword: (token: string, new_password: string) =>
+    api.post<{ access_token: string; token_type: string }>('/auth/reset-password', {
+      token,
+      new_password,
+    }),
 }
 
 export const watchlistApi = {
@@ -228,5 +258,58 @@ export const llmApi = {
   testKey: (keyId: string) =>
     api.post<import('../types').LLMKeyTestResult>(
       `/settings/llm/keys/${keyId}/test`,
+    ),
+}
+
+
+/**
+ * Provisioning. Reachable only by the address in `ADMIN_EMAIL` on the server,
+ * which computes `is_admin` and reports it on `/auth/me` — the client never
+ * decides who is the operator.
+ *
+ * Note what is absent: no delete, and no password read-back. A generated
+ * password is returned once, by the call that generated it.
+ */
+export const adminApi = {
+  users: () => api.get<import('../types').AdminUser[]>('/admin/users'),
+
+  createUser: (body: {
+    email: string
+    display_name?: string
+    access_tier: import('./entitlements').AccessTier
+    watchlist_cap?: number | null
+    research_daily_allowed?: boolean
+    password?: string
+  }) =>
+    api.post<{ user: import('../types').AdminUser; password: string | null }>(
+      '/admin/users',
+      body,
+    ),
+
+  updateUser: (
+    id: string,
+    body: {
+      access_tier?: import('./entitlements').AccessTier
+      watchlist_cap?: number
+      clear_watchlist_cap?: boolean
+      research_daily_allowed?: boolean
+    },
+    force = false,
+  ) =>
+    api.patch<import('../types').AdminUser>(`/admin/users/${id}`, body, {
+      params: force ? { force: true } : undefined,
+    }),
+
+  accessRequests: () =>
+    api.get<import('../types').AccessRequest[]>('/admin/access-requests'),
+
+  /**
+   * Reset an account's password. Returns it once — nothing can read it back,
+   * and every session that account had is dead by the time this resolves.
+   */
+  resetPassword: (id: string, password?: string) =>
+    api.post<{ email: string; password: string }>(
+      `/admin/users/${id}/password`,
+      password ? { password } : {},
     ),
 }

@@ -307,6 +307,61 @@ async def _get_user_settings(user_id) -> AutoTradeSettings | None:
     return AutoTradeSettings(**raw)
 
 
+async def _may_trade(user_id) -> bool:
+    """
+    Whether this account's plan includes trading at all.
+
+    Separate from `_get_user_settings` on purpose. Returning `None` there would
+    not block anything: `execute_manual_entry` does
+    `await _get_user_settings(user_id) or AutoTradeSettings()`, so a missing
+    settings document falls back to defaults rather than refusing. The plan is
+    a different question from the configuration, and it belongs in the guard
+    chain with the other refusals.
+
+    Uses the same dual `ObjectId`/`str` candidate matching as
+    `_get_user_settings`, and for the same reason — `users._id` is an ObjectId
+    while `watched_tickers.user_id` stores the stringified form and the pipeline
+    passes the string straight through. Getting that wrong once already made
+    automated trading silently unable to place a single order.
+
+    **A lookup failure allows the trade.** A downgraded account is a business
+    state; a database hiccup is not, and refusing to trade because a read blipped
+    would turn a transient fault into a missed exit-shaped decision. The router
+    dependency on `/trading` still refuses every interactive path, so this
+    failure mode is bounded to the automated one.
+    """
+    from bson import ObjectId
+    from bson.errors import InvalidId
+
+    from app.services.entitlements import entitlements_for
+
+    candidates = [user_id]
+    if isinstance(user_id, str):
+        try:
+            candidates.append(ObjectId(user_id))
+        except (InvalidId, TypeError):
+            pass
+    else:
+        candidates.append(str(user_id))
+
+    try:
+        db = await get_db()
+        user = await db[COLL_USERS].find_one(
+            {"_id": {"$in": candidates}},
+            {"access_tier": 1, "email": 1, "research_daily_allowed": 1},
+        )
+    except Exception as exc:
+        logger.warning("plan_check_failed_allowing",
+                       user_id=str(user_id), error=str(exc))
+        return True
+
+    if user is None:
+        # Distinct from a failed read: this id matches no account, and
+        # `_get_user_settings` already logs and refuses on the same condition.
+        return False
+    return entitlements_for(user).may_trade
+
+
 async def _trade_notify_targets(user_id, event: str = "submit") -> dict:
     """
     Every channel this user wants notifications on, for one kind of event.
@@ -738,6 +793,25 @@ async def _prepare_entry(
     may pick, and the user has explicitly chosen this ticker).
     """
     env = get_settings()
+
+    # ── Guard: the account's plan ─────────────────────────────────────────────
+    # First, because it is the only guard here that answers "may this account
+    # trade at all" rather than "is this particular trade sound".
+    #
+    # It cannot live on the HTTP routes. `pipeline._execute_trades` runs on the
+    # 5-minute cycle, loads every watcher of a ticker, and calls `execute_entry`
+    # directly — no request, no dependency. Without this, an account downgraded
+    # out of trading while `mode=AUTO` keeps placing orders on the operator's
+    # brokerage account indefinitely, with its own UI hidden and every
+    # `/trading` route returning 403. The router gate alone looks finished and
+    # is not.
+    #
+    # Deliberately **not** in `execute_exit`, which does not run this chain at
+    # all: a downgraded account's open positions must stay closable. Same
+    # asymmetry that exempts SELL from every other delay in this system —
+    # refusing to buy costs an opportunity, refusing to sell costs money.
+    if not await _may_trade(user_id):
+        return None, "Trading is not part of this account's plan"
 
     # ── Guard: CIRO restriction ───────────────────────────────────────────────
     if _is_canadian_listed(ticker):
