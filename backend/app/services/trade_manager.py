@@ -716,6 +716,65 @@ class EntryPlan:
         return self.qty + self.held_qty
 
 
+async def _risk_veto(ticker: str) -> str | None:
+    """
+    Whether the engine's own risk gate refuses a BUY on *ticker* right now.
+
+    Returns a reason string to block, or None to allow.
+
+    `RISK_MAX_FOR_BUY` lived in exactly one place — inside
+    `signal_generator.classify_signal` — which meant it guarded the *rule's*
+    verdict and nothing else. Any path that reached `execute_entry` with a BUY
+    the rule had not produced was never risk-checked at all, and that is not a
+    hypothetical path: `analyst.run_analysis` published the model's verdict
+    verbatim, so CBRS was bought on 30 Aug 2026 at a risk score of 6.3, past a
+    veto documented as unconditional. `analyst._gate_analyst_signal` closes
+    that hole at the source; this closes it in the guard chain, because
+    `pipeline._execute_trades` calls `execute_entry` directly on the 5-minute
+    cycle with no request and no dependency behind it. One gate that can be
+    routed around is not a gate — the same argument the plan check makes three
+    guards above.
+
+    **Agent orders only.** This is deliberate and matches what the product
+    already promises: `OrderTicket.tsx` tells a user in as many words that the
+    risk gate restricts what the *agent* may pick and that they can still place
+    the order themselves. The research veto is the one that refuses a human
+    too. Callers opt out with `enforce_risk_gate=False`.
+
+    Assessed from the live feature document rather than from the score carried
+    in on the signal, which may be an hour old: the question is whether the
+    exposure is safe to take on *now*.
+
+    Every uncertain path allows the trade — no feature document, an unreadable
+    database — the same choice `_research_veto` makes and for the same reason.
+    A guard that halts buying because a document is missing is a worse failure
+    than one that occasionally lets a trade through, and it costs nothing in
+    practice: without a feature document there is no score, so there is no
+    agent BUY to arrive here in the first place.
+    """
+    from app.services.risk_engine import RISK_MAX_FOR_BUY, assess_risk
+
+    try:
+        db = await get_db()
+        feat = await db[COLL_FEATURES].find_one({"ticker": ticker.upper()})
+    except Exception as exc:
+        logger.warning("risk_veto_lookup_failed", ticker=ticker, error=str(exc))
+        return None
+
+    if not feat:
+        return None
+
+    risk = assess_risk(feat)
+    score = float(risk.get("risk_score", 0.0) or 0.0)
+    if score >= RISK_MAX_FOR_BUY:
+        return (
+            f"Risk gate: {ticker} scores {score:.1f}/10 ({risk.get('risk_level')}), "
+            f"at or above the {RISK_MAX_FOR_BUY:.1f} that vetoes a BUY. "
+            f"{risk.get('explanation', '')}".strip()
+        )
+    return None
+
+
 async def _research_veto(ticker: str, user_id: str) -> str | None:
     """
     Whether the latest research dossier blocks a BUY on *ticker*.
@@ -778,6 +837,7 @@ async def _prepare_entry(
     *,
     requested_qty: int | None = None,
     enforce_whitelist: bool = True,
+    enforce_risk_gate: bool = True,
 ) -> tuple[EntryPlan | None, str | None]:
     """
     Run every risk guard and size the order. Returns (plan, skip_reason).
@@ -787,10 +847,13 @@ async def _prepare_entry(
     still may not breach the CIRO restriction, the position cap, the daily-loss
     kill switch, the cash reserve, or the refusal to open an unprotected entry.
 
-    Only two things differ for a manual order, and both are passed in rather
+    Three things differ for a manual order, and all three are passed in rather
     than assumed here: the signal-score threshold does not apply (the human is
-    the signal), and the whitelist does not apply (it restricts what the *agent*
-    may pick, and the user has explicitly chosen this ticker).
+    the signal), the whitelist does not apply (it restricts what the *agent* may
+    pick, and the user has explicitly chosen this ticker), and neither does the
+    risk gate — which restricts the agent's picks in the same way, and which the
+    order ticket already tells the user they may override. The research veto is
+    the one that refuses a hand-placed order too.
     """
     env = get_settings()
 
@@ -821,6 +884,18 @@ async def _prepare_entry(
     if enforce_whitelist and settings.allowed_tickers:
         if ticker.upper() not in [t.upper() for t in settings.allowed_tickers]:
             return None, f"Ticker not in allowed list: {settings.allowed_tickers}"
+
+    # ── Guard: risk gate ──────────────────────────────────────────────────────
+    # The engine's own veto, applied where orders are actually placed rather
+    # than only where verdicts are classified. See `_risk_veto` for why one
+    # copy inside `classify_signal` was not enough, and why this is agent-only.
+    #
+    # Applied to adds as well as first entries: an add increases exposure, and
+    # a name that has become too dangerous to open is too dangerous to enlarge.
+    if enforce_risk_gate:
+        risk_block = await _risk_veto(ticker)
+        if risk_block:
+            return None, risk_block
 
     # ── Guard: research veto ──────────────────────────────────────────────────
     # Deep research may BLOCK an entry. It may never create one, enlarge one,
@@ -1503,6 +1578,11 @@ async def execute_manual_entry(
         requested_qty=requested_qty,
         # The whitelist restricts what the agent may pick. The user picked this.
         enforce_whitelist=False,
+        # So does the risk gate, and the order ticket says so on screen: a
+        # vetoed name shows the veto and lets the order through anyway. Note
+        # what is *not* opted out of here — the research veto refuses a
+        # hand-placed order too, and that asymmetry is deliberate.
+        enforce_risk_gate=False,
     )
     if plan is None:
         logger.info(

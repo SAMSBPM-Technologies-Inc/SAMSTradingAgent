@@ -157,3 +157,125 @@ def test_unknown_volatility_reproduces_flat_sizing():
 def test_degenerate_inputs_return_zero():
     assert _calculate_qty(0, 100_000, 0.05, 0.3) == 0
     assert _calculate_qty(100.0, 0, 0.05, 0.3) == 0
+
+
+# ── The risk gate reaches the order path, not just the verdict ────────────────
+#
+# RISK_MAX_FOR_BUY lived only inside `classify_signal`, so it guarded the rule's
+# verdict and nothing else. Any BUY that arrived at `execute_entry` without
+# having been produced by that rule was never risk-checked — and the analyst
+# path published exactly such BUYs. CBRS was bought at risk 6.3 on 30 Aug 2026,
+# past a veto documented as unconditional.
+
+import asyncio  # noqa: E402
+
+from app.services import trade_manager as TM  # noqa: E402
+
+
+class _FeatColl:
+    def __init__(self, doc):
+        self._doc = doc
+
+    async def find_one(self, *_a, **_k):
+        return self._doc
+
+
+class _FeatDb:
+    def __init__(self, doc):
+        self._doc = doc
+
+    def __getitem__(self, _name):
+        return _FeatColl(self._doc)
+
+
+def _wire_features(monkeypatch, doc):
+    async def fake_get_db():
+        return _FeatDb(doc)
+
+    monkeypatch.setattr(TM, "get_db", fake_get_db)
+
+
+def test_the_order_path_refuses_a_name_past_the_veto(monkeypatch):
+    _wire_features(monkeypatch, clean(1.30))
+    reason = asyncio.run(TM._risk_veto("EXMP"))
+
+    assert reason is not None
+    assert "Risk gate" in reason
+
+
+def test_the_order_path_allows_an_ordinary_name(monkeypatch):
+    _wire_features(monkeypatch, clean(0.45))
+    assert asyncio.run(TM._risk_veto("EXMP")) is None
+
+
+def test_an_unassessable_ticker_is_allowed_through(monkeypatch):
+    """
+    Same instinct as the research veto: a guard that halts buying because a
+    document is missing is a worse failure than one that occasionally lets a
+    trade through. Without features there is no signal to act on either.
+    """
+    _wire_features(monkeypatch, None)
+    assert asyncio.run(TM._risk_veto("EXMP")) is None
+
+
+def test_a_database_failure_is_allowed_through(monkeypatch):
+    async def boom():
+        raise RuntimeError("mongo down")
+
+    monkeypatch.setattr(TM, "get_db", boom)
+    assert asyncio.run(TM._risk_veto("EXMP")) is None
+
+
+def test_the_agent_path_consults_the_risk_gate(monkeypatch):
+    """
+    Wiring, not arithmetic: the guard has to be *in* the shared chain.
+    `pipeline._execute_trades` reaches `execute_entry` on the 5-minute cycle
+    with no request behind it, so a check that lives anywhere else is skippable.
+    """
+    async def allow(_user_id):
+        return True
+
+    async def veto(_ticker):
+        return "Risk gate: refused"
+
+    monkeypatch.setattr(TM, "_may_trade", allow)
+    monkeypatch.setattr(TM, "_risk_veto", veto)
+
+    plan, reason = asyncio.run(TM._prepare_entry(
+        "u1", "EXMP", TM.AutoTradeSettings(), 100.0, None, None,
+    ))
+
+    assert plan is None
+    assert reason == "Risk gate: refused"
+
+
+def test_a_hand_placed_order_is_not_risk_gated(monkeypatch):
+    """
+    The order ticket tells the user in as many words that the risk gate
+    restricts what the *agent* may pick and that they may place the order
+    anyway. The research veto is the one that refuses a person too — see
+    CLAUDE.md on which guards are shared and which are the agent's.
+    """
+    seen = {}
+
+    async def fake_settings(_user_id):
+        return TM.AutoTradeSettings()
+
+    async def fake_price(_ticker):
+        return 100.0
+
+    async def fake_prepare(*_a, **kw):
+        seen.update(kw)
+        return None, "stopped here"
+
+    monkeypatch.setattr(TM, "_get_user_settings", fake_settings)
+    monkeypatch.setattr(TM, "_last_known_price", fake_price)
+    monkeypatch.setattr(TM, "_prepare_entry", fake_prepare)
+
+    asyncio.run(TM.execute_manual_entry("u1", "EXMP"))
+
+    assert seen["enforce_risk_gate"] is False
+    # The whitelist is the agent's too, and the research veto is not opted out
+    # of anywhere — it must stay absent from this list.
+    assert seen["enforce_whitelist"] is False
+    assert "enforce_research_veto" not in seen

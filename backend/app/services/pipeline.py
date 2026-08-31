@@ -165,7 +165,10 @@ async def run_pipeline(ticker: str) -> dict:
         # cached document, reflects the current cycle's features.
         if worth_calling:
             try:
-                signal = await run_analysis(ticker)
+                # The published verdict goes in so the analyst's answer is
+                # reconciled against the same hysteresis band the rule-based
+                # path below uses — see `analyst._gate_analyst_signal`.
+                signal = await run_analysis(ticker, previous_signal=prev_signal)
                 if signal:
                     signal["data_sources"] = data_sources
                     signal["inputs"] = inputs

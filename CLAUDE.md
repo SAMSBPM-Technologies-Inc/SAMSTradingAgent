@@ -116,6 +116,32 @@ npm run web
 
 4. **AI Analyst** (`analyst.py`): Claude API generates structured JSON bull/bear report, cached per ticker with invalidation triggers (price change ≥3%, score change ≥0.12, VIX spike ≥30). The model is `ANALYST_MODEL` in `.env` (default `claude-sonnet-5` — see `config.py`); do not restate it in docs or UI, both read it from config via `AnalyzeResponse.analyst_model`.
 
+   **The analyst may veto a BUY. It may never create one.** Same rule as deep
+   research, on the path that actually places orders.
+   `_gate_analyst_signal` reconciles the model's verdict against
+   `classify_signal` before anything is published: a model BUY the rule refuses
+   is published as HOLD, a model HOLD over a rule BUY passes through, and a
+   SELL is never gated at any score — refusing to buy costs an opportunity,
+   refusing to sell costs money. `previous_signal` reaches it from the
+   pipeline, so both paths share one hysteresis band.
+
+   This was missing until 1.22.0, and it was not theoretical.
+   `analyst_gate_margin` is 0.08, so the analyst is called on exactly the band
+   the rule declines — `[0.62, 0.70)` — and its answer was written into
+   `stocks_signals` verbatim, then handed to `execute_entry`. Neither
+   `BUY_THRESHOLD` nor `RISK_MAX_FOR_BUY` was applied, and neither is stated in
+   the system prompt. AMZN was bought at 0.62 and CBRS at 0.66 on a risk score
+   of 6.3, past a veto documented here as unconditional.
+
+   Three properties are load-bearing. `analyst_output` keeps the model's own
+   answer **unrewritten** — it is the only evidence the override can be judged
+   from later. `analyst_gate` is written **whenever the analyst ran**, agreeing
+   or not, because "the gate ran and agreed" and "no gate ran" are different
+   facts and only one can be argued from (the `citation_audit` rule). And every
+   derived field — entry suggestion, exit suggestion, explanation, confidence —
+   describes the **published** verdict, or a refused BUY prints a full buy plan
+   with a stop and a target underneath a HOLD.
+
 5. **IBKR Trading** (`broker.py`, `trade_manager.py`): Per-user IB Gateway connections (Option C). Credentials stored Fernet-encrypted in MongoDB.
 
    **Autonomy is a dial, not a switch.** `AutoTradeSettings.mode` is
@@ -129,12 +155,27 @@ npm run web
    default never silently stops a live system.
 
    **Every order path shares one guard chain.** `_prepare_entry` holds all of
-   them (the account's plan, CIRO, position cap, daily-loss kill switch, cash
-   reserve, refusal to open unbracketed). `execute_entry` and
+   them (the account's plan, CIRO, the risk gate, position cap, daily-loss kill
+   switch, cash reserve, refusal to open unbracketed). `execute_entry` and
    `execute_manual_entry` both go through it — do not add a guard to one path
-   only. A manual order differs in exactly two documented ways: no signal-score
-   threshold (the human is the signal) and no whitelist (that restricts what the
-   *agent* may pick).
+   only. A manual order differs in exactly three documented ways: no
+   signal-score threshold (the human is the signal), no whitelist, and no risk
+   gate — the last two restrict what the *agent* may pick, and the order ticket
+   already tells the user in as many words that they may place a vetoed name
+   themselves. The research veto is the one that refuses a hand-placed order
+   too.
+
+   **`RISK_MAX_FOR_BUY` is checked where orders are placed, not only where
+   verdicts are classified.** It used to live solely inside `classify_signal`,
+   which guarded the rule's verdict and nothing else — so any BUY that reached
+   `execute_entry` without having been produced by that rule was never
+   risk-checked at all. The analyst path published exactly such BUYs (see
+   `_gate_analyst_signal`). `_risk_veto` assesses the **live** feature document,
+   because the question is whether the exposure is safe to take on now, and it
+   applies to adds as well as first entries. Uncertainty allows the trade, as
+   with research. Fixing this at the analyst alone would have been the same
+   mistake as shipping only the `/trading` router gate: one gate that another
+   caller can route around is not a gate.
 
    The plan check is **first**, because it answers "may this account trade at
    all" rather than "is this trade sound", and it is the only guard here that a

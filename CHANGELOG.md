@@ -14,6 +14,74 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.22.0] — 2026-08-31
+
+**The analyst could buy things the engine had refused.** `analyst.py` wrote the
+model's BUY/SELL/HOLD into `stocks_signals` verbatim, beside the composite
+score, and `pipeline._execute_trades` handed that straight to `execute_entry`.
+`classify_signal` — which owns the 0.70 a BUY needs and the risk score of 6.0
+that vetoes one regardless — was never consulted on that path, and neither
+number appears in the system prompt. The analyst is called on precisely the
+band the rule declines (`ANALYST_GATE_MARGIN` is 0.08, so scores from 0.62 up),
+which is where every unexplained entry on the paper account sits: AMZN bought at
+0.62, AVGO at 0.63, NVDA at 0.64, and CBRS at 0.66 on a risk score of 6.3 —
+past a veto this project documents as unconditional. An external review of the
+dashboard found it four times over and read it, reasonably, as the agent
+ignoring its own rules.
+
+- **The analyst may veto a BUY; it may never create one.** The rule deep
+  research has always followed now governs the path that actually places
+  orders. A model BUY the rule refuses is published as **HOLD**. A model HOLD
+  over a rule BUY still stands — that judgement is the whole reason for calling
+  it near the boundary. **A SELL is never gated at any score**, the same
+  asymmetry that exempts exits from every other brake here.
+- **The refusal is recorded, not silently applied.** `analyst_gate` is written
+  onto the signal document whenever the analyst ran — carrying what the model
+  said, what the rule said, what was published, and why — because "the gate ran
+  and agreed" and "no gate ran" are different facts and only one of them can be
+  argued from later. The model's own answer survives untouched in
+  `analyst_output`. The verdict on screen now names the refusal instead of
+  presenting a HOLD as agreement.
+- **A refused BUY no longer prints a buy plan.** Entry price, stop and target
+  were derived from the model's verdict rather than the published one, so a
+  blocked entry still rendered a complete trade underneath a HOLD, at the
+  model's own confidence. Both now describe what was actually published.
+- **The risk veto is checked where orders are placed.** `RISK_MAX_FOR_BUY` lived
+  only inside `classify_signal`, so it guarded the rule's verdict and nothing
+  else — any BUY arriving by another route was never risk-checked at all. It is
+  now a guard in the shared entry chain, assessed against the live feature
+  document, covering scale-in adds as well as first entries. Fixing this at the
+  analyst alone would have repeated the mistake of shipping only the `/trading`
+  router gate: one gate another caller can walk around is not a gate.
+- **Hand-placed orders are unchanged.** The risk gate restricts what the *agent*
+  may pick, which is what the order ticket has always told you on screen — a
+  vetoed name still shows the veto and still lets you place the order. The
+  research veto remains the one that refuses a person too.
+- **The analyst stopped advising a short.** A SELL suggested "Short near $X |
+  cover target $Y" — a trade no TFSA permits and `trade_manager` has no path to
+  place. `signal_generator` had this corrected long ago; the analyst path had
+  not.
+
+**Known gaps.** **Nothing here is visible in the UI yet beyond the explanation
+line.** The BUY-gate panel on the ticker page still computes `score > 0.70` from
+the rule constants and prints ✗ next to whatever verdict was published, with no
+notion of who decided or of the hysteresis band — so it can still contradict the
+badge beside it, which is what made four separate reviewers call the engine
+broken. `analyst_gate` is stored and nothing reads it: the ticker page does not
+show that a BUY was refused, and `/performance/calibration` cannot yet answer
+whether these overrides were ever worth having — the question that should decide
+whether the gate stays this strict. **The analyst can still suppress a SELL**
+the rule wanted, by answering HOLD below 0.30; that is the same class of defect
+in the opposite direction and is deliberately not changed here, because forcing
+exits is money out of the account and wants its own decision. Trades already
+placed under the old behaviour are untouched — four open paper positions were
+opened past a gate that would refuse them today. And this is verified by unit
+tests against a stubbed database, **not** against a live pipeline run: the first
+real proof will be a cycle where a gated BUY appears in the logs as
+`analyst_signal_gated`.
+
+---
+
 ## [1.21.0] — 2026-08-31
 
 **The dashboard told you dollars and left you to guess the rate.** It showed

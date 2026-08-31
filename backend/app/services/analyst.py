@@ -32,7 +32,12 @@ from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
 from app.services import source_health
 from app.services.research.agents.base import AgentSpec, run_agent
-from app.services.risk_engine import assess_risk
+from app.services.risk_engine import RISK_MAX_FOR_BUY, assess_risk
+from app.services.signal_generator import (
+    BUY_THRESHOLD,
+    boundary_confidence,
+    classify_signal,
+)
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -120,11 +125,91 @@ _RESPONSE_SCHEMA: dict = {
 }
 
 
-async def run_analysis(ticker: str, client: Any = None) -> Optional[dict]:
+def _gate_analyst_signal(
+    model_signal: str,
+    score: float,
+    risk_score: float,
+    previous_signal: str | None,
+) -> tuple[str, dict]:
+    """
+    Reconcile the model's verdict with the rule that owns the thresholds.
+
+    **The analyst may veto a BUY. It may never create one.** This is the same
+    rule `services/research/` has always followed, applied to the path that
+    actually places orders — and it was missing here. `run_analysis` used to
+    write `analyst_output["signal"]` into the signal document verbatim, beside
+    the composite score, with `classify_signal` never consulted. Neither
+    `BUY_THRESHOLD` nor `RISK_MAX_FOR_BUY` reached this path, and neither is
+    stated in the system prompt: the model was free to answer BUY on a name the
+    engine's own rule refused, and `pipeline._execute_trades` then handed that
+    verdict straight to `execute_entry`.
+
+    That is not a theoretical hole. `analyst_gate_margin` is 0.08, so the
+    analyst is called precisely on the band the rule declines — scores in
+    [0.62, 0.70) — which is where every unexplained BUY in the 25–31 Aug 2026
+    paper record sits: AMZN at 0.62, AVGO 0.63, NVDA 0.64, CBRS 0.66 on a risk
+    score of 6.3, past a veto that is supposed to be unconditional.
+
+    A model HOLD over a rule BUY is left alone, and so is a SELL at any score:
+    the asymmetry that governs everything else here governs this too — refusing
+    to buy costs an opportunity, refusing to sell costs money.
+
+    `previous_signal` engages the same hysteresis band the rule uses, so an
+    established BUY the analyst still likes is not torn down the moment the
+    score dips a thousandth under the threshold.
+
+    Returns `(published_signal, gate_record)`. The record is written to the
+    signal document whether or not anything was overridden — "the gate ran and
+    agreed" and "no gate ran" are different facts, and only one of them can be
+    argued from later. It is what `/performance/calibration` needs to answer
+    whether these overrides were ever worth having.
+    """
+    rule_signal = classify_signal(score, risk_score, previous_signal)
+
+    published = model_signal
+    reason: str | None = None
+    if model_signal == "BUY" and rule_signal != "BUY":
+        published = "HOLD"
+        if risk_score >= RISK_MAX_FOR_BUY:
+            # Named first because it is the unconditional one: no score
+            # rescues a BUY above the risk veto, so reporting the score here
+            # would suggest a bar this name could have cleared.
+            reason = (
+                f"The analyst read this as a BUY; risk {risk_score:.1f} is at or "
+                f"above the {RISK_MAX_FOR_BUY:.1f} veto, which no score overrides. "
+                f"Published as HOLD."
+            )
+        else:
+            reason = (
+                f"The analyst read this as a BUY; the score of {score:.2f} is under "
+                f"the {BUY_THRESHOLD:.2f} a BUY needs. Published as HOLD."
+            )
+
+    return published, {
+        "model_signal": model_signal,
+        "rule_signal": rule_signal,
+        "published_signal": published,
+        "overridden": published != model_signal,
+        "reason": reason,
+        "score": round(score, 4),
+        "risk_score": round(risk_score, 2),
+        "buy_threshold": BUY_THRESHOLD,
+        "risk_max_for_buy": RISK_MAX_FOR_BUY,
+    }
+
+
+async def run_analysis(
+    ticker: str, client: Any = None, previous_signal: str | None = None
+) -> Optional[dict]:
     """
     Produce a full analyst signal doc for *ticker*.
     Returns a signal-doc-compatible dict (ready to upsert into stocks_signals)
     or None if analyst is disabled / API call fails.
+
+    `previous_signal` is the verdict currently published for this ticker. It
+    reaches `_gate_analyst_signal`, where it engages the hysteresis band — the
+    same one the rule-based path uses, so the two cannot disagree about how
+    sticky an established verdict is.
     """
     settings = get_settings()
     if client is None and not settings.anthropic_api_key:
@@ -177,18 +262,46 @@ async def run_analysis(ticker: str, client: Any = None) -> Optional[dict]:
 
     # Build a signal doc compatible with stocks_signals schema
     price = feat.get("current_price", 0.0)
+    score = round(float(feat.get("composite_score", 0.5) or 0.5), 4)
+
+    published_signal, gate = _gate_analyst_signal(
+        analyst_output.get("signal", "HOLD"),
+        score,
+        risk["risk_score"],
+        previous_signal,
+    )
+
+    # Every derived field below describes *the verdict that was published*, not
+    # the one the model asked for. Feeding the raw output to these helpers is
+    # how a refused BUY would still print an entry price, a stop and a target —
+    # a full buy plan under a HOLD. The model's own answer is preserved
+    # untouched in `analyst_output`; it is the record of what it said, and
+    # rewriting it would destroy the only evidence the override can be judged
+    # from later.
+    published_output = {**analyst_output, "signal": published_signal}
+
     signal_doc = {
         "ticker": ticker,
         "generated_at": utcnow(),
-        "score": round(feat.get("composite_score", 0.5), 4),
+        "score": score,
         "risk": risk,
-        "signal": analyst_output.get("signal", "HOLD"),
-        "confidence": _conviction_to_confidence(analyst_output.get("conviction", "LOW")),
-        "entry_suggestion": _entry_suggestion(analyst_output, price),
-        "exit_suggestion": _exit_suggestion(analyst_output, price),
-        "explanation": _build_explanation(ticker, analyst_output, feat, risk),
+        "signal": published_signal,
+        # A conviction-derived confidence describes the model's view. Once the
+        # gate has refused that view, the published verdict is the rule's, so
+        # the confidence has to be the rule's too — otherwise a HOLD nobody was
+        # confident about is reported at the model's 0.85.
+        "confidence": (
+            boundary_confidence(score, published_signal) if gate["overridden"]
+            else _conviction_to_confidence(analyst_output.get("conviction", "LOW"))
+        ),
+        "entry_suggestion": _entry_suggestion(published_output, price),
+        "exit_suggestion": _exit_suggestion(published_output, price),
+        "explanation": _build_explanation(ticker, published_output, feat, risk, gate),
         # Extended analyst fields
         "analyst_output": analyst_output,
+        # What the gate made of the model's answer. Always written when the
+        # analyst ran — see `_gate_analyst_signal`.
+        "analyst_gate": gate,
         # Persisted, not merely returned. `pipeline._needs_analyst_refresh`
         # reads this field back off the stored document to decide whether a
         # cached analyst signal exists; the pipeline used to set it on the
@@ -205,12 +318,28 @@ async def run_analysis(ticker: str, client: Any = None) -> Optional[dict]:
 
     await db[COLL_SIGNALS].replace_one({"ticker": ticker}, signal_doc, upsert=True)
 
+    if gate["overridden"]:
+        # WARNING, not info: the model and the engine's own rule disagreed about
+        # committing capital. It is a normal, expected outcome — but a run of
+        # them says the analyst is being asked a question the gate will not let
+        # it answer, and that is worth being able to grep for.
+        logger.warning(
+            "analyst_signal_gated",
+            ticker=ticker,
+            model_signal=gate["model_signal"],
+            published=gate["published_signal"],
+            score=gate["score"],
+            risk_score=gate["risk_score"],
+            conviction=analyst_output.get("conviction"),
+        )
+
     logger.info(
         "analyst_complete",
         ticker=ticker,
         signal=signal_doc["signal"],
         conviction=analyst_output.get("conviction"),
         price_target=analyst_output.get("price_target"),
+        gated=gate["overridden"],
     )
     return signal_doc
 
@@ -460,7 +589,15 @@ def _entry_suggestion(output: dict, price: float) -> Optional[str]:
             parts.append(f"target ${pt:.2f}")
         return " | ".join(parts)
     if signal == "SELL":
-        return f"Short near ${price:.2f}" + (f" | cover target ${pt:.2f}" if pt else "")
+        # SELL means "exit the position", never "open a short" — the same
+        # correction `signal_generator._price_suggestions` already carries.
+        # Shorting is not permitted in a TFSA and `trade_manager` has no path
+        # that opens one, so "Short near $X | cover target $Y" described a trade
+        # this system cannot place. The analyst path kept printing it.
+        return (
+            f"Exit at ${price:.2f} (current). "
+            f"No position — no action; this is not a short signal."
+        )
     return None
 
 
@@ -483,7 +620,9 @@ def _exit_suggestion(output: dict, price: float) -> Optional[str]:
     return None
 
 
-def _build_explanation(ticker: str, output: dict, feat: dict, risk: dict) -> str:
+def _build_explanation(
+    ticker: str, output: dict, feat: dict, risk: dict, gate: dict | None = None
+) -> str:
     signal    = output.get("signal", "HOLD")
     conviction = output.get("conviction", "LOW")
     thesis    = output.get("thesis", "")
@@ -501,8 +640,17 @@ def _build_explanation(ticker: str, output: dict, feat: dict, risk: dict) -> str
     indicators = " | ".join(filter(None, [rsi_str, macd_str]))
     scores_str = f"tech={tech_s:.2f} fund={fund_s:.2f} sent={sent_s:.2f} macro={macro_s:.2f}"
 
-    return (
+    text = (
         f"{ticker} → {signal} ({conviction}) | score={score:.2f} | "
         f"Risk={risk['risk_level']} ({risk['risk_score']:.1f}/10) | "
         f"{indicators} | [{scores_str}] | {thesis}"
     )
+
+    # A refused BUY has to say so here. This string is what the ticker page
+    # prints when the model wrote no thesis, what the report export carries, and
+    # what a reader compares against the gate panel — and a HOLD that silently
+    # drops the model's BUY reads as agreement between the two.
+    if gate and gate.get("overridden") and gate.get("reason"):
+        text += f" | Gate: {gate['reason']}"
+
+    return text
