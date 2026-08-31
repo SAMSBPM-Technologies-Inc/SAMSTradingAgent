@@ -17,7 +17,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.db import COLL_USERS, get_db
-from app.services.auth import decode_token
+from app.services.auth import decode_token, token_predates_password_change
 from app.services.entitlements import Entitlements, entitlements_for, is_admin
 
 _bearer = HTTPBearer()
@@ -38,6 +38,18 @@ async def get_current_user(
     user = await db[COLL_USERS].find_one({"_id": ObjectId(payload["sub"])})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+
+    # A password change ends every session issued before it. Without this a
+    # reset would rotate the credential and leave any stolen token working for
+    # the rest of its 24 hours, which is most of what resetting is for.
+    #
+    # The caller who *made* the change is not signed out: `PUT /auth/password`
+    # hands back a freshly minted token in the same response.
+    if token_predates_password_change(payload, user):
+        raise HTTPException(
+            status_code=401,
+            detail="Your password changed. Sign in again.",
+        )
 
     return user
 

@@ -232,6 +232,57 @@ def record_analysis_run(user_id: str) -> None:
     _by_analysis.record_failure(user_id)
 
 
+# ── Password reset requests ───────────────────────────────────────────────────
+#
+# `POST /auth/forgot-password` is unauthenticated and sends mail, which puts it
+# in the same category as the contact form. It is keyed on **both** the address
+# and the client, like login and unlike contact: the address stops one mailbox
+# being flooded by somebody who knows it, and the client stops one machine
+# walking a list of addresses to see which ones exist.
+#
+# Note that limiting per address does not leak existence, because the counter
+# is charged whether or not an account matched — a rate-limited response says
+# only that this address has been asked about recently.
+
+RESET_MAX_REQUESTS = 5
+RESET_WINDOW_SECONDS = 3600
+RESET_LOCKOUT_SECONDS = 3600
+
+_by_reset_email = _SlidingWindow(
+    max_hits=RESET_MAX_REQUESTS,
+    window_seconds=RESET_WINDOW_SECONDS,
+    lockout_seconds=RESET_LOCKOUT_SECONDS,
+)
+_by_reset_client = _SlidingWindow(
+    max_hits=RESET_MAX_REQUESTS * 3,
+    window_seconds=RESET_WINDOW_SECONDS,
+    lockout_seconds=RESET_LOCKOUT_SECONDS,
+)
+
+
+def check_reset_allowed(email: str, client_ip: str) -> LimitDecision:
+    """Whether another reset link may be requested. Records nothing."""
+    _by_reset_email.prune()
+    _by_reset_client.prune()
+    for window, key in ((_by_reset_email, email.lower()), (_by_reset_client, client_ip)):
+        decision = window.check(key)
+        if not decision.allowed:
+            return decision
+    return LimitDecision(True)
+
+
+def record_reset_request(email: str, client_ip: str) -> None:
+    """
+    Count a request — every one, matched account or not.
+
+    Charging only the ones that found an account would make the rate limit
+    itself an oracle: an attacker could tell a real address from a fake one by
+    which of them eventually got throttled.
+    """
+    _by_reset_email.record_failure(email.lower())
+    _by_reset_client.record_failure(client_ip)
+
+
 def reset_for_tests() -> None:
     """Drop all state. Test seam only."""
     _by_email.__init__()    # type: ignore[misc]
@@ -245,4 +296,14 @@ def reset_for_tests() -> None:
         max_hits=get_settings().analysis_runs_per_day,
         window_seconds=_ANALYSIS_WINDOW_SECONDS,
         lockout_seconds=_ANALYSIS_WINDOW_SECONDS,
+    )
+    _by_reset_email.__init__(   # type: ignore[misc]
+        max_hits=RESET_MAX_REQUESTS,
+        window_seconds=RESET_WINDOW_SECONDS,
+        lockout_seconds=RESET_LOCKOUT_SECONDS,
+    )
+    _by_reset_client.__init__(  # type: ignore[misc]
+        max_hits=RESET_MAX_REQUESTS * 3,
+        window_seconds=RESET_WINDOW_SECONDS,
+        lockout_seconds=RESET_LOCKOUT_SECONDS,
     )

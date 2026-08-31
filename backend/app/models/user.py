@@ -140,3 +140,53 @@ class AccessRequestRow(BaseModel):
     message: str
     interest: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+class AdminPasswordResetRequest(BaseModel):
+    """
+    Reset an account's password on the operator's say-so.
+
+    No current password: the whole point is that nobody has it. Omit
+    `password` to have one generated — which is the normal case, since the
+    operator is about to email it.
+    """
+
+    password: Optional[str] = Field(default=None, min_length=12, max_length=200)
+
+
+class AdminPasswordResetResponse(BaseModel):
+    """
+    The new password, returned once.
+
+    Shown by the call that set it and readable from nowhere else. Every session
+    that account had is already dead by the time this returns.
+    """
+
+    email: EmailStr
+    password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    """
+    A signed-in user changing their own password.
+
+    `current_password` is required even though the caller already holds a valid
+    token: a token can be stolen, and without this a stolen one could lock the
+    real owner out of their own account permanently.
+    """
+
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=12, max_length=200)
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Ask for a reset link. The response never says whether the account exists."""
+
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    """Redeem a reset link. The token is single-use and short-lived."""
+
+    token: str = Field(min_length=16, max_length=200)
+    new_password: str = Field(min_length=12, max_length=200)

@@ -8,11 +8,11 @@ address named in `ADMIN_EMAIL`.
 
 Three things this module deliberately does not do:
 
-**It never returns a credential.** `AdminUserRow` has no field capable of
-holding a `password_hash` or a key ciphertext — a type-level guarantee rather
+**It never returns a stored credential.** `AdminUserRow` has no field capable
+of holding a `password_hash` or a key ciphertext — a type-level guarantee rather
 than a `del` before serialising, the same choice `models/llm.KeyStatus` makes.
-A generated password is returned exactly once, from the call that generated it,
-and no route can read it back.
+The two routes that *set* a password return it exactly once, in the response to
+the call that set it, and no route can read it back afterwards.
 
 **There is no `is_admin` field to grant.** Admin identity comes from config, so
 the class of bug where a careless `$set` of a request body turns an editable
@@ -37,12 +37,15 @@ from app.models.trade import TradeStatus
 from app.models.user import (
     AccessRequestRow,
     AccessTier,
+    AdminPasswordResetRequest,
+    AdminPasswordResetResponse,
     AdminUserCreateRequest,
     AdminUserCreateResponse,
     AdminUserRow,
     AdminUserUpdateRequest,
 )
-from app.services.auth import generate_password, new_user_document
+from app.services.auth import generate_password, new_user_document, password_update
+from app.services import password_reset
 from app.services.entitlements import entitlements_for, is_admin
 from app.utils.logger import get_logger
 
@@ -272,6 +275,47 @@ async def _open_positions(db, user: dict) -> list[str]:
                      impact="a downgrade may proceed without warning about open positions")
         return []
     return sorted({r["ticker"] for r in rows if r.get("ticker")})
+
+
+@router.post("/users/{user_id}/password", response_model=AdminPasswordResetResponse,
+             summary="Reset an account's password")
+async def reset_user_password(
+    user_id: str,
+    body: AdminPasswordResetRequest,
+) -> AdminPasswordResetResponse:
+    """
+    Set a new password for an account and return it once.
+
+    No current password is asked for, because the situation this exists for is
+    that nobody has it. That makes it the most powerful route on the API —
+    which is why it is behind `require_admin` like everything else here, and
+    why it is worth stating that it cannot be reached by the highest tier.
+
+    **Every session that account had dies here**, including any the operator is
+    resetting *because* it was compromised. That comes from
+    `password_update` recording `password_changed_at`, which
+    `get_current_user` checks every existing token against.
+
+    The password is returned by this call and readable from nowhere else. It is
+    never stored in plaintext and never logged — the log line below records
+    that a reset happened and for whom, which is what an audit needs, and not
+    the credential itself.
+    """
+    db = await get_db()
+    oid = _oid(user_id)
+    user = await db[COLL_USERS].find_one({"_id": oid}, {"email": 1})
+    if not user:
+        raise HTTPException(status_code=404, detail="No such user")
+
+    generated = body.password is None
+    password = body.password or generate_password()
+    await db[COLL_USERS].update_one({"_id": oid}, {"$set": password_update(password)})
+    # Any reset link already in flight for this account is now stale — leaving
+    # one live would let an old email replace the password just issued.
+    await password_reset.revoke_for(str(oid))
+
+    logger.warning("admin_password_reset", email=user["email"], generated=generated)
+    return AdminPasswordResetResponse(email=user["email"], password=password)
 
 
 @router.get("/access-requests", response_model=list[AccessRequestRow],

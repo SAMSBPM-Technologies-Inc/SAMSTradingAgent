@@ -818,3 +818,37 @@ async def send_contact_message(name: str, email: str, message: str,
     )
 
     return await _send_email(to, subject, text, html_body, reply_to=email)
+
+
+# ── Password reset ────────────────────────────────────────────────────────────
+
+async def send_password_reset(email: str, link: str, ttl_minutes: int) -> str | None:
+    """
+    Mail a one-time reset link.
+
+    Returns None on success or a short reason on failure. The route does not
+    surface that reason: telling a stranger the difference between "we sent it"
+    and "there is no such account" is the enumeration this whole flow is shaped
+    to avoid. It is logged instead, which is where somebody debugging a missing
+    email should be looking anyway.
+
+    The mail says what to do if it was not requested, and it does **not** say
+    what the account can do or what plan it is on — a reset email reaches a
+    mailbox that may no longer belong to the account holder.
+    """
+    subject = "Reset your SAMSTradingAgent password"
+    text = (
+        "Someone asked to reset the password for this address.\n\n"
+        f"{link}\n\n"
+        f"The link works once and expires in {ttl_minutes} minutes.\n\n"
+        "If that was not you, nothing has changed and you can ignore this "
+        "message. Your current password still works.\n"
+    )
+    html = (
+        "<p>Someone asked to reset the password for this address.</p>"
+        f'<p><a href="{link}">Set a new password</a></p>'
+        f"<p>The link works once and expires in {ttl_minutes} minutes.</p>"
+        "<p>If that was not you, nothing has changed and you can ignore this "
+        "message. Your current password still works.</p>"
+    )
+    return await _send_email(email, subject, text, html)

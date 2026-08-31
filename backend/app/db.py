@@ -210,6 +210,22 @@ async def _ensure_indexes() -> None:
         "created_at", expireAfterSeconds=180 * 24 * 3600, background=True,
         name="created_at_ttl",
     )
+    # password_resets: looked up by token hash on every redemption, so that
+    # index is load-bearing rather than an optimisation. Unique because two
+    # documents sharing a hash would mean two live links for one token.
+    #
+    # The TTL is set on `expires_at` with expireAfterSeconds=0, so Mongo deletes
+    # each document at its own deadline rather than at a fixed age. It is a
+    # sweeper, not the enforcement: `redeem` puts the expiry in its filter, so a
+    # token is dead the second it lapses whether or not the collection has been
+    # swept yet.
+    await db[COLL_PASSWORD_RESETS].create_index(
+        "token_hash", unique=True, background=True,
+    )
+    await db[COLL_PASSWORD_RESETS].create_index("user_id", background=True)
+    await db[COLL_PASSWORD_RESETS].create_index(
+        "expires_at", expireAfterSeconds=0, background=True, name="expires_at_ttl",
+    )
     # trades: index by user + ticker for fast position lookups
     await db[COLL_TRADES].create_index([("user_id", 1), ("ticker", 1)], background=True)
     await db[COLL_TRADES].create_index("opened_at", background=True)
@@ -295,6 +311,10 @@ COLL_DOSSIERS       = "research_dossiers"        # deep-research output per tick
 #: inbox search. Bounded by a TTL index as well as by the per-address rate
 #: limit — the form is unauthenticated, so time is the second bound.
 COLL_ACCESS_REQUESTS = "access_requests"         # who asked for an account
+#: Outstanding password-reset links, stored as a hash of the token and never
+#: the token itself. Single-use and short-lived; the TTL index is a backstop
+#: for the ones nobody ever clicks.
+COLL_PASSWORD_RESETS = "password_resets"         # one-time reset links
 #: One document per data source plus one per subsystem — never per ticker, so it
 #: is bounded at a handful of rows forever and does not grow with the watchlist,
 #: the user count or time. Current state only; this is deliberately not a time

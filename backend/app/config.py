@@ -239,6 +239,15 @@ class Settings(BaseSettings):
         description="Full-analysis runs per user per day (force_refresh)",
     )
 
+    # Where a password-reset link points. The API and the web client are on
+    # different hosts, so the server cannot derive this from the request — a
+    # Host header is attacker-controlled, and building a reset link out of one
+    # is how a reset email ends up pointing at somebody else's site.
+    public_base_url: str = Field(
+        default="https://sta.samsbpm.com",
+        description="Public origin of the web client; used to build reset links",
+    )
+
     @property
     def email_enabled(self) -> bool:
         return bool(self.smtp_host and self.smtp_username and self.smtp_password)
