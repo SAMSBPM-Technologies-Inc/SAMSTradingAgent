@@ -40,7 +40,7 @@ SIGNAL_HYSTERESIS = 0.03
 
 __all__ = ["BUY_THRESHOLD", "SELL_THRESHOLD", "SIGNAL_HYSTERESIS",
            "RISK_MAX_FOR_BUY", "generate_signal", "generate_signals_all",
-           "classify_signal"]
+           "classify_signal", "boundary_confidence"]
 
 
 def classify_signal(
@@ -69,6 +69,32 @@ def classify_signal(
     return "HOLD"
 
 
+def boundary_confidence(score: float, signal: str) -> float:
+    """
+    How far *score* sits from the nearest boundary that would change *signal*,
+    scaled to [0, 1].
+
+    This is DISTANCE FROM THE DECISION BOUNDARY, not a probability. It says how
+    far from flipping the verdict is, which is not the same as how often
+    verdicts at this level have been right — nothing has ever compared it
+    against `stocks_signal_history`. Read it as conviction in the arithmetic,
+    not as a hit rate.
+
+    Extracted so the analyst path can use it. When the analyst's BUY is
+    refused by the gate, the verdict that gets published is the rule's, and a
+    confidence derived from the model's conviction would describe a verdict
+    nobody published — "85% confident HOLD" for a model that wanted to buy.
+    """
+    if signal == "BUY":
+        return clamp((score - BUY_THRESHOLD) / (1.0 - BUY_THRESHOLD))
+    if signal == "SELL":
+        return clamp((SELL_THRESHOLD - score) / SELL_THRESHOLD)
+    # Certainty of being in the middle band.
+    return clamp(
+        min(abs(score - BUY_THRESHOLD), abs(score - SELL_THRESHOLD)) / 0.40
+    )
+
+
 async def generate_signal(ticker: str, previous_signal: str | None = None) -> dict:
     """
     Load feature doc → assess risk → apply signal rules → persist + return signal dict.
@@ -87,20 +113,7 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
     # ── Signal decision ───────────────────────────────────────────────────────
     signal = classify_signal(score, risk_score, previous_signal)
 
-    # Confidence is DISTANCE FROM THE DECISION BOUNDARY, not a probability.
-    # It says how far from flipping the verdict is, which is not the same as how
-    # often verdicts at this level have been right — nothing has ever compared
-    # it against stocks_signal_history. Read it as conviction in the arithmetic,
-    # not as a hit rate.
-    if signal == "BUY":
-        confidence = clamp((score - BUY_THRESHOLD) / (1.0 - BUY_THRESHOLD))
-    elif signal == "SELL":
-        confidence = clamp((SELL_THRESHOLD - score) / SELL_THRESHOLD)
-    else:
-        # Certainty of being in the middle band
-        dist_from_buy = abs(score - BUY_THRESHOLD)
-        dist_from_sell = abs(score - SELL_THRESHOLD)
-        confidence = clamp(min(dist_from_buy, dist_from_sell) / 0.40)
+    confidence = boundary_confidence(score, signal)
 
     # ── Entry / exit suggestions ──────────────────────────────────────────────
     price = feat.get("current_price", 0.0)

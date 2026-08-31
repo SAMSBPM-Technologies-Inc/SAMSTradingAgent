@@ -244,6 +244,29 @@ def wired(monkeypatch):
     return db
 
 
+def _wire(monkeypatch, **feat_over):
+    """A `wired` db with the feature document adjusted — score, volatility, …"""
+    feat = dict(FEATURES)
+    feat.update(feat_over)
+    db = _Db(feat, dict(RAW))
+
+    async def fake_get_db():
+        return db
+
+    monkeypatch.setattr(A, "get_db", fake_get_db)
+    return db
+
+
+def _run(monkeypatch, *, previous_signal=None, feat=None, **out_over):
+    """Run the analyst end to end against a stubbed db and return the doc."""
+    _wire(monkeypatch, **(feat or {}))
+    return asyncio.run(A.run_analysis(
+        "EXMP",
+        client=FakeClient(_output(**out_over)),
+        previous_signal=previous_signal,
+    ))
+
+
 def test_a_signal_doc_is_written_with_analyst_used_persisted(wired):
     """
     `analyst_used` on the *stored* document is what `pipeline` reads back to
@@ -286,3 +309,183 @@ def test_conviction_maps_to_the_confidence_the_trading_path_reads():
     # Anything unrecognised is treated as the least confident reading, never
     # the most — the failure direction that cannot open a position.
     assert A._conviction_to_confidence("SPECTACULAR") == 0.25
+
+
+# ── The gate over the model's verdict ─────────────────────────────────────────
+#
+# The analyst may veto a BUY. It may never create one.
+#
+# `run_analysis` used to write `analyst_output["signal"]` into the signal
+# document verbatim, and `pipeline._execute_trades` handed that straight to
+# `execute_entry`. `classify_signal` was never consulted, so neither
+# BUY_THRESHOLD nor RISK_MAX_FOR_BUY reached the path that places orders — and
+# `analyst_gate_margin` of 0.08 means the analyst is called precisely on the
+# band the rule declines. Every test below is a trade that really happened on
+# the paper account between 25 and 31 Aug 2026.
+
+from app.services.risk_engine import RISK_MAX_FOR_BUY  # noqa: E402
+from app.services.signal_generator import BUY_THRESHOLD  # noqa: E402
+
+#: Volatility that scores past the risk veto on its own — the curve's knee is
+#: placed on RISK_MAX_FOR_BUY at 100% annualised, so this clears it.
+_VETOED_VOL = 1.05
+
+
+def test_a_model_buy_under_the_threshold_is_published_as_hold(monkeypatch):
+    """AMZN, 0.62, bought on the model's word alone."""
+    doc = _run(monkeypatch, feat={"composite_score": 0.62}, signal="BUY")
+
+    assert doc["signal"] == "HOLD"
+    assert doc["analyst_gate"]["overridden"] is True
+    assert doc["analyst_gate"]["model_signal"] == "BUY"
+    assert f"{BUY_THRESHOLD:.2f}" in doc["analyst_gate"]["reason"]
+
+
+def test_a_model_buy_above_the_risk_veto_is_published_as_hold(monkeypatch):
+    """
+    CBRS: risk 6.3, bought anyway. The risk veto is documented as
+    unconditional, and on this path it was not applied at all.
+    """
+    doc = _run(
+        monkeypatch,
+        feat={"composite_score": 0.85, "volatility_20d": _VETOED_VOL},
+        signal="BUY",
+    )
+
+    assert doc["risk"]["risk_score"] >= RISK_MAX_FOR_BUY
+    assert doc["signal"] == "HOLD"
+    assert doc["analyst_gate"]["overridden"] is True
+    # The score cleared its bar comfortably, so the reason must name the risk
+    # rather than a threshold this name actually passed.
+    assert "risk" in doc["analyst_gate"]["reason"].lower()
+
+
+def test_a_model_buy_the_rule_agrees_with_is_published(monkeypatch):
+    """The gate is a veto, not a mute button."""
+    doc = _run(monkeypatch, feat={"composite_score": 0.72}, signal="BUY")
+
+    assert doc["signal"] == "BUY"
+    assert doc["analyst_gate"]["overridden"] is False
+    assert doc["analyst_gate"]["reason"] is None
+
+
+def test_the_analyst_may_still_refuse_a_buy_the_rule_wanted(monkeypatch):
+    """
+    The whole point of calling a model near the boundary. A HOLD over a rule
+    BUY passes through untouched, and the disagreement is still recorded.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.85}, signal="HOLD")
+
+    assert doc["signal"] == "HOLD"
+    assert doc["analyst_gate"]["rule_signal"] == "BUY"
+    assert doc["analyst_gate"]["overridden"] is False
+
+
+def test_a_sell_is_never_gated(monkeypatch):
+    """
+    Same asymmetry as everywhere else here: refusing to buy costs an
+    opportunity, refusing to sell costs money. A SELL publishes at any score.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.62}, signal="SELL")
+    assert doc["signal"] == "SELL"
+
+    hot = _run(
+        monkeypatch,
+        feat={"composite_score": 0.85, "volatility_20d": _VETOED_VOL},
+        signal="SELL",
+    )
+    assert hot["signal"] == "SELL"
+
+
+def test_an_established_buy_keeps_the_hysteresis_band(monkeypatch):
+    """
+    0.68 is under the threshold but inside the band, so a BUY already in force
+    survives. The two paths must not disagree about how sticky a verdict is.
+    """
+    held = _run(
+        monkeypatch, feat={"composite_score": 0.68},
+        previous_signal="BUY", signal="BUY",
+    )
+    assert held["signal"] == "BUY"
+
+    # Nothing standing — the same score has to clear the full threshold.
+    fresh = _run(monkeypatch, feat={"composite_score": 0.68}, signal="BUY")
+    assert fresh["signal"] == "HOLD"
+
+
+def test_a_refused_buy_does_not_print_a_buy_plan(monkeypatch):
+    """
+    Entry price, stop and target under a HOLD is a buy plan for a trade the
+    engine just refused — the derived fields describe the published verdict.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.62}, signal="BUY")
+
+    assert doc["signal"] == "HOLD"
+    assert doc["entry_suggestion"] is None
+    assert "Gate:" in doc["explanation"]
+
+
+def test_a_refused_buy_keeps_the_models_own_answer(monkeypatch):
+    """
+    The override is only judgeable later if what the model actually said
+    survives. `analyst_output` is the record; it is never rewritten.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.62}, signal="BUY")
+
+    assert doc["analyst_output"]["signal"] == "BUY"
+    assert doc["analyst_output"]["conviction"] == "HIGH"
+
+
+def test_confidence_on_a_refused_buy_is_the_rules_not_the_models(monkeypatch):
+    """
+    HIGH conviction maps to 0.85. Publishing that against a HOLD reports a
+    verdict nobody was confident about at the confidence of one that was
+    overruled.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.62}, signal="BUY")
+
+    assert doc["signal"] == "HOLD"
+    assert doc["confidence"] != A._conviction_to_confidence("HIGH")
+    assert doc["confidence"] == pytest.approx(0.2, abs=1e-6)
+
+
+def test_the_gate_record_is_written_even_when_it_agreed(monkeypatch):
+    """
+    "The gate ran and agreed" and "no gate ran" are different facts, and only
+    one of them can be argued from later. Same rule `citation_audit` follows.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.72}, signal="BUY")
+
+    gate = doc["analyst_gate"]
+    assert gate["overridden"] is False
+    assert gate["buy_threshold"] == BUY_THRESHOLD
+    assert gate["risk_max_for_buy"] == RISK_MAX_FOR_BUY
+    assert gate["score"] == pytest.approx(0.72)
+
+
+def test_the_gate_is_persisted_not_merely_returned(monkeypatch):
+    """
+    `stocks_signals` is what the UI and the calibration replay read. A gate
+    record that exists only on the returned dict explains nothing to either.
+    """
+    db = _wire(monkeypatch, composite_score=0.62)
+    asyncio.run(A.run_analysis(
+        "EXMP", client=FakeClient(_output(signal="BUY")),
+    ))
+
+    stored = db["stocks_signals"].replaced[0]
+    assert stored["signal"] == "HOLD"
+    assert stored["analyst_gate"]["overridden"] is True
+
+
+def test_sell_advice_does_not_suggest_shorting(monkeypatch):
+    """
+    `signal_generator._price_suggestions` had this corrected; the analyst path
+    kept printing "Short near $X". No TFSA permits it and `trade_manager` has
+    no path that opens one.
+    """
+    doc = _run(monkeypatch, feat={"composite_score": 0.20}, signal="SELL")
+
+    assert doc["signal"] == "SELL"
+    assert "short" not in (doc["exit_suggestion"] or "").lower()
+    assert "Short near" not in (doc["entry_suggestion"] or "")
