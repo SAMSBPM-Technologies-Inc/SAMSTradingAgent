@@ -14,6 +14,63 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.25.0] — 2026-08-31
+
+**The gate has been overruling the AI analyst for three releases and nobody
+could say whether it should.** 1.22.0 put `classify_signal` back in front of the
+analyst's verdict; 1.24.0 started retaining what it decided. This reads that
+record back and asks the question the whole exercise exists to answer — *were
+the refusals worth making?* — on the same terms as
+`veto_counterfactual`, which asks it of research.
+
+- **Two blocks, each read as a pair.** *Buys the gate refused* against the
+  analyst BUYs it allowed; *exits the gate forced* against the rule SELLs the
+  analyst agreed with. A group on its own says nothing: the gate earns its place
+  only if what it refused went on to do measurably worse than what it let
+  through. A refused group that performed in line with the rest is spending an
+  opportunity on every refusal.
+- **They are never combined.** Research calibration offers a pooled row because
+  its segments converge slowly and the mixture still means something. These are
+  opposite bets on opposite sides of the book and one of them is sign-inverted —
+  a pooled figure would not be slow to read, it would be meaningless.
+- **The exit block is sign-flipped, and the screen says so.** A SELL is right
+  when the name *falls*, so the raw win rate reads exactly backwards on an exit:
+  a group that rose four times in five would otherwise report an 80% win rate on
+  an 80% failure. The flip is marked rather than hidden, and the two group
+  figures are deliberately left uncoloured — green-good would mean opposite
+  things on the two cards, and a colour that inverts between two panels on one
+  screen teaches nothing. The **gap** carries the judgement, where positive means
+  the same thing on both.
+- **Signals from before 1.24.0 are excluded, not counted as agreement.** A
+  missing override field means the decision was never recorded; `null` means the
+  gate ran and had nothing to override. Treating the first as the second would
+  load the control group with every row ever written before the gate existed and
+  drown the comparison in data that cannot speak to it.
+- **Same discipline, same refusal.** Every figure carries its own sample count,
+  alpha carries a second one, nothing is called conclusive unless *both* sides
+  clear 30 records, and an unmeasurable gap stays `null` rather than `0.0` — a
+  zero gap is a claim, absence is not a result. Nothing here tunes the gate.
+
+On both clients. The phone's `CalibrationBucket` never declared the alpha fields
+the API has returned since benchmark measurement shipped, so it could not read
+figures already on the wire; that type is now in step with the web copy.
+
+**Known gaps.** **Every number on this panel is currently blank**, and will be
+until roughly October — the override has only been retained since yesterday and
+a record needs about twenty trading days to settle. The screen says so in place
+of the figures rather than rendering zeroes. Reaching *conclusive* needs 30
+settled records on **both** sides of a block; overrides only occur in the
+`[0.62, 0.70)` band across about eleven watched tickers, so honestly that is
+months away, and the panel will read *thin* for all of it. Two caveats belong
+beside the eventual figure and are not yet printed on the page itself: a refused
+BUY was never taken, so its return measures the *name* rather than a position —
+right for this question, but not a P&L — and this is a paper account whose
+history was wiped on 30 Aug 2026. The panel has also **never been seen with data
+in it**; it is verified by unit tests over the counterfactual and by typecheck,
+and the populated layout is unexercised.
+
+---
+
 ## [1.24.0] — 2026-08-31
 
 **The gate was recording its decisions into a document that gets overwritten
