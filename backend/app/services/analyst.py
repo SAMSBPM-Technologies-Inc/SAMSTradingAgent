@@ -32,9 +32,14 @@ from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
 from app.services import source_health
 from app.services.research.agents.base import AgentSpec, run_agent
+from app.services.cross_section import cohort_for
 from app.services.risk_engine import RISK_MAX_FOR_BUY, assess_risk
 from app.services.signal_generator import (
     BUY_THRESHOLD,
+    RANK_BUY_FLOOR,
+    RANK_BUY_PERCENTILE,
+    RANK_MIN_COHORT,
+    RANK_SELL_CEILING,
     SELL_THRESHOLD,
     boundary_confidence,
     classify_signal,
@@ -131,6 +136,7 @@ def _gate_analyst_signal(
     score: float,
     risk_score: float,
     previous_signal: str | None,
+    cohort=None,
 ) -> tuple[str, dict]:
     """
     Reconcile the model's verdict with the rule that owns the thresholds.
@@ -170,13 +176,22 @@ def _gate_analyst_signal(
     established BUY the analyst still likes is not torn down the moment the
     score dips a thousandth under the threshold.
 
+    `cohort` is passed straight through to `classify_signal` and must be the
+    same one the rule-based path would have used. The gate's whole purpose is
+    to reconcile the model against **the rule that publishes**; under relative
+    scoring that rule accepts a BUY at 0.60 in the top quintile, and a gate
+    still holding out for 0.70 would refuse it and write a `buy_refused` for a
+    refusal the engine never made. That would corrupt the counterfactual as
+    well as the verdict.
+
     Returns `(published_signal, gate_record)`. The record is written to the
     signal document whether or not anything was overridden — "the gate ran and
     agreed" and "no gate ran" are different facts, and only one of them can be
     argued from later. It is what `/performance/calibration` needs to answer
     whether these overrides were ever worth having.
     """
-    rule_signal = classify_signal(score, risk_score, previous_signal)
+    rule_signal = classify_signal(score, risk_score, previous_signal, cohort)
+    ranked = cohort is not None and cohort.size >= RANK_MIN_COHORT
 
     published = model_signal
     reason: str | None = None
@@ -189,10 +204,22 @@ def _gate_analyst_signal(
         # to handle, and "publish HOLD" would be the wrong answer to it.
         published = "SELL"
         kind = "sell_restored"
+        # The stated reason has to name the bar that was actually applied.
+        # Printing an absolute threshold under a rank-decided verdict is the
+        # same defect as the gate panel reporting `score > 0.70` beside a
+        # hysteresis-held BUY — a true-sounding sentence about a rule that did
+        # not run.
         reason = (
-            f"The analyst read this as {model_signal}; the score of {score:.2f} is "
-            f"under the {SELL_THRESHOLD:.2f} that triggers a sell, and an exit is "
-            f"never held back. Published as SELL."
+            (
+                f"The analyst read this as {model_signal}; this is the weakest "
+                f"{_place(cohort)} of the {cohort.size} names watched and scores "
+                f"{score:.2f}, at or under the {RANK_SELL_CEILING:.2f} ceiling a "
+                f"sell needs. An exit is never held back. Published as SELL."
+            ) if ranked else (
+                f"The analyst read this as {model_signal}; the score of {score:.2f} is "
+                f"under the {SELL_THRESHOLD:.2f} that triggers a sell, and an exit is "
+                f"never held back. Published as SELL."
+            )
         )
     elif model_signal == "BUY" and rule_signal != "BUY":
         published = "HOLD"
@@ -205,6 +232,22 @@ def _gate_analyst_signal(
                 f"The analyst read this as a BUY; risk {risk_score:.1f} is at or "
                 f"above the {RISK_MAX_FOR_BUY:.1f} veto, which no score overrides. "
                 f"Published as HOLD."
+            )
+        elif ranked and score < RANK_BUY_FLOOR:
+            # Two ways to fail the relative rule, and they are different facts
+            # a reader will act on differently: below the floor means the name
+            # is not worth owning at any rank, outside the quintile means it is
+            # simply not the best of what is being watched today.
+            reason = (
+                f"The analyst read this as a BUY; the score of {score:.2f} is under "
+                f"the {RANK_BUY_FLOOR:.2f} floor a buy needs regardless of how it "
+                f"ranks. Published as HOLD."
+            )
+        elif ranked:
+            reason = (
+                f"The analyst read this as a BUY; it is the {_place(cohort)} strongest "
+                f"of the {cohort.size} names watched, outside the top "
+                f"{1 - RANK_BUY_PERCENTILE:.0%} a buy needs. Published as HOLD."
             )
         else:
             reason = (
@@ -225,9 +268,40 @@ def _gate_analyst_signal(
         "reason": reason,
         "score": round(score, 4),
         "risk_score": round(risk_score, 2),
+        # The bar this decision was actually held to, so a record read months
+        # later is not silently reinterpreted under whichever rule is current
+        # then. `buy_threshold` stays the absolute one on both rules because
+        # that is what the field has always meant; the rank fields are absent
+        # rather than null under the absolute rule, the same absent-vs-null
+        # distinction `analyst_override` draws.
         "buy_threshold": BUY_THRESHOLD,
         "risk_max_for_buy": RISK_MAX_FOR_BUY,
+        **(
+            {
+                "rule": "relative",
+                "percentile": cohort.percentile,
+                "cohort_size": cohort.size,
+                "rank_buy_percentile": RANK_BUY_PERCENTILE,
+                "rank_buy_floor": RANK_BUY_FLOOR,
+            } if ranked else {}
+        ),
     }
+
+
+def _place(cohort) -> str:
+    """
+    A cohort position as an ordinal — "3rd" of 13 — rather than a percentile.
+
+    A reader can check "3rd of 13" against the watchlist in front of them. They
+    cannot check 0.83, and a refusal nobody can verify is the kind this
+    codebase spent three releases learning not to write.
+    """
+    place = round((1.0 - cohort.percentile) * (cohort.size - 1)) + 1
+    suffix = (
+        "th" if 11 <= place % 100 <= 13
+        else {1: "st", 2: "nd", 3: "rd"}.get(place % 10, "th")
+    )
+    return f"{place}{suffix}"
 
 
 async def run_analysis(
@@ -296,11 +370,19 @@ async def run_analysis(
     price = feat.get("current_price", 0.0)
     score = round(float(feat.get("composite_score", 0.5) or 0.5), 4)
 
+    # The gate must be handed the same cohort the rule-based path would use, or
+    # it reconciles the model against a rule nobody publishes: under relative
+    # scoring a BUY at 0.60 can be correct, and a gate still measuring 0.70
+    # would refuse it and record a `buy_refused` that never happened. None when
+    # ranking is off, which is the absolute rule unchanged.
+    cohort = await cohort_for(ticker, score)
+
     published_signal, gate = _gate_analyst_signal(
         analyst_output.get("signal", "HOLD"),
         score,
         risk["risk_score"],
         previous_signal,
+        cohort,
     )
 
     # Every derived field below describes *the verdict that was published*, not
@@ -323,12 +405,21 @@ async def run_analysis(
         # the confidence has to be the rule's too — otherwise a HOLD nobody was
         # confident about is reported at the model's 0.85.
         "confidence": (
-            boundary_confidence(score, published_signal) if gate["overridden"]
+            boundary_confidence(score, published_signal, cohort) if gate["overridden"]
             else _conviction_to_confidence(analyst_output.get("conviction", "LOW"))
         ),
         "entry_suggestion": _entry_suggestion(published_output, price),
         "exit_suggestion": _exit_suggestion(published_output, price),
         "explanation": _build_explanation(ticker, published_output, feat, risk, gate),
+        # Same two fields the rule-based path writes, for the same reason and
+        # with the same absent-means-absolute convention. `_execute_trades`
+        # reads `score_percentile` to decide which bar the order is held to, so
+        # omitting it here would judge every analyst-path BUY under the
+        # absolute rule while the verdict was decided under the relative one.
+        **(
+            {"score_percentile": cohort.percentile, "cohort_size": cohort.size}
+            if cohort is not None else {}
+        ),
         # Extended analyst fields
         "analyst_output": analyst_output,
         # What the gate made of the model's answer. Always written when the

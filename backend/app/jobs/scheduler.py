@@ -82,16 +82,16 @@ def _is_reconcile_window() -> bool:
 
 
 async def _get_all_tickers() -> list[str]:
-    """Merge config DEFAULT_TICKERS with all users' watched tickers (union across all users)."""
-    settings = get_settings()
-    tickers = set(settings.ticker_list)
-    try:
-        db = await get_db()
-        watched = await db[COLL_WATCHED].find({}, {"ticker": 1}).to_list(length=2000)
-        tickers.update(d["ticker"] for d in watched)
-    except Exception as exc:
-        logger.warning("watched_tickers_fetch_failed", error=str(exc))
-    return sorted(tickers)
+    """
+    Merge config DEFAULT_TICKERS with all users' watched tickers.
+
+    Delegates to `cross_section.universe`, which needs the identical list: it
+    is the cohort a percentile is measured in, and a ticker scored on this
+    cycle but absent from that cohort would be ranked against a field it was
+    not part of. Two copies of this query is precisely how that happens.
+    """
+    from app.services.cross_section import universe
+    return await universe()
 
 
 async def _research_users() -> list[tuple[str, list[str]]]:

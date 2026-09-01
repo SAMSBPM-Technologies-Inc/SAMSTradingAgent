@@ -170,6 +170,29 @@ export default function RiskPanel({
             detail={`${risk.risk_score.toFixed(1)} vs ${gate.risk_max_for_buy.toFixed(1)}`}
           />
 
+          {/* The second score bar, and the reason this panel was previously
+              able to show a fully passing gate above an empty trade history.
+              min_signal_score is tested again where the order is placed, so a
+              BUY can clear every row above and still be refused — recorded as
+              a SKIPPED row and nowhere else. Shown only when it is stricter
+              than the verdict threshold, since at or below it the row is
+              always a tick and adds nothing. */}
+          {typeof gate.order_threshold === 'number' &&
+           gate.order_threshold > gate.buy_threshold && (
+            <>
+              <GateRow
+                label="Score above your order threshold"
+                passed={gate.score_passes_order === true}
+                detail={`${score.toFixed(2)} vs ${gate.order_threshold.toFixed(2)}`}
+              />
+              <p className="-mt-1 ml-5 text-[0.65rem] leading-relaxed text-[var(--color-fg-muted)]">
+                Your auto-trade setting asks for {gate.order_threshold.toFixed(2)}, above
+                the {gate.buy_threshold.toFixed(2)} a BUY verdict needs. A BUY between the
+                two is published here and refused at the order — change it in Settings.
+              </p>
+            </>
+          )}
+
           {/* The case the invisible risk score used to hide entirely. */}
           {gate.score_passes_buy && !gate.risk_passes_buy && signal !== 'BUY' && (
             <div className="flex items-start gap-2 mt-1 px-3 py-2 rounded-lg

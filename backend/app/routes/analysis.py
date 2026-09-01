@@ -339,10 +339,36 @@ async def _personalized_response(doc: dict, current_user: dict, db) -> AnalyzeRe
     # carries it — preferring the signal, which is what was actually published.
     if not doc.get("inputs") and feat and feat.get("inputs"):
         doc = {**doc, "inputs": feat["inputs"]}
-    return _doc_to_response(doc, breakdown=breakdown, user_weights=user_weights)
+    return _doc_to_response(
+        doc, breakdown=breakdown, user_weights=user_weights,
+        order_threshold=_order_threshold(current_user),
+    )
 
 
-def _build_gate(doc: dict, personalized: bool = False) -> SignalGate:
+def _order_threshold(current_user: dict) -> Optional[float]:
+    """
+    The reader's own `min_signal_score`, or None if they have no settings.
+
+    Read from the user document rather than from the model's default, because
+    the whole point of reporting it is that the stored value may differ from
+    what the verdict was judged against. A missing or malformed settings
+    sub-document returns None — "there is no second bar on this account" — and
+    never a default, which would print a threshold nobody is held to.
+    """
+    settings = current_user.get("auto_trade_settings")
+    if not isinstance(settings, dict):
+        return None
+    value = settings.get("min_signal_score")
+    if not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _build_gate(
+    doc: dict,
+    personalized: bool = False,
+    order_threshold: Optional[float] = None,
+) -> SignalGate:
     """
     The thresholds behind the verdict, read from the engine rather than restated.
 
@@ -360,6 +386,14 @@ def _build_gate(doc: dict, personalized: bool = False) -> SignalGate:
     weights, which `compute_personalized_score` does through `classify_signal`.
     That verdict is the rule's by construction, so no analyst attribution is
     offered against it — the stored `analyst_gate` describes a different number.
+
+    `order_threshold` is the third thing it withheld, and the one that made the
+    panel wrong about outcomes rather than merely incomplete. Clearing every
+    bar reported here has never been sufficient to place an order: the account's
+    own `min_signal_score` is tested again at `execute_entry`, and while it
+    defaulted above `BUY_THRESHOLD` a passing gate sat above a trade history
+    with nothing in it. Reported, not enforced — this function describes the
+    rule, it does not run it.
     """
     score = float(doc.get("score", 0.0) or 0.0)
     risk = doc.get("risk") or {}
@@ -401,6 +435,13 @@ def _build_gate(doc: dict, personalized: bool = False) -> SignalGate:
         effective_buy_threshold=round(effective_buy, 4),
         decided_by=decided_by,
         analyst=analyst,
+        order_threshold=order_threshold,
+        # Stays None when there is no threshold, rather than defaulting to
+        # True. "Nothing checked this" and "this passed" are the same
+        # distinction `AnalystGate.checked` draws, for the same reason.
+        score_passes_order=(
+            None if order_threshold is None else score >= order_threshold
+        ),
     )
 
 
@@ -444,6 +485,7 @@ def _doc_to_response(
     doc: dict,
     breakdown: Optional[dict] = None,
     user_weights: dict | None = None,
+    order_threshold: Optional[float] = None,
 ) -> AnalyzeResponse:
     risk = doc.get("risk", {})
     generated_at = doc.get("generated_at", datetime.now(tz=timezone.utc))
@@ -479,7 +521,9 @@ def _doc_to_response(
         analyst_model=_analyst_model(),
         pending_signal=(doc.get(STABILITY_FIELD) or {}).get("pending_signal"),
         breakdown=ScoreBreakdown(**breakdown) if breakdown else None,
-        gate=_build_gate(doc, personalized=bool(user_weights)),
+        gate=_build_gate(
+            doc, personalized=bool(user_weights), order_threshold=order_threshold,
+        ),
         data_sources=doc.get("data_sources"),
         inputs=_build_inputs(doc, user_weights),
     )

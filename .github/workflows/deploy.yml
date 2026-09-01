@@ -79,6 +79,12 @@ jobs:
           # with ibkr_unknown_account. Leave unset when the paper login manages
           # exactly one account; the adapter resolves it automatically then.
           IBKR_ACCOUNT_ID_PAPER: ${{ vars.IBKR_ACCOUNT_ID_PAPER }}
+          # Classify on percentile within the watchlist rather than on an
+          # absolute cutoff. Defaults to false — the safe direction, and the
+          # same shape as the two AUTO_TRADE_* switches above: this decides
+          # which names the agent buys, so an unset variable must not turn it
+          # on. See services/cross_section.py.
+          ENABLE_RANK_SIGNALS: ${{ vars.ENABLE_RANK_SIGNALS || 'false' }}
           # SMTP for trade-execution emails. Leaving SMTP_HOST unset disables
           # email entirely; trading is unaffected either way.
           SMTP_HOST: ${{ vars.SMTP_HOST }}
@@ -95,7 +101,7 @@ jobs:
           # the names listed here. A variable set above and omitted here arrives
           # as an empty string, with no error from either side — which is how
           # ANTHROPIC_API_KEY reached the server blank. Add to BOTH places.
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,MASSIVE_API_KEY,ALPHAVANTAGE_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,MASSIVE_API_KEY,ALPHAVANTAGE_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,ENABLE_RANK_SIGNALS,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
           command_timeout: 30m
           script: |
             set -e
@@ -253,6 +259,23 @@ jobs:
             set_if_missing_or_empty ENABLE_ML_MODEL                false
             set_if_missing_or_empty ENABLE_BACKTESTING             false
             set_if_missing_or_empty ENABLE_AI_ANALYST              true
+
+            # ── Relative scoring ──────────────────────────────────────────────
+            # Injected, never set_if_missing, and the distinction is the whole
+            # reason this line exists: seeding it would write `false` on the
+            # first deploy and then skip the key forever, so setting the GitHub
+            # variable to `true` would look like an enablement and do nothing.
+            # That is the trap this file already records for ANALYST_MODEL,
+            # AUTO_TRADE_ENABLED and AUTO_TRADE_LIVE_ALLOWED.
+            #
+            # Unlike those three it is driven by `vars.` rather than hardcoded
+            # here, because it is an experiment the operator turns on and off
+            # while watching /performance/calibration — not a setting that
+            # should need a commit to change. An unset variable resolves to
+            # `false` in the env: block above, so the safe direction survives
+            # both a missing variable and a missing envs: entry.
+            inject_secret ENABLE_RANK_SIGNALS "$ENABLE_RANK_SIGNALS"
+            echo "ENABLE_RANK_SIGNALS=$ENABLE_RANK_SIGNALS (verdicts are $([ "$ENABLE_RANK_SIGNALS" = "true" ] && echo 'ranked against the watchlist' || echo 'on the absolute rule'))"
 
             # ── Deep research (agent orchestrator) ────────────────────────────
             # Split deliberately between the two helpers, applying the lesson

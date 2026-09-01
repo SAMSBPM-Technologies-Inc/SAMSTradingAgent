@@ -93,6 +93,42 @@ npm run web
    - SELL: score < 0.30
    - HOLD: otherwise
 
+   **The score is compressed, and the thresholds sit at the edge of its
+   range.** Coverage weighting (`raw × coverage + 0.5 × (1 − coverage)`, in
+   `_fundamental_score`, `compute_catalyst` and `news.py`) pulls every factor
+   toward 0.5; `macro_score` is market-wide by construction so its 0.15 can
+   never separate two tickers; `weight_volatility` is 0.00. About **0.65 of the
+   weight ranks anything**, and it is itself shrunk. A near-best realistic name
+   works out at **0.747**, a typical one at **0.567** — which is why 592 of 602
+   recorded signals were HOLD. Before concluding the trading path is broken,
+   check score variance and the reachable ceiling.
+
+   **`ENABLE_RANK_SIGNALS` judges a score against the watchlist instead**
+   (`services/cross_section.py`, off by default). `classify_signal` takes an
+   optional `Cohort`; with one, a BUY needs the top `RANK_BUY_PERCENTILE` of
+   the field **and** `RANK_BUY_FLOOR` in absolute terms. The floor is not
+   optional — somebody is always in the top quintile, so a pure rank buys the
+   least-bad name in a bad field every day. The rank decides *which*, the floor
+   decides *whether*.
+
+   Four properties are load-bearing. **Ranking replaces the BUY test and only
+   adds to the SELL one** — a score under `SELL_THRESHOLD` still sells however
+   badly its peers are doing, or a collapsing watchlist would hold everything;
+   this is the same asymmetry as everywhere else here. **Ties rank
+   pessimistically**, so a flat field buys nothing. **The rank is banded for a
+   standing verdict and the floor is not**: the band forgives movement in the
+   field, which is noise about the peers, not movement in the name. And **every
+   uncertain path falls back to the absolute rule** — no cohort, under
+   `RANK_MIN_COHORT`, stale peers — which is the stricter of the two, so an
+   unavailable cohort can never loosen anything. Omitting the cohort gives the
+   raw rule, which is what calibration replays want.
+
+   Whatever reads a verdict must read the rule that produced it.
+   `_gate_analyst_signal` takes the same cohort or it records a `buy_refused`
+   the engine never made; `stocks_signals` carries `score_percentile` /
+   `cohort_size`, **absent** (not null) under the absolute rule, the same
+   convention as `analyst_override`.
+
    **A verdict is not published until it holds.** Computing a signal and
    publishing one are different acts, and `services/signal_stability.py` sits
    between them. A changed verdict becomes a *candidate*: it publishes only
@@ -245,6 +281,20 @@ npm run web
    or two of fresh room every few minutes, which the retry loop spends at once.
    That, not a broken guard, is how NVDA took eight orders on 25 Aug 2026 with
    seven of them for one or two shares.
+
+   **`min_signal_score` is a second score bar, and it must be set relative to
+   the first.** It is tested in `execute_entry`, after the verdict has already
+   cleared `BUY_THRESHOLD`. It shipped defaulting to 0.75 against a 0.70
+   threshold with nothing tying them together — and since ~0.75 is the score's
+   realistic ceiling, essentially every published BUY was refused with a
+   `SKIPPED` row while the gate panel showed a tick. It now defaults to
+   `BUY_THRESHOLD` (imported), `db._migrate_min_signal_score` resets accounts
+   still on exactly the old default, and `SignalGate.order_threshold` reports it
+   beside the verdict so a passing gate can no longer sit above an empty trade
+   history. Under relative scoring the engine's bar is `RANK_BUY_FLOOR`, so
+   `_order_score_bar` carries the account's **margin** over the engine's bar
+   rather than its absolute number — a raw 0.70 tested against a rank-decided
+   BUY at 0.60 is the identical defect one layer down.
 
    **Client quantities are requests.** `POST /trading/order` takes the smaller
    of the requested qty and what the risk model sizes to, so sizing cannot be

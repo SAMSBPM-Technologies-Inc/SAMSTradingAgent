@@ -15,6 +15,7 @@ scaled to [0, 1].
 from datetime import datetime, timezone
 
 from app.db import COLL_FEATURES, COLL_SIGNALS, get_db
+from app.services.cross_section import cohort_for
 from app.services.risk_engine import RISK_MAX_FOR_BUY, assess_risk
 from app.utils.helpers import clamp, utcnow
 from app.utils.logger import get_logger
@@ -38,13 +39,55 @@ SELL_THRESHOLD = 0.30
 #: on purpose — it makes an existing verdict sticky, never easier to acquire.
 SIGNAL_HYSTERESIS = 0.03
 
+# ── Relative thresholds ───────────────────────────────────────────────────────
+#
+# The rule applied when a `Cohort` is supplied — see `services/cross_section.py`
+# for why an absolute cutoff selects badly on this score's distribution. These
+# live here, beside the absolute thresholds, because this module owns the rule
+# and everything else imports it rather than restating it. Config carries only
+# the on/off switch.
+
+#: Rank a BUY needs: the top fifth of the field. Not a decile, because the
+#: watchlist is around a dozen names and a decile of twelve is one ticker —
+#: which makes the verdict a function of one peer's data outage.
+RANK_BUY_PERCENTILE = 0.80
+#: Rank a SELL needs: the bottom fifth, symmetrically.
+RANK_SELL_PERCENTILE = 0.20
+
+#: The absolute level a BUY needs *as well as* the rank. Somebody is always in
+#: the top fifth, so without this the rule buys the least-bad name in a
+#: uniformly bad field every single day. Set just under the typical composite
+#: (~0.567): "the best of these, and not itself below average".
+RANK_BUY_FLOOR = 0.55
+#: The absolute level a SELL needs as well as the rank, for the same reason
+#: inverted — the worst name in a strong field is not a sell.
+RANK_SELL_CEILING = 0.50
+
+#: How far the rank may slip before an established verdict is given up, in
+#: percentile points. Same one-sided stickiness as `SIGNAL_HYSTERESIS`, applied
+#: to the rank rather than the score, because under this rule the rank is what
+#: moves — a ticker can hold its score exactly and change quintile because a
+#: peer reported earnings.
+RANK_HYSTERESIS = 0.10
+
+#: Smallest field worth ranking in. Below this a percentile is mostly noise
+#: about which peers happened to ingest: at four tickers each rank step is 33
+#: percentile points, so one failed fetch moves a name two quintiles. Under it
+#: the absolute rule applies, which is the stricter of the two.
+RANK_MIN_COHORT = 5
+
 __all__ = ["BUY_THRESHOLD", "SELL_THRESHOLD", "SIGNAL_HYSTERESIS",
+           "RANK_BUY_PERCENTILE", "RANK_SELL_PERCENTILE", "RANK_BUY_FLOOR",
+           "RANK_SELL_CEILING", "RANK_HYSTERESIS", "RANK_MIN_COHORT",
            "RISK_MAX_FOR_BUY", "generate_signal", "generate_signals_all",
            "classify_signal", "boundary_confidence"]
 
 
 def classify_signal(
-    score: float, risk_score: float, previous_signal: str | None = None
+    score: float,
+    risk_score: float,
+    previous_signal: str | None = None,
+    cohort=None,
 ) -> str:
     """
     The BUY / SELL / HOLD rule, in one place.
@@ -58,7 +101,21 @@ def classify_signal(
     held until the score retreats `SIGNAL_HYSTERESIS` past the threshold that
     produced it. Omit it (the default) to get the raw rule — that is what
     calibration and threshold sweeps want, since a replay has no "previous".
+
+    `cohort` (a `cross_section.Cohort`) switches on the **relative** rule: the
+    score must be in the top or bottom quintile of the watchlist *and* clear an
+    absolute floor. Omit it — as calibration replays and
+    `compute_personalized_score` do — and the absolute rule applies unchanged.
+    That fallback direction matters: the absolute rule is the harder bar, so
+    every path that cannot supply a cohort ends up stricter rather than looser.
+
+    Only the *entry* conditions differ between the two rules. Risk still vetoes
+    only BUY, SELL is still ungated, and the band is still one-sided. Nothing
+    below makes an exit harder than it was.
     """
+    if cohort is not None and cohort.size >= RANK_MIN_COHORT:
+        return _classify_relative(score, risk_score, previous_signal, cohort)
+
     buy_exit = BUY_THRESHOLD - SIGNAL_HYSTERESIS if previous_signal == "BUY" else BUY_THRESHOLD
     sell_exit = SELL_THRESHOLD + SIGNAL_HYSTERESIS if previous_signal == "SELL" else SELL_THRESHOLD
 
@@ -69,7 +126,68 @@ def classify_signal(
     return "HOLD"
 
 
-def boundary_confidence(score: float, signal: str) -> float:
+def _classify_relative(
+    score: float, risk_score: float, previous_signal: str | None, cohort
+) -> str:
+    """
+    The rank-based rule. Reached only from `classify_signal`, never directly.
+
+    **The relative rule replaces the BUY test and only ever adds to the SELL
+    one.** That asymmetry is not a detail; it is the same rule that exempts
+    SELL from the risk gate, from confirmations and dwell, and from both vetoes.
+
+    Reshaping entries is the entire point of ranking, so an absolute BUY that
+    is only mid-field no longer buys. Reshaping *exits* the same way would be a
+    brake on the exit path: a name at 0.20 sitting in a field of even worse
+    names is not in the bottom quintile, and a pure rank rule would hold it —
+    turning "everything I watch is falling" into a reason to sell nothing. So
+    the absolute exit is tested first and is never withdrawn; the rank can only
+    trigger an exit the absolute rule would have missed.
+
+      SELL → score < SELL_THRESHOLD (the absolute exit, unchanged)
+              OR (bottom quintile of the field AND score <= RANK_SELL_CEILING)
+      BUY  → top quintile of the field, AND score >= RANK_BUY_FLOOR,
+              AND risk < RISK_MAX_FOR_BUY
+
+    The rank is banded by `RANK_HYSTERESIS` for a standing verdict; **the floor
+    is not**. Relaxing the rank keeps a name that is still one of the better
+    things on the list from being dropped over a peer's one-cycle wobble, which
+    is noise about the field. Relaxing the floor would keep holding something
+    whose own score had fallen through the level at which it stopped being
+    worth owning, which is information about the name. The band exists to
+    ignore the first kind of movement, not the second.
+    """
+    sell_exit = (
+        SELL_THRESHOLD + SIGNAL_HYSTERESIS if previous_signal == "SELL"
+        else SELL_THRESHOLD
+    )
+    # First, and unconditionally: whatever the field is doing, a score under
+    # the absolute sell threshold is an exit. Ranking may add exits; it may
+    # never take one away.
+    if score < sell_exit:
+        return "SELL"
+
+    buy_rank = (
+        RANK_BUY_PERCENTILE - RANK_HYSTERESIS if previous_signal == "BUY"
+        else RANK_BUY_PERCENTILE
+    )
+    sell_rank = (
+        RANK_SELL_PERCENTILE + RANK_HYSTERESIS if previous_signal == "SELL"
+        else RANK_SELL_PERCENTILE
+    )
+
+    if (
+        cohort.percentile >= buy_rank
+        and score >= RANK_BUY_FLOOR
+        and risk_score < RISK_MAX_FOR_BUY
+    ):
+        return "BUY"
+    if cohort.percentile <= sell_rank and score <= RANK_SELL_CEILING:
+        return "SELL"
+    return "HOLD"
+
+
+def boundary_confidence(score: float, signal: str, cohort=None) -> float:
     """
     How far *score* sits from the nearest boundary that would change *signal*,
     scaled to [0, 1].
@@ -84,7 +202,16 @@ def boundary_confidence(score: float, signal: str) -> float:
     refused by the gate, the verdict that gets published is the rule's, and a
     confidence derived from the model's conviction would describe a verdict
     nobody published — "85% confident HOLD" for a model that wanted to buy.
+
+    `cohort` must be the same one the verdict was classified with, and for the
+    same reason: under the relative rule the boundary that decides the verdict
+    is a *rank*, and measuring distance from `BUY_THRESHOLD` would report a BUY
+    at 0.60 as 0% confident. Measuring the wrong boundary is the identical
+    mistake the analyst clause above exists to prevent.
     """
+    if cohort is not None and cohort.size >= RANK_MIN_COHORT:
+        return _relative_confidence(score, signal, cohort)
+
     if signal == "BUY":
         return clamp((score - BUY_THRESHOLD) / (1.0 - BUY_THRESHOLD))
     if signal == "SELL":
@@ -93,6 +220,37 @@ def boundary_confidence(score: float, signal: str) -> float:
     return clamp(
         min(abs(score - BUY_THRESHOLD), abs(score - SELL_THRESHOLD)) / 0.40
     )
+
+
+def _relative_confidence(score: float, signal: str, cohort) -> float:
+    """
+    Distance from the rank boundary, for a verdict decided on rank.
+
+    A BUY is measured on how far into the top quintile it sits; a SELL on how
+    far into the bottom. Both are the rank distance alone: the floor is a
+    yes/no admission test rather than a scale, and folding "how far above 0.55"
+    into a conviction figure would import the very compression the relative
+    rule exists to get out from under.
+
+    HOLD reports distance from whichever entry boundary is nearer, normalised
+    over the widest gap either side, so the number keeps its meaning — "how
+    settled is this verdict" — across both rules.
+    """
+    if signal == "BUY":
+        headroom = 1.0 - RANK_BUY_PERCENTILE
+        return clamp((cohort.percentile - RANK_BUY_PERCENTILE) / headroom) if headroom else 1.0
+    if signal == "SELL":
+        headroom = RANK_SELL_PERCENTILE
+        return clamp((RANK_SELL_PERCENTILE - cohort.percentile) / headroom) if headroom else 1.0
+    nearest = min(
+        abs(cohort.percentile - RANK_BUY_PERCENTILE),
+        abs(cohort.percentile - RANK_SELL_PERCENTILE),
+    )
+    span = max(
+        RANK_BUY_PERCENTILE - RANK_SELL_PERCENTILE,
+        1e-9,
+    ) / 2.0
+    return clamp(nearest / span)
 
 
 async def generate_signal(ticker: str, previous_signal: str | None = None) -> dict:
@@ -110,17 +268,23 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
     risk_dict = assess_risk(feat)
     risk_score: float = risk_dict["risk_score"]
 
-    # ── Signal decision ───────────────────────────────────────────────────────
-    signal = classify_signal(score, risk_score, previous_signal)
+    # Where this score sits in the watchlist it was scored alongside. None
+    # whenever ranking is switched off or the field cannot be read, in which
+    # case every call below falls back to the absolute rule — see
+    # `services/cross_section.py`.
+    cohort = await cohort_for(ticker, score)
 
-    confidence = boundary_confidence(score, signal)
+    # ── Signal decision ───────────────────────────────────────────────────────
+    signal = classify_signal(score, risk_score, previous_signal, cohort)
+
+    confidence = boundary_confidence(score, signal, cohort)
 
     # ── Entry / exit suggestions ──────────────────────────────────────────────
     price = feat.get("current_price", 0.0)
     entry_suggestion, exit_suggestion = _price_suggestions(signal, price, feat)
 
     # ── Explanation ───────────────────────────────────────────────────────────
-    explanation = _build_explanation(ticker, signal, score, risk_dict, feat)
+    explanation = _build_explanation(ticker, signal, score, risk_dict, feat, cohort)
 
     signal_doc = {
         "ticker": ticker,
@@ -132,6 +296,18 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
         "entry_suggestion": entry_suggestion,
         "exit_suggestion": exit_suggestion,
         "explanation": explanation,
+        # The rank this verdict was decided on, and the field it was measured
+        # in. Stored rather than recomputed at read time for the same reason
+        # `inputs` is: the cohort moves every cycle, so a percentile computed
+        # twenty days later during a calibration replay would describe a
+        # different watchlist. Absent — not null — on a document written
+        # before ranking existed or while it is switched off; a consumer that
+        # cannot tell those apart reads "ranked bottom" for every historical
+        # row. Same distinction as `analyst_override`.
+        **(
+            {"score_percentile": cohort.percentile, "cohort_size": cohort.size}
+            if cohort is not None else {}
+        ),
     }
 
     # Upsert – keep only the latest signal per ticker
@@ -148,6 +324,9 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
         score=score,
         risk=risk_score,
         confidence=round(confidence, 4),
+        rule="relative" if cohort is not None else "absolute",
+        percentile=cohort.percentile if cohort is not None else None,
+        cohort_size=cohort.size if cohort is not None else None,
     )
     return signal_doc
 
@@ -198,7 +377,7 @@ def _price_suggestions(signal: str, price: float, feat: dict):
 
 
 def _build_explanation(
-    ticker: str, signal: str, score: float, risk: dict, feat: dict
+    ticker: str, signal: str, score: float, risk: dict, feat: dict, cohort=None
 ) -> str:
     # Technical
     rsi = feat.get("rsi_14")
@@ -221,8 +400,17 @@ def _build_explanation(
         f"tech={tech:.2f} fund={fund:.2f} sent={sent:.2f} macro={macro:.2f}"
     )
 
+    # Under the relative rule the score alone does not explain the verdict —
+    # a BUY at 0.60 reads as a mistake until you know it was the best of
+    # thirteen. Stated as a position in the field rather than as a percentile,
+    # since "top of 13" is what a reader can check and 0.92 is not.
+    rank_str = ""
+    if cohort is not None:
+        place = round((1.0 - cohort.percentile) * (cohort.size - 1)) + 1
+        rank_str = f" | rank {place} of {cohort.size} watched"
+
     return (
-        f"{ticker} → {signal} | score={score:.2f} | "
+        f"{ticker} → {signal} | score={score:.2f}{rank_str} | "
         f"Risk={risk['risk_level']} ({risk['risk_score']:.1f}/10) | "
         f"{indicators} | [{scores_str}]. {risk['explanation']}"
     )

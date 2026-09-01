@@ -21,6 +21,7 @@ from app.services import broker as ibkr
 from app.services.benchmark import (
     alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
 )
+from app.services.signal_generator import BUY_THRESHOLD, RANK_BUY_FLOOR
 from app.services.trade_rationale import entry_rationale, exit_rationale
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
@@ -1429,6 +1430,33 @@ async def _submit_add(
     return trade_id, TradeStatus.PENDING, order_id
 
 
+def _order_score_bar(min_signal_score: float, rank_decided: bool) -> float:
+    """
+    The score an order has to clear, in the units the verdict was decided in.
+
+    `min_signal_score` is the account's "be pickier than the engine" dial, and
+    it is set in absolute score units. Under the relative rule those units mean
+    something different: the engine's own bar is `RANK_BUY_FLOOR` (0.55), not
+    `BUY_THRESHOLD` (0.70), so testing the raw setting would refuse nearly
+    every rank-decided BUY — the identical failure, one layer down, that the
+    default of 0.75 against a 0.70 threshold produced.
+
+    So what carries across is the **margin**, not the number: an account asking
+    for 0.05 above the engine's bar keeps asking for 0.05 above it under either
+    rule. An account sitting on the default asks for exactly the engine's bar
+    and is never the reason a trade does not happen, which is the property
+    worth preserving — a dial nobody touched must not silently veto the engine.
+
+    A margin below zero is discarded rather than applied: `min_signal_score`
+    under `BUY_THRESHOLD` means "I am happy with whatever the rule publishes",
+    and lowering the floor beneath what the rule itself required would let the
+    order path admit something the verdict never would.
+    """
+    if not rank_decided:
+        return min_signal_score
+    return RANK_BUY_FLOOR + max(0.0, min_signal_score - BUY_THRESHOLD)
+
+
 async def execute_entry(
     user_id: str,
     ticker: str,
@@ -1437,6 +1465,7 @@ async def execute_entry(
     analyst_stop_loss: float | None = None,
     analyst_price_target: float | None = None,
     conviction: str | None = None,
+    rank_decided: bool = False,
 ) -> None:
     """
     Act on a BUY signal for this user+ticker, as far as their mode allows.
@@ -1445,6 +1474,12 @@ async def execute_entry(
     the conviction bar — it records a PROPOSED trade instead and stops there,
     so the entry the agent wanted is preserved for a human decision rather than
     silently dropped.
+
+    `rank_decided` says the verdict came from the relative rule, which changes
+    what `signal_score` has to clear here and nothing else — see
+    `_order_score_bar`. It is read off the published signal document rather
+    than from config, so a verdict classified under one rule is never
+    re-examined under the other.
 
     Logs the outcome (including skips) to the trades collection. Never raises.
     """
@@ -1478,8 +1513,9 @@ async def execute_entry(
 
         # ── Guard: signal score threshold ─────────────────────────────────────
         # Agent-only: a manual order has no signal score to test.
-        if signal_score < settings.min_signal_score:
-            await _skip(f"Score {signal_score:.2f} below threshold {settings.min_signal_score:.2f}")
+        bar = _order_score_bar(settings.min_signal_score, rank_decided)
+        if signal_score < bar:
+            await _skip(f"Score {signal_score:.2f} below threshold {bar:.2f}")
             return
 
         plan, skip_reason = await _prepare_entry(

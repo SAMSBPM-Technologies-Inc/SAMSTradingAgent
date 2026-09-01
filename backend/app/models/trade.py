@@ -7,6 +7,16 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
+# Imported, not restated. `min_signal_score` below is the *second* score bar a
+# BUY has to clear, and the two must be set relative to each other or the first
+# one silently stops meaning anything — see the field's own comment. This is a
+# model reaching into a service, which is the wrong direction in general; the
+# alternative is a copy of the number, and this codebase has already been bitten
+# twice by copies of a threshold drifting apart (`compute_personalized_score`,
+# `_build_gate`). signal_generator imports nothing from `app.models`, so there
+# is no cycle.
+from app.services.signal_generator import BUY_THRESHOLD
+
 # Venue order IDs: IBKR emits ints, Alpaca emits UUID strings. A union keeps
 # trade documents written before the multi-broker change readable — Pydantic v2
 # does not coerce int → str, so narrowing to `str` would break historical rows.
@@ -50,7 +60,27 @@ class AutoTradeSettings(BaseModel):
     #: SEMI_AUTO only: the weakest conviction the agent may act on unattended.
     auto_execute_conviction: Literal["HIGH", "MEDIUM", "LOW"] = "HIGH"
     paper_trading: bool = True                    # True = paper account; False = live (requires explicit opt-in)
-    min_signal_score: float = Field(default=0.75, ge=0.0, le=1.0)
+    #: The score bar the *order path* holds a BUY to, on top of the bar the
+    #: verdict already cleared. It defaults to `BUY_THRESHOLD` rather than to a
+    #: number of its own, because anything higher voids a band of published
+    #: BUYs without saying so anywhere a reader would look.
+    #:
+    #: It shipped at 0.75 against a 0.70 `BUY_THRESHOLD`. Nothing enforced a
+    #: relationship between them, and the composite's realistic ceiling is
+    #: around 0.75 — so every BUY the engine actually produced landed in
+    #: [0.70, 0.75) and was refused at `execute_entry` with a SKIPPED row, while
+    #: the ticker page's gate panel showed the BUY gate passing. The panel was
+    #: right about the verdict and silent about the order, which is how a
+    #: system ends up looking like it has no signals rather than like it has a
+    #: threshold set above its own range.
+    #:
+    #: Raising it above `BUY_THRESHOLD` is a legitimate choice — "I want the
+    #: agent to be pickier than the badge" — and is still allowed. What is no
+    #: longer allowed is arriving there by default and finding out from an
+    #: empty trade history. `SignalGate.order_threshold` now reports it beside
+    #: the verdict, and `db._migrate_min_signal_score` reset the accounts that
+    #: were only ever on it by default.
+    min_signal_score: float = Field(default=BUY_THRESHOLD, ge=0.0, le=1.0)
     position_size_pct: float = Field(default=0.05, ge=0.001, le=0.25)  # fraction of account equity per trade
     max_open_positions: int = Field(default=5, ge=1, le=50)
     max_daily_loss_pct: float = Field(default=0.02, ge=0.001, le=0.20)  # daily drawdown kill-switch

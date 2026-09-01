@@ -14,6 +14,101 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.26.0] — 2026-08-31
+
+**The agent has a threshold set above the range of its own score, and a second
+one above that.** Ten releases have gone into governing how a verdict is
+decided — stability, the analyst gate, retention, the counterfactual — and none
+of them touched the number all of it is decided from. Working the default
+weights through realistic sub-scores puts a near-best name at **0.747** and a
+typical one at **0.567**, against a BUY threshold of 0.70. That is the
+mechanical reason 592 of 602 recorded signals were HOLD, and it is not a bug in
+any one component: coverage weighting pulls every factor toward 0.5, macro is
+identical for every ticker so 0.15 of the weight can never separate two names,
+and volatility is correctly zeroed — leaving about 0.65 of the weight to do all
+the ranking.
+
+**Your auto-trade threshold was refusing every BUY the engine produced.**
+`min_signal_score` shipped at 0.75 while `BUY_THRESHOLD` is 0.70, and nothing
+tied them together. Since 0.75 is roughly the ceiling, essentially every
+published BUY landed in the band between the two and was refused at the order
+with a `SKIPPED` row reading "Score 0.71 below threshold 0.75" — underneath a
+ticker page whose BUY gate showed a tick. The panel was correct about the
+verdict and silent about the order, which is how a system ends up looking like
+it has no signals rather than like it has a bar set above its own range.
+
+- **The default now tracks the threshold** instead of being a number of its
+  own, imported rather than restated.
+- **Accounts still on exactly 0.75 are reset on startup.** Deliberately narrow:
+  only that exact value, and only while it is above the new default. Any other
+  number is somebody's decision. A hand-set 0.75 is indistinguishable from an
+  untouched one — that is a real limitation, and the alternative was leaving an
+  agent that never trades and cannot say why.
+- **The gate panel reports it**, on both clients, and only when it is stricter
+  than the verdict threshold — where it is the answer to "why did nothing
+  happen". Raising it on purpose is still allowed; arriving there by default
+  and finding out from an empty trade history is not.
+
+**A score can now be judged against the rest of your watchlist instead of
+against a fixed cutoff** (`ENABLE_RANK_SIGNALS`, **off**). "Is this one of the
+better things I am watching" is the question a swing trader actually asks; it
+is invariant to the market-wide macro shift that moves the whole field
+together, and it does not need re-tuning as data coverage improves. A BUY needs
+the **top fifth of the field** *and* an absolute floor of 0.55 — the floor is
+not optional, because somebody is always in the top fifth and a pure ranking
+rule buys the least-bad name in a uniformly bad field every day forever. The
+floor decides *whether*; the rank decides *which*.
+
+- **Exits are never reshaped, only added to.** A name under the sell threshold
+  still sells however badly its peers are doing. Applied symmetrically, ranking
+  would hold a position at 0.20 because four other names were at 0.10 — turning
+  "everything I watch is collapsing" into a reason to sell nothing, and making
+  this the first thing in the system ever to brake an exit.
+- **Ties rank pessimistically**, so a flat field produces no BUY at all. Given
+  how compressed this score is, "these all look the same" is a reading that
+  happens often, and it is an honest one.
+- **The rank is banded for a standing verdict; the floor is not.** The band
+  forgives movement in the *field*, which is noise about the peers. A position
+  whose own score has fallen through the floor is dropped however well it still
+  ranks, because that is information about the name.
+- **Every uncertain path falls back to the absolute rule** — ranking off, an
+  unreadable field, fewer than five names, a cohort of stale scores. That
+  fallback is the *stricter* of the two rules, which is the right direction for
+  a path that could not compute what it wanted to.
+- **Three consumers move with it or they are wrong.** The analyst gate is
+  reconciled against the same cohort, or it records a `buy_refused` for a
+  refusal the engine never made. The order path carries the account's *margin*
+  over the engine's bar rather than its absolute number, or a default dial
+  vetoes every rank-decided BUY — the same defect as above, one layer down.
+  And the analyst-call gate measures proximity in rank, or it spends the budget
+  on names that are no longer near a decision.
+
+**Known gaps.** **Ranking is off, and nothing has measured whether it is
+better.** It changes which names the agent buys on a system that places orders;
+the honest position is that the argument for it is arithmetic about the score's
+distribution, not evidence about outcomes. `/performance/calibration` is what
+would settle it and needs roughly twenty trading days of settled history under
+the new rule — so early October at the soonest, on a paper account whose
+history was wiped on 30 Aug. **The relative rule has never run against live
+data**; it is verified by unit tests over the rule and the percentile
+arithmetic, and by typecheck. **The personalized path is not ranked**:
+`compute_personalized_score` takes no cohort and stays on the absolute rule, so
+a reader with custom weights sees a verdict decided differently from the stored
+one — visible, since the gate panel reports which bar was applied, but a real
+inconsistency and not a small one to fix, because ranking a personalized score
+means re-scoring the whole watchlist at read time. **Calibration does not yet
+segment by rule**, so once the flag is switched on its history mixes verdicts
+from both and the buckets will describe the mixture until that is added.
+Finally, **the cohort is read up to three times per ticker per cycle** (gate,
+analyst, rule) rather than once — each is a small query over about thirteen
+documents, so it is cheap rather than free, and the fix is to thread one cohort
+through `run_pipeline`.
+
+Neither change touches the scoring weights, the risk gate, sizing, brackets, or
+any exit path.
+
+---
+
 ## [1.25.0] — 2026-08-31
 
 **The gate has been overruling the AI analyst for three releases and nobody
