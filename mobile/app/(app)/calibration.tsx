@@ -4,7 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { AlertCircle, CheckCircle2, HelpCircle, XCircle } from 'lucide-react-native'
 import { performanceApi } from '../../src/lib/api'
 import type {
-  CalibrationBucket, CalibrationReport, ConfidenceBucket, ScoreBucket, ThresholdRow,
+  CalibrationBucket, CalibrationReport, ConfidenceBucket, OverrideBlock,
+  ScoreBucket, ThresholdRow,
 } from '../../src/types'
 import Disclaimer from '../../src/components/Disclaimer'
 import { usePalette, type Palette } from '../../src/lib/palette'
@@ -207,6 +208,116 @@ function Stat({ label, value, tone, sub }: {
   )
 }
 
+/**
+ * One side of the analyst gate, against the decisions it left alone. The phone
+ * counterpart of the web `OverrideBlockCard`.
+ *
+ * The two group figures are deliberately untoned: green-good would mean
+ * opposite things on the two blocks — a refused buy doing badly is the gate
+ * working, a forced exit doing badly is not — and a colour that inverts between
+ * two cards on one screen teaches nothing. The gap carries the judgement.
+ */
+function OverrideCard({ block, minSamples }: {
+  block: OverrideBlock; minSamples: number
+}) {
+  const C = usePalette()
+  const refused = block.direction === 'long'
+  return (
+    <View style={{ gap: 10 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        <Stat
+          label={refused ? 'Refused' : 'Forced out'}
+          value={signedPct(block.overridden.avg_alpha)}
+          sub={`${block.overridden.alpha_n} settled${refused ? '' : ' · sign-flipped'}`}
+        />
+        <Stat
+          label="Left alone"
+          value={signedPct(block.control.avg_alpha)}
+          sub={`${block.control.alpha_n} settled`}
+        />
+        <Stat
+          label="Gap"
+          value={block.alpha_saved == null ? '—' : signedPct(block.alpha_saved)}
+          tone={returnTone(C, block.alpha_saved)}
+          sub="positive = gate was right"
+        />
+      </View>
+      <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+        {!block.conclusive
+          ? `Not enough settled records on both sides to conclude anything. Under `
+            + `${minSamples} a gap this size is noise.`
+          : block.alpha_saved != null && block.alpha_saved > 0
+            ? refused
+              ? 'The buys the gate refused did worse than the ones it allowed. The gate is '
+                + 'earning its place.'
+              : 'The positions the gate forced out fell harder than the exits both sides '
+                + 'agreed on. Overruling the analyst beat an ordinary exit.'
+            : refused
+              ? 'The buys the gate refused did no worse than the ones it allowed — on this '
+                + 'evidence it is spending an opportunity on every refusal.'
+              : 'The positions the gate forced out held up better than ordinary exits. The '
+                + 'analyst was seeing something the score was not.'}
+      </Text>
+    </View>
+  )
+}
+
+
+function AnalystGateBlock({ report }: { report: CalibrationReport }) {
+  const C = usePalette()
+  const gate = report.analyst_gate
+  if (!gate) return null
+
+  if (gate.recorded_records === 0) {
+    return (
+      <Block title="Was the analyst gate worth having?" blurb="Nothing to say yet.">
+        <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+          No settled signal yet carries a record of what the gate decided. The override
+          has only been retained since 1.24.0 and a record needs about twenty trading
+          days to settle, so the first reading is not due before October. Rows from
+          before then cannot be backfilled — the decision was never stored.
+        </Text>
+      </Block>
+    )
+  }
+
+  return (
+    <Block
+      title="Was the analyst gate worth having?"
+      blurb="The AI analyst is overruled in two directions: a buy the rule refuses, and an
+             exit it wanted to hold open. Never combined — opposite bets, and the exit
+             figures are sign-flipped so a name falling reads as the right call."
+    >
+      <View style={{ gap: 16 }}>
+        <View style={{ gap: 8 }}>
+          <Text style={{
+            fontSize: 9, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 1,
+          }}>
+            Buys the gate refused
+          </Text>
+          <OverrideCard block={gate.buy_refused} minSamples={report.min_samples_for_signal} />
+        </View>
+        <View style={{ gap: 8 }}>
+          <Text style={{
+            fontSize: 9, fontWeight: '700', color: C.fgMuted,
+            textTransform: 'uppercase', letterSpacing: 1,
+          }}>
+            Exits the gate forced
+          </Text>
+          <OverrideCard block={gate.sell_restored} minSamples={report.min_samples_for_signal} />
+        </View>
+        <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 15 }}>
+          {gate.recorded_records} settled record
+          {gate.recorded_records === 1 ? '' : 's'} carry a gate decision. Signals from
+          before 1.24.0 are excluded rather than counted as agreement.
+        </Text>
+      </View>
+    </Block>
+  )
+}
+
+
 export default function CalibrationScreen() {
   const C = usePalette()
   const [report, setReport] = useState<CalibrationReport | null>(null)
@@ -405,6 +516,8 @@ export default function CalibrationScreen() {
                 ))}
               </Card>
             </Block>
+
+            <AnalystGateBlock report={report} />
 
             <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 15 }}>
               This screen reports; it does not tune. Fitting a threshold to its own history

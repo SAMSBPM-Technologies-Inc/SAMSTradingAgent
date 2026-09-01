@@ -728,6 +728,29 @@ being right. Every row carries `n` and a `significant` flag — under
 `MIN_SAMPLES_FOR_SIGNAL` (30) the UI marks it *thin* rather than showing a
 confident-looking percentage. Do not add auto-tuning here.
 
+**`calibration.override_counterfactual` asks whether the analyst gate was worth
+having** — the number `_gate_analyst_signal` should be argued from, and the
+direct analogue of `veto_counterfactual`. Two blocks, read as pairs:
+`buy_refused` against the analyst BUYs the gate allowed, and `sell_restored`
+against the rule SELLs the analyst agreed with. **They are never pooled** —
+opposite bets on opposite sides of the book, one sign-inverted, so a combined
+figure would be meaningless rather than merely slow to converge.
+
+Three properties hold it up. Rows whose `analyst_override` key is **absent**
+are excluded entirely: that marks a signal from before 1.24.0 and says nothing,
+whereas `None` means the gate ran with nothing to override — conflating them
+would load the control group with every row ever written before the gate
+existed. The SELL block is **sign-flipped** in `_short_side`, because a SELL is
+right when the name *falls* and `_stats`' `win_rate` would otherwise report an
+80% failure as an 80% win; the flip is marked `direction: "short"` rather than
+implemented as a flag on the shared `_stats`, which would silently mislabel
+every caller that forgot it. And **`alpha_saved` is the only figure comparable
+across the two blocks** — positive always means the gate was justified, which
+is why `_edge` is called with its arguments in opposite orders. Within a block
+the raw figures share an orientation; across blocks they do not, since on the
+buy side the overridden group is the one the gate made us skip. Same `n` /
+`significant` discipline as everything else here, and the same refusal to tune.
+
 `GET /performance/research-calibration` is scoped to the caller and
 **segmented by `(provider, model)`** — pooling producers measures the mixture,
 and a strong model averaged with a weak one yields a curve describing neither.

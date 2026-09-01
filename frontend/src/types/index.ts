@@ -1066,7 +1066,36 @@ export interface CalibrationReport {
   alpha_usable_buckets?: number
   threshold_sweep: ThresholdRow[]
   confidence_buckets: ConfidenceBucket[]
+  analyst_gate?: OverrideCounterfactual | null
   min_samples_for_signal: number
+}
+
+/**
+ * One side of the analyst gate, against the decisions it left alone.
+ *
+ * `direction` is `short` on the restored-SELL block, meaning its outcomes are
+ * sign-flipped: a SELL is right when the name falls, so raw figures would
+ * report a fall as a loss and invert the finding.
+ */
+export interface OverrideBlock {
+  direction: 'long' | 'short'
+  control_label: string
+  overridden: CalibrationBucket
+  control: CalibrationBucket
+  /** Positive = the gate's intervention was justified. The only figure
+   *  comparable across the two blocks — within a block the raw numbers share
+   *  an orientation with each other and not with the other block. */
+  alpha_saved: number | null
+  conclusive: boolean
+}
+
+export interface OverrideCounterfactual {
+  /** Rows where the gate was recorded at all. Rows predating 1.24.0 carry no
+   *  override field and are excluded — absent is "never recorded", which is
+   *  not the same fact as "nothing to override". */
+  recorded_records: number
+  buy_refused: OverrideBlock
+  sell_restored: OverrideBlock
 }
 
 // ── Research calibration ──────────────────────────────────────────────────────

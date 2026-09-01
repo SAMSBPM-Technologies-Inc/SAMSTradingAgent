@@ -196,6 +196,151 @@ def confidence_buckets(records: Iterable[dict], bins: int = 5) -> list[dict]:
     return out
 
 
+def _recorded(rows: Sequence[dict]) -> list[dict]:
+    """
+    Rows whose analyst gate was actually written down.
+
+    The key being **absent** means the row predates 1.24.0, when the override
+    first reached `stocks_signal_history` — it says nothing either way. A
+    `None` value means the gate ran and had nothing to override, which is
+    evidence. Treating the first as the second is the one mistake that would
+    quietly wreck every figure below, by loading the control group with every
+    row ever written before the gate existed.
+    """
+    return [r for r in rows if "analyst_override" in r]
+
+
+def _short_side(rows: Sequence[dict]) -> list[dict]:
+    """
+    The same rows with the sign of every outcome flipped.
+
+    A SELL is *right* when the name falls, so `_stats`' `win_rate`
+    (`return_20d > 0`) reads exactly backwards on an exit: a group that rose
+    four times in five would report an 80% win rate on what was in fact an 80%
+    failure. Rather than teach `_stats` a direction — a flag on a shared helper
+    that silently mislabels everything that forgets to pass it — the outcomes
+    are negated here and the block that uses them is marked
+    `direction: "short"`.
+
+    The effect is that **higher is better everywhere**, on both blocks and both
+    sides of every comparison, which is the same discipline the six research
+    dimensions follow where `risk` means *safer*.
+    """
+    out = []
+    for r in rows:
+        flipped = dict(r)
+        for key in ("return_20d", "alpha_20d"):
+            value = r.get(key)
+            # `None` stays `None`. Negating a missing outcome into 0.0 would
+            # invent a flat result for a row nothing is known about.
+            if isinstance(value, (int, float)):
+                flipped[key] = -value
+        out.append(flipped)
+    return out
+
+
+def _edge(group: dict, control: dict) -> Optional[float]:
+    """
+    How much better the overridden group fared than its control, in alpha.
+
+    `None` unless both sides produced a figure — the honest answer far more
+    often than not, and never `0.0`, which would read as "no difference
+    measured" when the truth is "nothing was measured".
+    """
+    if group["avg_alpha"] is None or control["avg_alpha"] is None:
+        return None
+    return round(group["avg_alpha"] - control["avg_alpha"], 6)
+
+
+def override_counterfactual(records: Iterable[dict]) -> dict:
+    """
+    Were the analyst gate's refusals worth making?
+
+    The number `_gate_analyst_signal` should be argued from, and the direct
+    analogue of `veto_counterfactual` — same shape, same discipline, same
+    refusal to tune anything. Until 1.22.0 the analyst's verdict was published
+    unchecked; the gate now overrides it in two directions, and neither has ever
+    been measured.
+
+    Read each block as a pair, never on its own:
+
+      * **buy_refused** — the analyst wanted to buy and the gate said no. The
+        control is the analyst's BUYs that *passed*. The gate earns its place
+        only if the refused names went on to do meaningfully **worse**; a
+        refused group that performed in line with the allowed one means the
+        gate is spending an opportunity on every single refusal.
+
+      * **sell_restored** — the rule wanted out and the analyst wanted to stay,
+        and the rule won. The control is the rule's SELLs the analyst agreed
+        with. Sign-flipped (see `_short_side`), so a high figure means the name
+        fell and leaving was right. A restored group that fared *better* than
+        ordinary sells means the analyst was seeing something the score was not,
+        and the cost of overruling it is what this measures.
+
+    **`alpha_saved` is the only figure comparable across the two blocks**, and
+    on both of them positive means the gate was justified — which is why
+    `_edge` is called with its arguments in opposite orders below. Inside a
+    block, `overridden` and `control` share an orientation, since that is what
+    makes their difference mean anything; across blocks they do not, because on
+    the buy side the overridden group is the one the gate made us *skip*. A
+    surface showing the raw figures must say which block they belong to.
+
+    **The two are never pooled.** Research calibration offers a pooled row
+    because its segments converge slowly and the mixture is still informative.
+    These are opposite bets on opposite sides of the book, one of them
+    sign-inverted; a pooled figure would not be slow to interpret, it would be
+    meaningless.
+
+    Read off what was recorded at the time, never by re-deriving the verdict
+    against today's thresholds — that would answer a different question, and one
+    nobody asked.
+    """
+    rows = _recorded(_settled(records))
+
+    refused = [r for r in rows if r.get("analyst_override") == "buy_refused"]
+    restored = [r for r in rows if r.get("analyst_override") == "sell_restored"]
+
+    # Controls are the same decision the gate left alone: the analyst asked for
+    # this verdict and got it. Rows where the analyst never ran carry a null
+    # `analyst_wanted` and belong to neither side — there was no opinion to
+    # override, so they are evidence about the score, not about the gate.
+    allowed = [r for r in rows
+               if r.get("analyst_override") is None and r.get("analyst_wanted") == "BUY"]
+    agreed = [r for r in rows
+              if r.get("analyst_override") is None and r.get("analyst_wanted") == "SELL"]
+
+    refused_stats, allowed_stats = _stats(refused), _stats(allowed)
+    restored_stats = _stats(_short_side(restored))
+    agreed_stats = _stats(_short_side(agreed))
+
+    return {
+        "recorded_records": len(rows),
+        "buy_refused": {
+            "direction": "long",
+            "control_label": "analyst BUYs the gate allowed",
+            "overridden": refused_stats,
+            "control": allowed_stats,
+            # Positive means the gate refused the worse names, which is the
+            # only result that justifies keeping it this strict.
+            "alpha_saved": _edge(allowed_stats, refused_stats),
+            "conclusive": (refused_stats["alpha_significant"]
+                           and allowed_stats["alpha_significant"]),
+        },
+        "sell_restored": {
+            "direction": "short",
+            "control_label": "rule SELLs the analyst agreed with",
+            "overridden": restored_stats,
+            "control": agreed_stats,
+            # Positive means the names the gate forced out fell harder than the
+            # ones both sides wanted out of — overruling the analyst was, if
+            # anything, better than an ordinary exit.
+            "alpha_saved": _edge(restored_stats, agreed_stats),
+            "conclusive": (restored_stats["alpha_significant"]
+                           and agreed_stats["alpha_significant"]),
+        },
+    }
+
+
 def summarise(records: Iterable[dict], risk_max: Optional[float] = None) -> dict:
     """Everything above, plus the base rate the buckets should be judged against."""
     rows = _settled(records)
@@ -237,6 +382,12 @@ def summarise(records: Iterable[dict], risk_max: Optional[float] = None) -> dict
         "alpha_usable_buckets": len(alpha_usable),
         "threshold_sweep": threshold_sweep(rows, risk_max=risk_max),
         "confidence_buckets": confidence_buckets(rows),
+        # Passed the settled list rather than `records`: `records` is typed as
+        # an Iterable and `_settled` above has already consumed it if it was a
+        # generator, which would silently hand this an empty sample. `_settled`
+        # is idempotent, so re-filtering costs a pass and keeps the function
+        # usable on its own.
+        "analyst_gate": override_counterfactual(rows),
         "min_samples_for_signal": MIN_SAMPLES_FOR_SIGNAL,
     }
 

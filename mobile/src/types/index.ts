@@ -340,6 +340,20 @@ export interface CalibrationBucket {
   avg_return: number | null
   median_return: number | null
   significant: boolean
+  /** Alpha carries its OWN count and its own significance flag. Records
+   *  settled before benchmark measurement existed have a return and no alpha,
+   *  so the two samples are different sizes — showing one `n` against both
+   *  would let a three-record alpha inherit a three-hundred-record confidence.
+   *
+   *  The API has returned these since benchmark measurement shipped; this type
+   *  simply never declared them, so the phone could not read a figure that was
+   *  already on the wire. The web copy in `frontend/src/types/index.ts` is the
+   *  reference. */
+  alpha_n: number
+  alpha_win_rate: number | null
+  avg_alpha: number | null
+  median_alpha: number | null
+  alpha_significant: boolean
 }
 
 export interface ScoreBucket extends CalibrationBucket {
@@ -369,7 +383,35 @@ export interface CalibrationReport {
   usable_buckets: number
   threshold_sweep: ThresholdRow[]
   confidence_buckets: ConfidenceBucket[]
+  analyst_gate?: OverrideCounterfactual | null
   min_samples_for_signal: number
+}
+
+/**
+ * One side of the analyst gate, against the decisions it left alone.
+ *
+ * `direction` is `short` on the restored-SELL block, meaning its outcomes are
+ * sign-flipped: a SELL is right when the name falls, so raw figures would
+ * report a fall as a loss and invert the finding.
+ */
+export interface OverrideBlock {
+  direction: 'long' | 'short'
+  control_label: string
+  overridden: CalibrationBucket
+  control: CalibrationBucket
+  /** Positive = the gate's intervention was justified. The only figure
+   *  comparable across the two blocks. */
+  alpha_saved: number | null
+  conclusive: boolean
+}
+
+export interface OverrideCounterfactual {
+  /** Rows where the gate was recorded at all. Rows predating 1.24.0 carry no
+   *  override field and are excluded — absent is "never recorded", which is
+   *  not the same fact as "nothing to override". */
+  recorded_records: number
+  buy_refused: OverrideBlock
+  sell_restored: OverrideBlock
 }
 
 export interface Holding {

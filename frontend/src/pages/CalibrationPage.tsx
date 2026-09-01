@@ -7,6 +7,7 @@ import type {
   CalibrationReport,
   ConfidenceBucket,
   ConvictionBucket,
+  OverrideBlock,
   ResearchCalibrationReport,
   ScoreBucket,
   ThresholdRow,
@@ -317,6 +318,169 @@ function ConfidenceTable({ rows }: { rows: ConfidenceBucket[] }) {
         ))}
       </tbody>
     </TableShell>
+  )
+}
+
+/**
+ * Was the analyst gate worth having?
+ *
+ * The gate overrides the AI analyst in two directions and until this shipped
+ * neither had ever been measured — the override was written to a document
+ * replaced every five minutes, so no sample accumulated at all.
+ *
+ * The two blocks are never combined. They are opposite bets on opposite sides
+ * of the book and one of them is sign-inverted; a pooled figure would not be
+ * slow to read, it would be meaningless.
+ */
+function OverrideBlockCard({ block, minSamples }: {
+  block: OverrideBlock
+  minSamples: number
+}) {
+  const refused = block.direction === 'long'
+  return (
+    <div className="card flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        {/* The two group figures are deliberately NOT toned. Green-good would
+            mean opposite things on the two blocks — a refused buy doing badly
+            is the gate working, a forced exit doing badly is not — and a colour
+            that inverts between two cards on one screen teaches the reader
+            nothing. The Gap tile below carries the judgement, where positive
+            means the same thing on both. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+            {refused ? 'Refused' : 'Forced out'}
+          </span>
+          <span className="text-[20px] font-bold tabular-nums text-[var(--color-fg)]"
+                style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+            {signedPct(block.overridden.avg_alpha)}
+          </span>
+          <span className="text-[11px] text-[var(--color-fg-muted)]">
+            {block.overridden.alpha_n} settled
+            {!refused && ' · sign-flipped'}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+            Left alone
+          </span>
+          <span className="text-[20px] font-bold tabular-nums text-[var(--color-fg)]"
+                style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+            {signedPct(block.control.avg_alpha)}
+          </span>
+          <span className="text-[11px] text-[var(--color-fg-muted)]">
+            {block.control.alpha_n} settled · {block.control_label}
+          </span>
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+            Gap
+          </span>
+          <span className={`text-[20px] font-bold tabular-nums ${returnTone(block.alpha_saved)}`}
+                style={{ fontFamily: 'Archivo, system-ui, sans-serif' }}>
+            {block.alpha_saved == null ? '—' : signedPct(block.alpha_saved)}
+          </span>
+          <span className="text-[11px] text-[var(--color-fg-muted)]">
+            positive = gate was right
+          </span>
+        </div>
+      </div>
+      <p className="text-xs leading-relaxed text-[var(--color-fg-muted)]">
+        {!block.conclusive ? (
+          <>
+            Not enough settled records on both sides to conclude anything. Under{' '}
+            {minSamples} a gap this size is noise, and loosening the gate from it
+            would be guessing with extra steps.
+          </>
+        ) : block.alpha_saved != null && block.alpha_saved > 0 ? (
+          refused ? (
+            <>
+              The buys the gate refused went on to do worse than the ones it allowed,
+              by {signedPct(block.alpha_saved)} of alpha. The gate is earning its
+              place.
+            </>
+          ) : (
+            <>
+              The positions the gate forced out fell harder than the exits both sides
+              agreed on. Overruling the analyst was, if anything, better than an
+              ordinary exit.
+            </>
+          )
+        ) : refused ? (
+          <>
+            The buys the gate refused did no worse than the ones it allowed. On this
+            evidence the gate is spending an opportunity on every refusal — which
+            argues for letting a high-conviction analyst BUY through above some
+            score floor, not for leaving it as is.
+          </>
+        ) : (
+          <>
+            The positions the gate forced out held up better than ordinary exits. The
+            analyst was seeing something the score was not, and this is what
+            overruling it cost.
+          </>
+        )}
+      </p>
+    </div>
+  )
+}
+
+function AnalystGateSection({ report }: { report: CalibrationReport }) {
+  const gate = report.analyst_gate
+  if (!gate) return null
+
+  if (gate.recorded_records === 0) {
+    return (
+      <Block
+        title="Was the analyst gate worth having?"
+        blurb="Nothing to say yet."
+      >
+        <p className="card text-xs leading-relaxed text-[var(--color-fg-muted)]">
+          No settled signal yet carries a record of what the gate decided. The
+          override has only been retained since 1.24.0 and a record needs about
+          twenty trading days to settle, so the first reading is not due before
+          October — and rows from before then cannot be backfilled, because the
+          decision was never stored.
+        </p>
+      </Block>
+    )
+  }
+
+  return (
+    <Block
+      title="Was the analyst gate worth having?"
+      blurb="The AI analyst is overruled in two directions: a buy the rule refuses, and an
+             exit the analyst wanted to hold open. Each is measured against the decisions
+             the gate left alone. They are never combined — they are opposite bets, and
+             the exit figures are sign-flipped so that a name falling reads as the
+             right call."
+    >
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+            Buys the gate refused
+          </span>
+          <OverrideBlockCard
+            block={gate.buy_refused}
+            minSamples={report.min_samples_for_signal}
+          />
+        </div>
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-widest text-[var(--color-fg-muted)]">
+            Exits the gate forced
+          </span>
+          <OverrideBlockCard
+            block={gate.sell_restored}
+            minSamples={report.min_samples_for_signal}
+          />
+        </div>
+        <p className="text-[11px] leading-relaxed text-[var(--color-fg-muted)]">
+          {gate.recorded_records} settled record
+          {gate.recorded_records === 1 ? '' : 's'} carry a gate decision. Signals from
+          before 1.24.0 are excluded rather than counted as agreement — the decision
+          was not stored, which is not the same as there being nothing to override.
+        </p>
+      </div>
+    </Block>
   )
 }
 
@@ -709,6 +873,8 @@ export default function CalibrationPage() {
           >
             <ConfidenceTable rows={report.confidence_buckets} />
           </Block>
+
+          <AnalystGateSection report={report} />
 
           {research && (
             <>
