@@ -964,10 +964,28 @@ export interface ClosedTrade {
   pnl_pct: number | null
   stop_loss: number | null
   take_profit: number | null
+  /**
+   * What the position did between entry and exit, against entry.
+   *
+   * `mfe_pct` beside `pnl_pct` is the whole give-back story on one row: +0.09
+   * and −0.05 is a position that ran nine percent and stopped out. Null — never
+   * 0 — when the position was never observed while open, which is every trade
+   * closed before excursions were recorded.
+   */
+  mfe_pct?: number | null
+  mae_pct?: number | null
+  gave_back_pct?: number | null
+  /** `breakeven` or `trail` when the stop was raised while the position ran. */
+  stop_raised_by?: string | null
   /** Why the position was opened. Both halves of the story on one row. */
   entry_reason?: string | null
   exit_reason: string | null
-  /** The stable code behind exit_reason; null when a stop or target fired. */
+  /**
+   * The stable code behind exit_reason. `TAKE_PROFIT` / `STOP_LOSS` are named
+   * by reconciliation from the levels the trade carried; `SELL_SIGNAL` /
+   * `MANUAL_CLOSE` come from the exit path itself. Null means the close could
+   * not be attributed to either leg — not that a leg fired.
+   */
   exit_trigger?: string | null
   status: string
   signal_type: string | null
@@ -995,7 +1013,32 @@ export interface TradePerformanceResponse {
    */
   agent_originated: TradeStats
   all: TradeStats
+  /**
+   * How positions actually ended, keyed by `exit_trigger` (plus `unknown`).
+   *
+   * The four buckets above answer "who chose this trade"; none of them answers
+   * "how did it end", which for a strategy built on buying weakness and selling
+   * strength is the other half. `avg_gave_back_pct` against `avg_return_pct` in
+   * the same bucket is what a trailing stop should be argued from.
+   */
+  exits: Record<string, ExitBucket>
   recent_closed: ClosedTrade[]
+}
+
+export interface ExitBucket {
+  n: number
+  significant: boolean
+  wins: number
+  total_pnl: number | null
+  avg_return_pct: number | null
+  /**
+   * Its own sample count: the excursion series starts later than the trade
+   * series, so a mean over four of forty rows must not read as one over forty.
+   */
+  measured_n: number
+  avg_mfe_pct: number | null
+  avg_mae_pct: number | null
+  avg_gave_back_pct: number | null
 }
 
 // ── Chart ─────────────────────────────────────────────────────────────────────

@@ -43,6 +43,7 @@ from app.models.trade import TradeStatus
 from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
+from app.services.setup_scan import classify_trigger
 from app.services import source_health
 from app.services.cross_section import cohort_for
 from app.services.signal_generator import (
@@ -189,7 +190,7 @@ async def run_pipeline(ticker: str) -> dict:
                         extra={"current_price": current_price,
                                "day_change_pct": day_change_pct},
                     )
-                    await _append_history(signal, raw_doc)
+                    await _append_history(signal, raw_doc, scored)
                     logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst",
                                 signal=signal.get("signal"), cache_reason=cache_reason)
                     await _fire_alerts(ticker, prev_signal, signal,
@@ -213,7 +214,7 @@ async def run_pipeline(ticker: str) -> dict:
         ticker, signal, prev_signal, prev_stability,
         extra={"current_price": current_price, "day_change_pct": day_change_pct},
     )
-    await _append_history(signal, raw_doc)
+    await _append_history(signal, raw_doc, scored)
     logger.info("pipeline_complete", ticker=ticker, mode="rule_based", signal=signal.get("signal"))
     await _fire_alerts(ticker, prev_signal, signal,
                        changed=changed, prev_conviction=prev_conviction)
@@ -527,10 +528,13 @@ def _build_data_sources(raw_doc: dict) -> dict:
     }
 
 
-async def _append_history(signal: dict, raw_doc: dict) -> None:
+async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
     """
     Upsert a history record to stocks_signal_history keyed on (ticker, hour_bucket).
     Prevents duplicate records when pipeline is triggered multiple times within one hour.
+
+    `feat_doc` is the document `score_ticker` just returned, so the setup fields
+    below cost no read.
     """
     try:
         db = await get_db()
@@ -579,6 +583,36 @@ async def _append_history(signal: dict, raw_doc: dict) -> None:
             "analyst_override": gate.get("override"),
             "analyst_wanted":   gate.get("model_signal"),
             "rule_signal":      gate.get("rule_signal"),
+            # ── The dip-buy setup this verdict was produced on ─────────────
+            # The declared strategy is mean-reversion (config.technical_stance)
+            # and nothing retained what the reversion actually looked like at
+            # the moment of the verdict. `score` is a blend of six factors and
+            # cannot be taken apart twenty days later, so the one question the
+            # strategy rests on — did an entry setup predict forward alpha —
+            # could not be asked however long anyone waited. The analyst gate
+            # and the research veto both have a counterfactual; this did not.
+            #
+            # The trigger is stored ALONGSIDE its inputs, not instead of them:
+            # the thresholds are tunable, so a replay recomputing the trigger
+            # from today's constants would describe a rule that never ran,
+            # while the raw indicators are what a different rule can be tested
+            # against.
+            #
+            # Same absent-vs-None convention as `analyst_override`. `None`
+            # means this code wrote the row and the indicator was not computed;
+            # the key being ABSENT means the row predates this and must be
+            # excluded rather than read as a missing indicator.
+            "technical_score":   feat_doc.get("technical_score"),
+            "rsi_14":            feat_doc.get("rsi_14"),
+            "stoch_rsi":         feat_doc.get("stoch_rsi"),
+            "bb_pct":            feat_doc.get("bb_pct"),
+            "macd_bullish":      feat_doc.get("macd_bullish"),
+            "ma_cross_bullish":  feat_doc.get("ma_cross_bullish"),
+            "setup_trigger":     classify_trigger(
+                feat_doc.get("rsi_14"), feat_doc.get("stoch_rsi"),
+                feat_doc.get("bb_pct"), feat_doc.get("macd_bullish"),
+                feat_doc.get("ma_cross_bullish"),
+            ),
             # Filled by performance tracker after ~20 trading days:
             "price_20d_later": None,
             "return_20d":      None,

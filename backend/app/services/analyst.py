@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app.config import get_settings
-from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, get_db
+from app.db import COLL_FEATURES, COLL_RAW, COLL_SIGNALS, COLL_TRADES, get_db
+from app.models.trade import TradeStatus
 from app.services import source_health
 from app.services.research.agents.base import AgentSpec, run_agent
 from app.services.cross_section import cohort_for
@@ -78,6 +79,17 @@ Rules:
 - Signal must be exactly one of: BUY, SELL, HOLD
 - Conviction must be exactly one of: HIGH, MEDIUM, LOW
 - When technicals and fundamentals conflict, reason through the dominant driver before deciding
+
+Holding versus buying:
+- When the context contains an OPEN POSITION block, you are advising on a position
+  that already exists. The question is whether to KEEP it, not whether to open it.
+  BUY means add or keep building, HOLD means keep what is held, SELL means close it.
+- A good company at a stretched price is a reason to take a profit, not a reason to
+  keep holding. Say so when the position is extended, well above its cost, and off
+  its peak — being right about the business is not the same as being right about the
+  price from here.
+- With no OPEN POSITION block, nothing is held: judge the name on its own merits and
+  SELL means "avoid or exit", not "sell short". This system never opens shorts.
 """
 
 # The shape, enforced server-side rather than requested in prose.
@@ -332,7 +344,15 @@ async def run_analysis(
         return None
 
     risk = assess_risk(feat)
-    context = _build_context(ticker, feat, raw, risk)
+    # Only when the flag is on, and only ever additive: this cannot change a
+    # verdict the gate would not already have accepted, because
+    # `_gate_analyst_signal` still reconciles whatever comes back against the
+    # rule. What it changes is the question the model is answering.
+    position = (
+        await position_context(ticker)
+        if get_settings().analyst_position_context else None
+    )
+    context = _build_context(ticker, feat, raw, risk, position)
 
     try:
         analyst_output = await _call_claude(
@@ -486,7 +506,130 @@ def _format_headline(article: dict) -> str:
     return f"- {headline}{suffix}"
 
 
-def _build_context(ticker: str, feat: dict, raw: dict, risk: dict) -> str:
+async def position_context(ticker: str) -> dict | None:
+    """
+    What the desk is holding in *ticker*, or None when it is holding nothing.
+
+    **The analyst is called on every open position precisely because "the exit
+    decision is worth paying for at any score", and it was never told there was
+    a position.** No holding flag, no cost basis, no working levels. So it
+    answered "would I buy this?" every time, and a SELL from it meant "this is a
+    bad name to own" rather than "take the profit". On a rip — where the company
+    still looks excellent and only the price is extended — that is the wrong
+    question, and the model's very reasonable HOLD was the wrong answer to it.
+
+    Aggregated across holders and deliberately not scoped to a user: this call
+    is shared, one per ticker per cycle, and its verdict is published to
+    everyone watching. Behind `/trading` there is one brokerage account, so the
+    aggregate is also the truth. Entry is cost-weighted for the same reason
+    scale-in blends it — a position built in two lots has one cost basis.
+
+    Returns None on any doubt, including a database error. A prompt that
+    invents a position is worse than one that omits a real one: the first
+    argues about money that is not there, the second is merely the behaviour
+    every release before this had.
+    """
+    try:
+        db = await get_db()
+        rows = await db[COLL_TRADES].find({
+            "ticker": ticker.upper(),
+            "action": "BUY",
+            "status": {"$in": list(TradeStatus.OPEN)},
+            "closed_at": None,
+        }).to_list(length=200)
+    except Exception as exc:
+        logger.warning("position_context_failed", ticker=ticker, error=str(exc))
+        return None
+
+    qty = 0.0
+    cost = 0.0
+    stops: list[float] = []
+    targets: list[float] = []
+    peak: float | None = None
+    opened: datetime | None = None
+
+    for r in rows:
+        entry = r.get("entry_price") or r.get("limit_price")
+        q = float(r.get("filled_qty") or r.get("qty") or 0)
+        # An unfilled entry is an order, not a position. Counting it would
+        # report a cost basis for shares nobody owns.
+        if not entry or q <= 0 or not r.get("entry_price"):
+            continue
+        qty += q
+        cost += q * float(entry)
+        if r.get("stop_loss"):
+            stops.append(float(r["stop_loss"]))
+        if r.get("take_profit"):
+            targets.append(float(r["take_profit"]))
+        hw = r.get("high_water_price")
+        if hw is not None:
+            peak = float(hw) if peak is None else max(peak, float(hw))
+        at = r.get("filled_at") or r.get("opened_at")
+        if isinstance(at, datetime):
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            opened = at if opened is None else min(opened, at)
+
+    if qty <= 0 or cost <= 0:
+        return None
+
+    return {
+        "qty": qty,
+        "entry": cost / qty,
+        # The tightest stop and the nearest target are the levels that will
+        # actually resolve the position first.
+        "stop": max(stops) if stops else None,
+        "target": min(targets) if targets else None,
+        "peak": peak,
+        "opened_at": opened,
+    }
+
+
+def _position_block(pos: dict | None, price: float) -> str:
+    """
+    The prompt section describing an open position, or an empty string.
+
+    Everything here is a fact the record holds; nothing is inferred. The peak is
+    the point of it — "up 14%, and 6% off its high since entry" is the sentence
+    that makes a profit-taking question answerable at all, and no release before
+    the high-water mark existed could have written it.
+    """
+    if not pos or price <= 0:
+        return ""
+
+    entry = pos["entry"]
+    unreal = (price - entry) / entry
+    lines = [
+        "",
+        "=== OPEN POSITION — YOU ARE HOLDING THIS ===",
+        f"Position: {pos['qty']:g} shares at a blended cost of ${entry:,.2f}",
+        f"Unrealised: {unreal:+.1%} at the current ${price:,.2f}",
+    ]
+    peak = pos.get("peak")
+    if peak and peak > 0:
+        off = (peak - price) / peak
+        lines.append(
+            f"Peak since entry: ${peak:,.2f} "
+            f"({(peak - entry) / entry:+.1%} at its best; now {off:.1%} below that peak)"
+        )
+    if pos.get("stop"):
+        lines.append(f"Working stop: ${pos['stop']:,.2f}")
+    if pos.get("target"):
+        lines.append(f"Working target: ${pos['target']:,.2f}")
+    opened = pos.get("opened_at")
+    if opened:
+        days = max((datetime.now(tz=timezone.utc) - opened).days, 0)
+        lines.append(f"Held for {days} day{'s' if days != 1 else ''}")
+    lines.append(
+        "The decision here is whether to KEEP this position, not whether to "
+        "start one."
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _build_context(
+    ticker: str, feat: dict, raw: dict, risk: dict, position: dict | None = None,
+) -> str:
     price   = feat.get("current_price", 0.0)
     chg     = raw.get("day_change_pct", 0.0)
     date    = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
@@ -611,6 +754,7 @@ Options Flow (P/C ratio): {pcr_str}
 Short Interest: {si_str}
 Insider Transactions (90d): {ins_str}
 
+{_position_block(position, price)}
 === RISK ASSESSMENT ===
 Risk Score: {risk['risk_score']:.1f}/10 ({risk['risk_level']})
 {risk['explanation']}

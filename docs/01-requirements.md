@@ -255,7 +255,7 @@ The system shall provide a contextual guide page offering a "Buyer's Guide" view
 
 #### FR-038 — Dip-Buy Scanner
 The system shall provide an **Alpha Radar** page that scans all tickers in the current user's watchlist and identifies:
-- **Entry setups** — tickers simultaneously satisfying RSI-14 ≤ 45, Stochastic RSI ≤ 20%, and Bollinger Band position ≤ 35% (all three conditions required).
+- **Entry setups** — tickers simultaneously satisfying RSI-14 ≤ 45, Stochastic RSI ≤ 20%, Bollinger Band position ≤ 35%, **and** at least one of MACD or the MA-20/50 cross still bullish (all four conditions required). The trend condition is what separates a pullback from a stock in free fall: the three oscillators read identically in both cases. A ticker whose trend inputs are unavailable shall be classified NEUTRAL rather than ENTRY.
 - **Exit alerts** — tickers where RSI-14 ≥ 70 OR Bollinger Band position ≥ 90% (either condition sufficient).
 
 Results shall be sourced from the most recently computed `stocks_features` document for each ticker. No new pipeline run shall be triggered by the scan itself.

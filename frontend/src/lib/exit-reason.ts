@@ -16,7 +16,10 @@
  */
 
 const CODE_LABEL: Record<string, string> = {
-  // Reconciliation found the position flat with no exit of ours behind it.
+  // Reconciliation found the position flat and could not attribute it to either
+  // bracket leg — the fill sat between the stop and the target, or the trade
+  // carried no levels. Still the honest answer; it is just no longer the ONLY
+  // answer, which is what it used to be for every bracket exit ever recorded.
   bracket_or_manual: 'Stop or target fired, or closed at the broker',
   // Closed, but the execution that would price it is gone.
   closed_unpriced: 'Closed — exit price unavailable',
@@ -37,14 +40,22 @@ export function exitReasonLabel(reason?: string | null): string | null {
  * venue's own working orders produced. Drives emphasis, never wording.
  */
 export function isDecidedExit(trigger?: string | null): boolean {
-  return trigger === 'SELL_SIGNAL' || trigger === 'EXIT_ALERT' || trigger === 'MANUAL_CLOSE'
+  // TAKE_PROFIT and STOP_LOSS are deliberately absent: they are the venue's own
+  // working orders resolving, not a choice anyone made at the time. EXIT_ALERT
+  // is absent because it never existed — `execute_exit` defaulted to it and no
+  // caller ever passed it, so no record carries it.
+  return trigger === 'SELL_SIGNAL' || trigger === 'MANUAL_CLOSE'
 }
 
 /** Short form for a dense feed: a few words rather than a full sentence. */
 const TRIGGER_SHORT: Record<string, string> = {
   SELL_SIGNAL: 'sell signal',
-  EXIT_ALERT: 'exit alert',
   MANUAL_CLOSE: 'you closed it',
+  // Named by reconciliation from the levels the trade carried against the price
+  // it filled at. Before that both of these were `bracket_or_manual` and the
+  // most basic question about an exit — target or stop — had no answer.
+  TAKE_PROFIT: 'target reached',
+  STOP_LOSS: 'stopped out',
 }
 
 export function exitTriggerShort(trigger?: string | null): string | null {

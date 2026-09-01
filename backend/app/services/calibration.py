@@ -412,7 +412,16 @@ async def calibration_report(
          # dropped silently, which would make a stored override look like a
          # missing one and read as agreement.
          "analyst_used": 1, "analyst_override": 1, "analyst_wanted": 1,
-         "rule_signal": 1},
+         "rule_signal": 1,
+         # The dip-buy setup behind the verdict, so the strategy this system
+         # actually runs can be measured rather than assumed. Carried here for
+         # the same reason as the override fields, and it is the same trap:
+         # a field named in one of these two lists and not the other is dropped
+         # silently by Mongo and the report describes nothing.
+         "technical_score": 1, "setup_trigger": 1,
+         "rsi_14": 1, "stoch_rsi": 1, "bb_pct": 1,
+         "macd_bullish": 1, "ma_cross_bullish": 1,
+         },
     ).to_list(length=100_000)
 
     report = summarise(records, risk_max=risk_max)

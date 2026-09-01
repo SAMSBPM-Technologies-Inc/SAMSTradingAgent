@@ -177,6 +177,25 @@ npm run web
    the system prompt. AMZN was bought at 0.62 and CBRS at 0.66 on a risk score
    of 6.3, past a veto documented here as unconditional.
 
+   **The analyst is told when it is holding something.** It is called on every
+   open position because "the exit decision is worth paying for at any score" —
+   and for as long as that gate existed it was never *told* a position was open.
+   No holding flag, no cost basis, no working levels. So it answered "would I
+   buy this?" every time, and its SELL meant "a bad name to own" rather than
+   "take the profit"; on a rip, where the company still looks excellent and only
+   the price is extended, that is the wrong question and HOLD was a reasonable
+   answer to it. `position_context` (aggregated, not per-user — the call is
+   shared and there is one brokerage account behind it) supplies blended cost,
+   unrealised return, the peak since entry and the working levels, and the
+   system prompt separates keeping a position from opening one.
+   `ANALYST_POSITION_CONTEXT` gates it. Two properties: **an unfilled entry is
+   not a position** (counting it reports a cost basis for shares nobody owns),
+   and **every uncertain path returns `None`** — a prompt that invents a
+   position argues about money that is not there, which is worse than the
+   omission this replaces. It remains additive: `_gate_analyst_signal` still
+   reconciles whatever comes back, so this changes the question the model is
+   asked and never what the engine will accept.
+
    **The override is retained, not just published.** `stocks_signals` holds one
    document per ticker and is replaced every cycle, so an `analyst_gate`
    written there survives about five minutes. `_append_history` therefore
@@ -190,6 +209,20 @@ npm run web
    `/performance/calibration` route — and a field added to one and not the
    other is dropped silently by Mongo, so `test_history_retention.py` pins them
    together.
+
+   **The dip-buy setup is retained on the same row, for the same reason.**
+   `technical_score`, `setup_trigger` and the five indicators behind it
+   (`rsi_14` / `stoch_rsi` / `bb_pct` / `macd_bullish` / `ma_cross_bullish`)
+   come off the feature document `score_ticker` already returned, so they cost
+   no read. The declared strategy is mean-reversion and `score` is a blend of
+   six factors that cannot be taken apart twenty days later — so "did an entry
+   setup predict forward alpha" was unanswerable however long anyone waited,
+   while the analyst gate and the research veto both had a counterfactual. The
+   trigger is stored **alongside** its inputs, not instead of them: the
+   thresholds are tunable, so a replay recomputing the trigger from today's
+   constants would describe a rule that never ran, while the raw indicators are
+   what a *different* rule can be tested against. Absent-vs-`None` follows
+   `analyst_override` exactly.
 
    Three further properties are load-bearing. `analyst_output` keeps the
    model's own answer **unrewritten** — it is the only evidence the override
@@ -254,6 +287,58 @@ npm run web
    *position* and is measured on cost basis, so a falling price cannot free up
    room to average down. Same guard chain as any other entry — see
    `_prepare_entry`. Verify with `runbooks/scale-in-paper-verification.md`.
+
+   **Buying the dip is half a strategy; the other half is measured, not
+   assumed.** Every automated exit here is decided *before* the position moves —
+   the bracket's stop and target are set at entry, and apart from a scale-in
+   nothing revised them. Three things follow, and all three are load-bearing.
+
+   **A position now records what it did while it was held.** `_excursion_update`
+   writes high- and low-water marks from the venue's own mark on every
+   reconciliation pass (no extra request — `get_positions` already carries
+   `market_value`), and `_excursion_summary` turns them into `mfe_pct`,
+   `mae_pct` and `gave_back_pct` on close. Without these a trade recorded its
+   entry and its exit and nothing between, so "ran 9% and gave it all back" and
+   "never moved" were the same row — a stop-out at −5% — and no exit rule could
+   be argued for or against. Each stays **`None`, never `0.0`**, the
+   `commission_paid` rule: a give-back of zero says the exit was perfectly
+   timed, flatteringly, every time.
+
+   **`_classify_bracket_exit` names the leg that fired.** At or above the target
+   is `TAKE_PROFIT` (a limit fills at the level or better), at or below the stop
+   is `STOP_LOSS` (a stop fills at or below, further on a gap), and a fill
+   **between the two is left unattributed** — neither leg can have fired, and
+   guessing the likelier one is the fabrication this replaces. Reconciliation
+   stamped `bracket_or_manual` on every bracket exit for as long as it existed,
+   which is why `/performance/trades` could bucket trades by who *chose* them
+   and never by how they *ended*. `_exit_breakdown` is that missing half;
+   `avg_gave_back_pct` against `avg_return_pct` in the same bucket is the number
+   a trailing stop must be argued from, and it carries its own `measured_n`
+   because the excursion series starts later than the trade series.
+
+   **`TRAILING_STOP_ENABLED` raises a stop and can never lower one.** Break-even
+   at `BREAKEVEN_TRIGGER_PCT`, then a trail `TRAILING_STOP_PCT` under the
+   high-water mark once the peak clears `TRAILING_STOP_ACTIVATE_PCT`; the higher
+   candidate wins. Five refusals hold it up, and each is an existing rule
+   applied to the exit: never below the working stop (the scale-in invariant),
+   never through the market (a stop at the mark is a market order with extra
+   steps), never through the target (`_reprotect` would refuse the pair and
+   leave the position bare), never for a move under
+   `TRAILING_STOP_MIN_STEP_PCT` (each move costs a cancel and two placements —
+   the `MIN_ADD_FRACTION` rate limit), and **never written to the record until
+   the venue accepts it**, because a record claiming protection the venue never
+   took is the one direction of error that makes a position look safer than it
+   is. `_track_and_trail` places nothing when no orders are working: heal
+   re-places from the record in that same pass, and both acting would put two
+   pairs on one holding. It ships **off**, like `RESEARCH_VETO_ENABLED` — the
+   measurement lands first and the behaviour is argued from it.
+
+   **`EXIT_ALERT` was a ghost and is gone.** `execute_exit`'s `trigger`
+   defaulted to it, both callers passed something else, and
+   `trade_rationale._EXIT_REASON` carried a sentence that could never be
+   written. `trigger` is now required. The setup scan's overbought flag stays
+   advisory — nothing sells on it — and if that is ever wired, the vocabulary
+   comes back with the code that writes it.
 
    **An order costs money to place, so order count is a risk of its own.** A
    standing `BUY` re-runs `_prepare_entry` every 5-minute cycle — deliberate,
@@ -734,6 +819,28 @@ signal plus a `trigger` (`ENTRY` / `EXIT_ALERT` / `NEUTRAL` / `PENDING`) with
 the indicators behind it, surfaced as a Setup column, filter chips, and an
 expandable row detail. Thresholds live in `services/setup_scan.py`;
 `GET /signals/dip-buy` is deprecated but still served from the same module.
+
+**The badge and the score must read a dip the same way, so there is one
+`trend_confirmation`.** It lives in `setup_scan.py` — the module with no
+dependencies — and `feature_engineering._technical_score` imports it. It used
+to exist only inside the score, so an ENTRY badge fired on RSI/Stoch/Bollinger
+alone while the score gated those same oscillators on trend: a stock in free
+fall scored 0.388, was badged green, and sorted to the top of the rail above a
+high-conviction BUY. An ENTRY now also needs one of MACD or the MA cross still
+bullish. Two asymmetries are deliberate. **An unknown trend gives NEUTRAL**,
+the opposite of the score's fallback to the additive blend — a score must
+return a number for every ticker, a badge has a third answer that costs
+nothing, so the one that prompts a purchase fails closed. And the **exit side
+is not gated at all**, because a trend condition there would suppress warnings
+rather than prompts; the same rule that keeps SELL clear of the risk gate,
+confirmations and dwell.
+
+**Nothing reads the trigger but a client.** No import of `setup_scan` exists in
+`signal_generator`, `scoring`, `trade_manager` or `pipeline` except
+`_append_history` — ENTRY has never placed an order and EXIT_ALERT has never
+closed one (`pipeline._execute_trades` carries the scar from the last time that was
+assumed). Whether it *should* is a question the retained series now exists to
+answer; until it has settled rows, it stays a display.
 
 **Score attribution and the risk gate are surfaced, not hidden.** The six
 sub-scores in `stocks_features` drive every verdict, so `GET /analyze` returns
