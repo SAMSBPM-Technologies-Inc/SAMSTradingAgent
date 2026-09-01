@@ -44,7 +44,15 @@ from app.services.feature_engineering import compute_features
 from app.services.ingestion import ingest_ticker
 from app.services.scoring import score_ticker
 from app.services import source_health
-from app.services.signal_generator import BUY_THRESHOLD, SELL_THRESHOLD, generate_signal
+from app.services.cross_section import cohort_for
+from app.services.signal_generator import (
+    BUY_THRESHOLD,
+    RANK_BUY_PERCENTILE,
+    RANK_HYSTERESIS,
+    RANK_SELL_PERCENTILE,
+    SELL_THRESHOLD,
+    generate_signal,
+)
 from app.services.signal_stability import (
     STABILITY_FIELD,
     StabilityState,
@@ -279,29 +287,65 @@ async def _analyst_worth_calling(ticker: str, feat_doc: dict) -> tuple[bool, str
         return True, "no_score"
 
     margin = settings.analyst_gate_margin
+
+    if settings.enable_rank_signals:
+        # Proximity has to be measured against the boundary that will actually
+        # decide the verdict. Under the relative rule that is a rank, so a name
+        # at 0.60 sitting just outside the top quintile is exactly the live
+        # call this gate exists to pay for, while one at 0.68 in the middle of
+        # the field is not. Measuring the absolute distance would spend the
+        # budget on the second and skip the first.
+        cohort = await cohort_for(ticker, float(score))
+        if cohort is None:
+            # No cohort means the rule-based path will fall back to the
+            # absolute rule, so the absolute band below is the right one.
+            pass
+        else:
+            # `analyst_gate_margin` is in score units; the rank band is in
+            # percentile points. `RANK_HYSTERESIS` is the system's own
+            # statement of what counts as a meaningful move in rank, so it is
+            # reused rather than a second tunable being invented.
+            if cohort.percentile >= RANK_BUY_PERCENTILE - RANK_HYSTERESIS:
+                return True, f"near_buy_rank_{cohort.percentile:.2f}"
+            if cohort.percentile <= RANK_SELL_PERCENTILE + RANK_HYSTERESIS:
+                return True, f"near_sell_rank_{cohort.percentile:.2f}"
+            if settings.analyst_always_analyse_holdings and await _has_open_position(ticker):
+                return True, f"position_open_{score:.2f}"
+            return False, f"mid_field_{cohort.percentile:.2f}"
+
     if score >= BUY_THRESHOLD - margin:
         return True, f"near_buy_{score:.2f}"
     if score <= SELL_THRESHOLD + margin:
         return True, f"near_sell_{score:.2f}"
 
-    if settings.analyst_always_analyse_holdings:
-        try:
-            db = await get_db()
-            held = await db[COLL_TRADES].find_one({
-                "ticker": ticker,
-                "action": "BUY",
-                "status": {"$in": list(TradeStatus.OPEN)},
-                "closed_at": None,
-            })
-            if held:
-                return True, f"position_open_{score:.2f}"
-        except Exception as exc:
-            # Can't confirm there's no position — analyse rather than stop
-            # forming a view on capital that may still be committed.
-            logger.warning("analyst_gate_position_check_failed", ticker=ticker, error=str(exc))
-            return True, "position_check_failed"
+    if settings.analyst_always_analyse_holdings and await _has_open_position(ticker):
+        return True, f"position_open_{score:.2f}"
 
     return False, f"mid_range_{score:.2f}"
+
+
+async def _has_open_position(ticker: str) -> bool:
+    """
+    Whether anyone is holding *ticker* right now.
+
+    **Returns True when it cannot tell.** An unreadable trades collection means
+    capital may still be committed, and the failure that matters here is
+    declining to form a view on an open position — not the cost of one extra
+    analyst call. Extracted so the absolute and relative gate branches cannot
+    answer this question differently.
+    """
+    try:
+        db = await get_db()
+        held = await db[COLL_TRADES].find_one({
+            "ticker": ticker,
+            "action": "BUY",
+            "status": {"$in": list(TradeStatus.OPEN)},
+            "closed_at": None,
+        })
+        return held is not None
+    except Exception as exc:
+        logger.warning("analyst_gate_position_check_failed", ticker=ticker, error=str(exc))
+        return True
 
 
 async def _needs_analyst_refresh(ticker: str, raw_doc: dict, feat_doc: dict) -> tuple[bool, str]:
@@ -576,6 +620,13 @@ async def _execute_trades(ticker: str, signal: dict) -> None:
             # The analyst's own levels bracket the entry when they validate;
             # trade_manager falls back to configured percentages otherwise.
             ao = signal.get("analyst_output") or {}
+            # Which rule produced this verdict, read off the document rather
+            # than off config. A signal classified relatively must not be
+            # re-examined against an absolute bar half an hour later because
+            # somebody switched the flag — the order has to be judged by the
+            # rule that decided it. Absent means the absolute rule, including
+            # on every document written before ranking existed.
+            rank_decided = "score_percentile" in signal
             for w in watchers:
                 await execute_entry(
                     w["user_id"], ticker, score, current_price,
@@ -585,6 +636,7 @@ async def _execute_trades(ticker: str, signal: dict) -> None:
                     # believed this setup decides whether the agent may act
                     # unattended or has to ask.
                     conviction=ao.get("conviction"),
+                    rank_decided=rank_decided,
                 )
             return
 

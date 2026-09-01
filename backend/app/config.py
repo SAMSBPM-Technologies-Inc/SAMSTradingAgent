@@ -452,6 +452,31 @@ class Settings(BaseSettings):
     analyst_score_change_threshold: float = Field(default=0.12, description="Composite score shift that triggers re-analysis")
     analyst_vix_spike_threshold: float = Field(default=30.0, description="VIX level that forces re-analysis of all tickers")
 
+    # ── Relative scoring ──────────────────────────────────────────────────────
+    # Judge a score against the rest of the watchlist rather than against a
+    # fixed cutoff. See `services/cross_section.py` for the arithmetic; the
+    # short version is that coverage weighting, a common-mode macro factor and
+    # a zeroed volatility weight leave the composite clustered near 0.567 with
+    # a realistic ceiling around 0.75, against a BUY threshold of 0.70. An
+    # absolute cutoff on that distribution mostly selects for how much data
+    # happened to be available.
+    #
+    # **Off by default, and it should be turned on deliberately.** It changes
+    # which names the agent buys on a system that places real orders, and the
+    # honest position is that nothing has yet measured whether the relative
+    # rule ranks outcomes better than the absolute one —
+    # `/performance/calibration` is what will answer that, and it needs about
+    # twenty trading days of settled history under the new rule before it can.
+    #
+    # The thresholds themselves are NOT here. `signal_generator` owns every
+    # threshold in this system and everything else imports them; a second copy
+    # in config is exactly how `compute_personalized_score` ended up scoring
+    # users against a rule the pipeline had stopped using.
+    enable_rank_signals: bool = Field(
+        default=False,
+        description="Classify on percentile within the watchlist, not an absolute cutoff",
+    )
+
     # ── Signal stability ──────────────────────────────────────────────────────
     # A verdict is published only once it holds. HXL alerted eight times in an
     # hour on 24 Aug 2026 — BUY/HOLD/BUY/HOLD at an unchanged score of 0.61 —

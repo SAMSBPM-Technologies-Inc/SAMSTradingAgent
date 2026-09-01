@@ -146,6 +146,15 @@ export interface SignalGate {
   /** Which component produced the verdict. An overridden analyst read is `rule`. */
   decided_by: 'rule' | 'analyst'
   analyst?: AnalystGate | null
+  /**
+   * The reader's own `min_signal_score` — a second score bar applied where the
+   * order is placed, not where the verdict is classified. Clearing everything
+   * above is not sufficient to trade. `null` when the account has no
+   * auto-trade settings, which is not the same as a bar of zero.
+   */
+  order_threshold?: number | null
+  /** Whether the score clears it. `null` when there is no bar to clear. */
+  score_passes_order?: boolean | null
 }
 
 /** One factor's share of measured input. */

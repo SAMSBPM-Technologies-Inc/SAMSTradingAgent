@@ -187,6 +187,19 @@ class SignalGate(BaseModel):
     decided_by: str
     analyst: Optional[AnalystGate] = None
 
+    #: The reader's own `min_signal_score`: the *second* score bar, applied at
+    #: `execute_entry` rather than at classification. It is reported here
+    #: because a panel that shows only the first one is not describing what
+    #: will happen — a BUY that passes every field above and falls short of
+    #: this is refused with a SKIPPED row and no other visible trace. `None`
+    #: when the reader has no auto-trade settings, which is a different fact
+    #: from the bar being zero.
+    order_threshold: Optional[float] = None
+    #: Whether this score clears `order_threshold`. `None` when there is no
+    #: threshold to clear — never `True`, which would claim a check that did
+    #: not happen.
+    score_passes_order: Optional[bool] = None
+
 
 # ── Signal ────────────────────────────────────────────────────────────────────
 
@@ -767,7 +780,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.25.0"
+    version: str = "1.26.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

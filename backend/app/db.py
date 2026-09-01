@@ -15,6 +15,11 @@ logger = get_logger(__name__)
 
 _client: AsyncIOMotorClient | None = None
 
+#: The value `AutoTradeSettings.min_signal_score` shipped with, before it was
+#: tied to `BUY_THRESHOLD`. Kept here rather than in the model so the model
+#: carries only what it means now — see `_migrate_min_signal_score`.
+_LEGACY_MIN_SIGNAL_SCORE = 0.75
+
 
 async def connect_db() -> None:
     """Open the MongoDB connection pool. Called at app startup."""
@@ -32,6 +37,7 @@ async def connect_db() -> None:
     await _ensure_indexes_safely()
     await _migrate_trading_mode_safely()
     await _migrate_access_tier_safely()
+    await _migrate_min_signal_score_safely()
 
 
 async def _ensure_indexes_safely() -> None:
@@ -102,6 +108,78 @@ async def _migrate_access_tier_safely() -> None:
             error_type=type(exc).__name__,
             impact="accounts without an explicit access_tier load as BASIC — "
                    "no trading, no provider keys, and a watchlist cap",
+        )
+
+
+async def _migrate_min_signal_score_safely() -> None:
+    """
+    Run the threshold migration, but never let it take the API down.
+
+    Same reasoning as the wrappers above. If this fails, affected accounts keep
+    refusing BUYs in the [0.70, 0.75) band exactly as they have been — the
+    status quo, not a new failure — and the gate panel now reports the
+    threshold, so the cause is visible without the migration having run.
+    """
+    try:
+        await _migrate_min_signal_score()
+    except Exception as exc:
+        logger.error(
+            "min_signal_score_migration_failed_continuing",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            impact="accounts left on the old 0.75 default keep skipping BUYs "
+                   "between the verdict threshold and 0.75",
+        )
+
+
+async def _migrate_min_signal_score() -> None:
+    """
+    Undo a default that was quietly refusing every BUY the engine produced.
+
+    `min_signal_score` shipped at 0.75 while `BUY_THRESHOLD` is 0.70, and
+    nothing tied the two together. The composite's realistic ceiling is about
+    0.75, so in practice *every* published BUY landed in the band between them
+    and was refused at `execute_entry` — recorded as a SKIPPED row reading
+    "Score 0.71 below threshold 0.75", underneath a ticker page whose gate
+    panel showed the BUY gate passing.
+
+    The filter is deliberately narrow: **exactly** the old default, and only
+    where it is above the new one. A value of 0.75 that the user chose by hand
+    is indistinguishable from one they never touched — that is a real
+    limitation of not having recorded the difference — but 0.75 was the
+    shipped default for the entire life of the field, and the failure mode of
+    leaving it is an agent that never trades and cannot say why. Any other
+    value is somebody's decision and is left alone.
+
+    Idempotent: after this runs the filter matches nothing, so a restart is a
+    no-op, and a user who sets 0.75 back deliberately keeps it — the next
+    startup will lower it once more, which is the one case worth knowing about
+    and the reason this logs at info with the count.
+    """
+    # Local import: `signal_generator` imports this module, so taking the
+    # constant at module level here would close a cycle.
+    from app.services.signal_generator import BUY_THRESHOLD
+
+    if _LEGACY_MIN_SIGNAL_SCORE <= BUY_THRESHOLD:
+        # Somebody raised BUY_THRESHOLD past the old default. There is nothing
+        # to undo, and lowering to it would be a raise.
+        return
+
+    db = await get_db()
+    result = await db[COLL_USERS].update_many(
+        {
+            "auto_trade_settings.min_signal_score": _LEGACY_MIN_SIGNAL_SCORE,
+        },
+        {"$set": {"auto_trade_settings.min_signal_score": BUY_THRESHOLD}},
+    )
+    if result.modified_count:
+        logger.info(
+            "min_signal_score_migrated",
+            accounts=result.modified_count,
+            was=_LEGACY_MIN_SIGNAL_SCORE,
+            now=BUY_THRESHOLD,
+            reason="order-path threshold sat above the verdict threshold, so "
+                   "every published BUY was skipped",
         )
 
 
