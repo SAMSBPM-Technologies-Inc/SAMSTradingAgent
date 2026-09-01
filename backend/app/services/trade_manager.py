@@ -22,7 +22,11 @@ from app.services.benchmark import (
     alpha, benchmark_closes, benchmark_ticker, close_on_or_before,
 )
 from app.services.signal_generator import BUY_THRESHOLD, RANK_BUY_FLOOR
-from app.services.trade_rationale import entry_rationale, exit_rationale
+from app.services.trade_rationale import (
+    entry_rationale,
+    exit_rationale,
+    exit_trigger_phrase,
+)
 from app.utils.helpers import utcnow
 from app.utils.logger import get_logger
 
@@ -82,6 +86,192 @@ def _bracket_levels(
     if not (stop < entry < target):
         return None, None
     return stop, target
+
+
+# ── Excursion, exit classification, and the trail ─────────────────────────────
+#
+# Everything here is a pure function over a trade document and a price, so the
+# decision that moves a real stop can be tested without a broker. The three are
+# grouped because they answer one question between them: what did this position
+# actually do while we held it, and should the exit have moved with it.
+
+def _excursion_update(trade: dict, mark: float) -> dict:
+    """
+    High- and low-water marks for an open position, as a `$set` fragment.
+
+    **This is the measurement the exit side had none of.** A closed trade
+    recorded its entry and its exit and nothing in between, so "the position ran
+    9% and gave it all back" and "the position never moved" were the same
+    record: a stop-out at −5%. No trailing stop, no break-even rule and no exit
+    threshold could be argued for or against, because the number they would be
+    argued from did not exist.
+
+    Monotonic in both directions and computed in Python rather than with
+    `$max`/`$min` because `_update_trade` speaks `$set` — reconciliation is a
+    single scheduled job, so there is no writer to race with. Both stay unset
+    rather than seeded at the entry price: a position observed once, at a mark
+    below its entry, has a genuine low-water mark and no high-water one, and
+    seeding would report a peak that never happened.
+
+    Returns an empty dict when there is nothing to record. A mark of 0 or None
+    means the venue did not price the position this pass, which is not the same
+    as the price being 0 — the `commission_paid` rule.
+    """
+    if not mark or mark <= 0:
+        return {}
+
+    update: dict = {}
+    high = trade.get("high_water_price")
+    if high is None or mark > float(high):
+        update["high_water_price"] = round(mark, 4)
+        update["high_water_at"] = utcnow()
+
+    low = trade.get("low_water_price")
+    if low is None or mark < float(low):
+        update["low_water_price"] = round(mark, 4)
+        update["low_water_at"] = utcnow()
+
+    return update
+
+
+def _excursion_summary(trade: dict, exit_price: float | None) -> dict:
+    """
+    Turn the water marks into the three figures a closed trade is read by.
+
+    `mfe_pct` — the best this position ever showed, against entry.
+    `mae_pct` — the worst, which is what a stop distance should be argued from.
+    `gave_back_pct` — how much of the peak was still there at the exit. This is
+    the trailing-stop question stated as a number, and it is the only one of the
+    three that needs the exit price.
+
+    Every one stays `None` when it cannot be computed. A position held across a
+    restart may have no observed peak at all, and reporting that as a give-back
+    of 0.0 would say the exit was perfectly timed — flatteringly, in the same
+    direction, every time.
+    """
+    entry = trade.get("entry_price") or trade.get("limit_price")
+    if not entry or float(entry) <= 0:
+        return {}
+    entry = float(entry)
+
+    out: dict = {}
+    high = trade.get("high_water_price")
+    low = trade.get("low_water_price")
+
+    if high is not None:
+        out["mfe_pct"] = round((float(high) - entry) / entry, 6)
+    if low is not None:
+        out["mae_pct"] = round((float(low) - entry) / entry, 6)
+    if high is not None and exit_price:
+        # Against entry, not against the peak, so it is directly comparable
+        # with `return_pct` and with `mfe_pct` — "made 9%, kept 2%" reads off
+        # the two numbers without a third denominator to keep track of.
+        out["gave_back_pct"] = round((float(high) - float(exit_price)) / entry, 6)
+    return out
+
+
+def _classify_bracket_exit(
+    exit_price: float | None,
+    stop: float | None,
+    target: float | None,
+) -> str | None:
+    """
+    Which bracket leg fired, or None when the record cannot say.
+
+    Reconciliation used to stamp `bracket_or_manual` on everything it found
+    flat, so a target hit and a stop-out were indistinguishable in the one field
+    a reader looks at — even though the trade document carries both levels and
+    the fill price, and the comparison is this function. "How do exits actually
+    end" was unanswerable for want of two inequalities.
+
+    The comparisons are one-sided on purpose and match how the legs fill. A
+    take-profit is a LIMIT: it fills at the level or better, so at or above.
+    A stop fills at or below its trigger, further below on a gap. Between the
+    two levels neither leg can have fired, and the honest answer is None — that
+    is a close that happened somewhere else, and claiming a cause for it would
+    be exactly the fabrication this replaces.
+    """
+    if not exit_price or exit_price <= 0:
+        return None
+    if target and exit_price >= float(target):
+        return "TAKE_PROFIT"
+    if stop and exit_price <= float(stop):
+        return "STOP_LOSS"
+    return None
+
+
+def _trailed_stop(
+    *,
+    entry: float | None,
+    mark: float | None,
+    high_water: float | None,
+    working_stop: float | None,
+    target: float | None,
+) -> tuple[float | None, str | None]:
+    """
+    The stop this position should now carry, and which rule raised it.
+
+    Returns `(None, None)` to leave the stop exactly where it is, which is the
+    answer in every uncertain case — a missing price, an unknown entry, a
+    position that has not risen. The failure mode being avoided is a guard that
+    tightens a stop on bad data and closes a live position for free.
+
+    **A stop may only ever move up.** That is the whole invariant, and it is the
+    same one `_combined_bracket_levels` enforces for scale-ins: the shares
+    bought first must never end up with looser protection than they had. Two
+    rules raise it, and the higher of the two wins:
+
+      break-even — once the position is up `breakeven_trigger_pct`, the stop
+                   moves to cost. Cheapest risk reduction available and, unlike
+                   the trail, it can never give back a profit it had.
+      trail      — once the PEAK is `trailing_stop_activate_pct` above entry,
+                   the stop follows the peak down by `trailing_stop_pct`.
+
+    Two refusals matter as much as the rules. A candidate at or above the
+    current mark is refused rather than clamped: it would liquidate the position
+    the instant it reached the venue, and clamping it under the mark would place
+    a stop nobody chose. And a move smaller than `trailing_stop_min_step_pct` is
+    refused because reconciliation runs every two minutes and each move costs a
+    cancel and two placements — the same reason an add has to clear
+    `MIN_ADD_FRACTION`.
+    """
+    s = get_settings()
+    if not s.trailing_stop_enabled:
+        return None, None
+    if not entry or entry <= 0 or not mark or mark <= 0:
+        return None, None
+
+    candidates: list[tuple[float, str]] = []
+
+    if s.breakeven_trigger_pct > 0 and mark >= entry * (1.0 + s.breakeven_trigger_pct):
+        candidates.append((entry, "breakeven"))
+
+    peak = float(high_water) if high_water else mark
+    if peak >= entry * (1.0 + s.trailing_stop_activate_pct):
+        candidates.append((peak * (1.0 - s.trailing_stop_pct), "trail"))
+
+    if not candidates:
+        return None, None
+
+    level, rule = max(candidates, key=lambda c: c[0])
+    level = round(level, 2)
+
+    # Never through the market. A stop at or above the mark is not protection,
+    # it is a market order with extra steps.
+    if level >= mark:
+        return None, None
+    # Never through the target either — `_reprotect` requires 0 < stop < target
+    # and would refuse the pair outright, leaving the position uncovered.
+    if target and level >= float(target):
+        return None, None
+
+    if working_stop is not None and float(working_stop) > 0:
+        if level <= float(working_stop):
+            return None, None            # never loosen, never re-place for nothing
+        if (level - float(working_stop)) < mark * s.trailing_stop_min_step_pct:
+            return None, None            # too small a move to be worth an order
+
+    return level, rule
 
 
 def _combined_bracket_levels(
@@ -1686,13 +1876,18 @@ async def execute_exit(
     user_id: str,
     ticker: str,
     current_price: float | None,
-    trigger: str = "EXIT_ALERT",
+    trigger: str,
     *,
     signal_score: float | None = None,
     require_enabled: bool = True,
 ) -> None:
     """
     Close an open BUY position for this user+ticker.
+
+    `trigger` is required and has no default. It used to default to
+    `"EXIT_ALERT"` — a value no caller ever passed and no exit ever carried,
+    which made a dead code path look like a live one in the one function that
+    sells things.
 
     `require_enabled` gates the *agent's* exits on the auto-trade switch. A
     user-initiated close passes False: refusing to let someone out of a position
@@ -2104,6 +2299,87 @@ async def _reprotect(
     return pair
 
 
+async def _track_and_trail(
+    trade: dict,
+    held: dict[str, float],
+    marks: dict[str, float],
+    account_id: str,
+) -> tuple[bool, bool]:
+    """
+    Record this position's excursion and, if the trail is on, raise its stop.
+
+    Returns `(recorded, stop_raised)` for the reconciliation counters.
+
+    Extracted rather than left inline for the same reason `_heal_unprotected`
+    is: it decides whether to cancel a working stop and place a new one, which
+    is the one thing in this pass that can close a live position by accident.
+    That decision has to be reachable from a test without a broker.
+
+    The order of the two halves matters. The excursion is written first and the
+    trail then reads the peak back off the updated record, so a new high set
+    this pass trails from itself rather than from the previous one — otherwise
+    the stop lags the price by a full cycle on exactly the fast moves it exists
+    to catch.
+
+    Places nothing when the venue has no working orders. There would be nothing
+    to cancel, and `_heal_unprotected` is about to re-place the bracket from the
+    record in this same pass; both acting would put two pairs on one holding for
+    the overlap. The stop is written to the record **only after** the venue has
+    accepted it — a record claiming protection the venue never took is the one
+    direction of error that makes a position look safer than it is.
+    """
+    if trade.get("action") != "BUY" or trade.get("closed_at") is not None:
+        return False, False
+
+    ticker = str(trade.get("ticker", "")).upper()
+    mark = marks.get(ticker)
+    if held.get(ticker, 0) <= 0 or not mark:
+        return False, False
+
+    recorded = False
+    excursion = _excursion_update(trade, mark)
+    if excursion:
+        await _update_trade(str(trade["_id"]), excursion)
+        trade.update(excursion)
+        recorded = True
+
+    new_stop, rule = _trailed_stop(
+        entry=trade.get("entry_price") or trade.get("limit_price"),
+        mark=mark,
+        high_water=trade.get("high_water_price"),
+        working_stop=trade.get("stop_loss"),
+        target=trade.get("take_profit"),
+    )
+    qty = int(float(trade.get("filled_qty") or trade.get("qty") or 0))
+    if new_stop is None or qty < 1:
+        return recorded, False
+
+    if not await ibkr.has_open_orders(ticker, account_id=account_id):
+        return recorded, False
+
+    previous_stop = trade.get("stop_loss")
+    target = float(trade.get("take_profit") or 0.0)
+    pair = await _reprotect(ticker, qty, new_stop, target, account_id)
+    if not pair:
+        # `_reprotect` logs the exposure and the heal phase re-places the OLD
+        # stop, which is still what the record says. Nothing is written here.
+        return recorded, False
+
+    await _update_trade(str(trade["_id"]), {
+        "stop_loss": new_stop,
+        "stop_raised_at": utcnow(),
+        "stop_raised_by": rule,
+        "stop_raise_count": int(trade.get("stop_raise_count") or 0) + 1,
+    })
+    logger.info(
+        "stop_raised",
+        ticker=ticker, rule=rule, mark=mark,
+        high_water=trade.get("high_water_price"),
+        previous_stop=previous_stop, new_stop=new_stop,
+    )
+    return recorded, True
+
+
 async def reconcile_trades() -> dict:
     """
     Bring local trade records in line with what the broker actually did.
@@ -2122,7 +2398,7 @@ async def reconcile_trades() -> dict:
     """
     summary = {"filled": 0, "partial": 0, "dead": 0, "closed": 0,
                "unpriced": 0, "unreconciled": 0, "scaled": 0, "reprotected": 0,
-               "repriced": 0, "settled": 0}
+               "repriced": 0, "settled": 0, "marked": 0, "trailed": 0}
 
     if not ibkr.is_connected():
         logger.debug("reconcile_skipped_broker_disconnected")
@@ -2230,6 +2506,18 @@ async def reconcile_trades() -> dict:
         for p in positions
     }
 
+    # The venue's own mark per share, which the position snapshot already
+    # carries — no extra request, and no quote provider in the exit path.
+    # Absent whenever the adapter fell back to `positions()`, which reports size
+    # and average cost but no market value; a missing mark records nothing
+    # rather than seeding an excursion from the entry price.
+    marks: dict[str, float] = {}
+    for pos in positions:
+        sym = str(pos.get("ticker", "")).upper()
+        mv, q = pos.get("market_value"), float(pos.get("qty") or 0)
+        if mv is not None and q:
+            marks[sym] = abs(float(mv) / q)
+
     try:
         fills = await ibkr.get_fills(lookback_minutes=1440)
     except Exception as exc:
@@ -2299,6 +2587,24 @@ async def reconcile_trades() -> dict:
             logger.error(
                 "scale_in_settle_failed",
                 ticker=trade.get("ticker"), error=str(exc),
+            )
+
+    # ── Phase 2c: record what the position did, and move the stop with it ────
+    #
+    # Runs BEFORE the heal below and never places anything when the venue has
+    # nothing working: the two are then mutually exclusive, so a pass can never
+    # heal a bracket and immediately cancel it to trail. A position found
+    # uncovered is healed at its recorded stop this pass and trailed on the
+    # next, two minutes later — one cycle of delay on an already exceptional
+    # path, in exchange for never paying for two pairs at once.
+    for trade in open_trades:
+        try:
+            marked, trailed = await _track_and_trail(trade, held, marks, account_id)
+            summary["marked"] += int(marked)
+            summary["trailed"] += int(trailed)
+        except Exception as exc:
+            logger.error(
+                "trail_check_failed", ticker=trade.get("ticker"), error=str(exc),
             )
 
     # A held position with nothing working at the venue has no automatic exit.
@@ -2373,11 +2679,26 @@ async def reconcile_trades() -> dict:
         entry_price = trade.get("entry_price") or trade.get("limit_price")
         qty = float(trade.get("filled_qty") or trade.get("qty") or 0)
 
+        # Which leg fired, decided from the levels this trade actually carried
+        # against the price it actually filled at. `bracket_or_manual` stays as
+        # the answer when the two inequalities cannot decide — that value was
+        # never wrong, it was just the only thing ever written.
+        bracket_exit = _classify_bracket_exit(
+            exit_price, trade.get("stop_loss"), trade.get("take_profit"),
+        )
         update = {
             "status": TradeStatus.CLOSED,
             "closed_at": now,
-            "exit_reason": "bracket_or_manual",
+            "exit_trigger": bracket_exit,
+            "exit_reason": (
+                exit_rationale(bracket_exit, None) if bracket_exit
+                else "bracket_or_manual"
+            ),
         }
+        # What the position did between entry and exit. Written on close rather
+        # than continuously because the marks it reads are already stored and
+        # the ratios only mean anything once there is an exit to measure to.
+        update.update(_excursion_summary(trade, exit_price))
         # The exit's own commission, folded in before net P&L is computed —
         # a round trip is charged twice and reporting only the entry leg would
         # halve the very cost this is measuring.
@@ -2423,6 +2744,7 @@ async def reconcile_trades() -> dict:
             # number. IB only serves same-session executions, so a position that
             # closed on an earlier day genuinely cannot be priced from here.
             update["exit_reason"] = "closed_unpriced"
+            update["exit_trigger"] = None      # no price, so no leg can be named
             summary["unpriced"] += 1
 
         await _update_trade(str(trade["_id"]), update)
@@ -2439,8 +2761,11 @@ async def reconcile_trades() -> dict:
             entry_price=float(entry_price) if entry_price else None,
             pnl=update.get("pnl"),
             exit_reason=(
-                "stop or target" if update["exit_reason"] == "bracket_or_manual"
-                else "closed — exit price unavailable"
+                # Prefer the leg we can now name; fall back to the old honest
+                # vagueness, and only then to the unpriced case.
+                exit_trigger_phrase(update.get("exit_trigger"))
+                or ("stop or target" if update["exit_reason"] == "bracket_or_manual"
+                    else "closed — exit price unavailable")
             ),
             is_paper=not get_settings().is_live_trading,
         )

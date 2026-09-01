@@ -20,6 +20,7 @@ import ta
 from app.config import get_settings
 from app.db import COLL_FEATURES, COLL_RAW, get_db
 from app.services.catalyst import compute_catalyst
+from app.services.setup_scan import trend_confirmation
 from app.utils.helpers import clamp, utcnow
 from app.utils.logger import get_logger
 
@@ -316,21 +317,6 @@ _OSC_WEIGHTS = (0.40, 0.33, 0.27)   # (rsi, bb, stoch)
 _TREND_FLOOR = 0.40
 
 
-def _trend_confirmation(tech: dict) -> Optional[float]:
-    """
-    0–1 reading of whether price structure supports the oscillators.
-
-    Returns None when neither trend input is available, so the caller can fall
-    back to the additive blend rather than inventing a gate from nothing.
-    """
-    parts = [
-        1.0 if v else 0.0
-        for v in (tech.get("macd_bullish"), tech.get("ma_cross_bullish"))
-        if v is not None
-    ]
-    return sum(parts) / len(parts) if parts else None
-
-
 def _technical_score(tech: dict, price: float) -> float:
     """
     Combine 5 technical signals into a single 0–1 score.
@@ -398,7 +384,10 @@ def _technical_score(tech: dict, price: float) -> float:
     if stoch is not None:
         oscillators.append((_orient(clamp(1.0 - float(stoch))), w_osc_stoch, w_stoch))
 
-    trend = _trend_confirmation(tech)
+    # Shared with the watchlist's ENTRY badge, which imports the same function.
+    # A second copy here is how the score and the badge came to disagree about
+    # what a dip is — see `setup_scan.classify_trigger`.
+    trend = trend_confirmation(tech.get("macd_bullish"), tech.get("ma_cross_bullish"))
 
     # ── Gated path (mean_reversion / momentum) ───────────────────────────────
     if stance != "blended" and oscillators and trend is not None:

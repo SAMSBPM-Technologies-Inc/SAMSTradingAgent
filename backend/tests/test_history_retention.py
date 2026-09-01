@@ -27,6 +27,17 @@ from app.services import pipeline as P  # noqa: E402
 #: The fields Phase 1 exists to retain.
 OVERRIDE_FIELDS = {"analyst_override", "analyst_wanted", "rule_signal"}
 
+#: The dip-buy setup behind the verdict. Same failure mode, different question:
+#: the declared strategy is mean-reversion, and `score` is a blend of six
+#: factors that cannot be taken apart twenty days later. Without these, "did an
+#: entry setup predict forward alpha" is unanswerable however long anyone waits.
+SETUP_FIELDS = {
+    "technical_score", "setup_trigger",
+    "rsi_14", "stoch_rsi", "bb_pct", "macd_bullish", "ma_cross_bullish",
+}
+
+RETAINED_FIELDS = OVERRIDE_FIELDS | SETUP_FIELDS
+
 
 class _History:
     def __init__(self):
@@ -44,14 +55,28 @@ class _Db:
         return self._history
 
 
-def append(monkeypatch, signal):
+#: A textbook dip: oversold on all three oscillators with the trend intact.
+PULLBACK = {
+    "technical_score": 0.907, "rsi_14": 24.0, "stoch_rsi": 0.10, "bb_pct": 0.20,
+    "macd_bullish": True, "ma_cross_bullish": True,
+}
+
+#: The same oscillator readings with the trend gone — the case the ENTRY badge
+#: used to call identical to the one above.
+KNIFE = {**PULLBACK, "technical_score": 0.388,
+         "macd_bullish": False, "ma_cross_bullish": False}
+
+
+def append(monkeypatch, signal, feat=None):
     history = _History()
 
     async def fake_get_db():
         return _Db(history)
 
     monkeypatch.setattr(P, "get_db", fake_get_db)
-    asyncio.run(P._append_history(signal, {"current_price": 100.0}))
+    asyncio.run(P._append_history(
+        signal, {"current_price": 100.0}, PULLBACK if feat is None else feat,
+    ))
     return history
 
 
@@ -159,7 +184,7 @@ def test_a_write_failure_never_fails_the_cycle(monkeypatch):
     monkeypatch.setattr(P, "get_db", boom)
     # Returns rather than raising: losing a history row is a lost data point,
     # and taking the pipeline down over it would lose the verdict too.
-    asyncio.run(P._append_history(signal_doc(), {"current_price": 100.0}))
+    asyncio.run(P._append_history(signal_doc(), {"current_price": 100.0}, PULLBACK))
 
 
 # ── The two projections ───────────────────────────────────────────────────────
@@ -188,8 +213,60 @@ def test_both_projections_over_the_history_collection_carry_the_fields():
         )
         assert block, f"no history projection found in {path.name}"
         projection = block.group(1)
-        for field in OVERRIDE_FIELDS:
+        for field in RETAINED_FIELDS:
             assert f'"{field}"' in projection, (
-                f"{path.name} drops {field} — the override would be invisible "
-                f"to the report that reads it"
+                f"{path.name} drops {field} — it would be invisible to the "
+                f"report that reads it"
             )
+
+
+# ── The setup behind the verdict ──────────────────────────────────────────────
+
+def test_the_setup_indicators_are_retained(monkeypatch):
+    """
+    The raw indicators, not just the verdict they produced. Thresholds are
+    tunable, so a replay that recomputed the trigger from today's constants
+    would describe a rule that was never run — the indicators are what a
+    different rule can actually be tested against.
+    """
+    rec = written(append(monkeypatch, signal_doc()))
+
+    assert SETUP_FIELDS <= set(rec)
+    assert rec["rsi_14"] == 24.0
+    assert rec["stoch_rsi"] == 0.10
+    assert rec["bb_pct"] == 0.20
+    assert rec["technical_score"] == 0.907
+
+
+def test_the_trigger_is_stored_as_well_as_its_inputs(monkeypatch):
+    """Both, for the reason above — neither is recoverable from the other."""
+    assert written(append(monkeypatch, signal_doc()))["setup_trigger"] == "ENTRY"
+
+
+def test_the_stored_trigger_is_trend_gated_like_the_badge(monkeypatch):
+    """
+    Identical oscillator readings, opposite trend. If the retained series could
+    not tell these apart, the sample it exists to build would pool a pullback
+    with a falling knife and measure neither.
+    """
+    knife = written(append(monkeypatch, signal_doc(), KNIFE))
+
+    assert knife["setup_trigger"] == "NEUTRAL"
+    assert knife["rsi_14"] == 24.0            # same oversold reading
+    assert knife["ma_cross_bullish"] is False  # different trend
+
+
+def test_a_feature_document_with_no_indicators_writes_nulls_not_absences(
+    monkeypatch,
+):
+    """
+    The `analyst_override` convention. `None` means this code wrote the row and
+    the indicator was not computed; the key being ABSENT means the row predates
+    this and must be excluded rather than counted as a missing indicator.
+    """
+    rec = written(append(monkeypatch, signal_doc(), {}))
+
+    assert SETUP_FIELDS <= set(rec)
+    assert rec["rsi_14"] is None
+    assert rec["technical_score"] is None
+    assert rec["setup_trigger"] == "NEUTRAL"

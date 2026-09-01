@@ -249,6 +249,7 @@ function TimingTiles({ item }: { item: WatchlistItem }) {
               <li>RSI-14 ≤ 45 — not yet overbought</li>
               <li>Stochastic RSI ≤ 20% — oversold</li>
               <li>Bollinger position ≤ 35% — near the lower band</li>
+              <li>MACD or MA-20/50 still bullish — the trend has not broken</li>
             </ul>
           </div>
           <div>

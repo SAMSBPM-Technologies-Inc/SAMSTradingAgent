@@ -5,6 +5,7 @@ import { performanceApi } from '../lib/api'
 import { formatDateTime } from '../lib/format'
 import type {
   ClosedTrade,
+  ExitBucket,
   PerformanceResponse,
   Signal,
   SignalRecord,
@@ -222,6 +223,106 @@ function TradeStatsBlock({ title, note, stats }: {
  * and would be labelled "stop hit" against a record that says otherwise. The
  * exit path now writes the reason it acted on, so that wins; the price
  * comparison survives only for rows closed before it did.
+ */
+const EXIT_LABEL: Record<string, string> = {
+  TAKE_PROFIT: 'Target reached',
+  STOP_LOSS: 'Stopped out',
+  SELL_SIGNAL: 'Sell signal',
+  MANUAL_CLOSE: 'You closed it',
+  unknown: 'Unattributed',
+}
+
+/**
+ * How positions ended, and how much of the move was still there when they did.
+ *
+ * The three buckets above answer "who chose this trade". This answers "how did
+ * it end", which for a strategy built on buying weakness and selling strength
+ * is the other half — and which no surface could show while reconciliation
+ * stamped one value on every bracket exit.
+ *
+ * `Gave back` is the number a trailing stop should be argued from. It carries
+ * its own sample count because the excursion series starts later than the trade
+ * series: a mean over four of forty rows must not read as one over forty, the
+ * same discipline alpha follows.
+ */
+function ExitBreakdown({ exits }: { exits: Record<string, ExitBucket> }) {
+  const rows = Object.entries(exits ?? {})
+    .filter(([, b]) => b.n > 0)
+    .sort((a, b) => b[1].n - a[1].n)
+  if (rows.length === 0) return null
+
+  return (
+    <div className="rounded-[7px] border border-[var(--color-border)] overflow-hidden">
+      <div className="px-3 py-2 border-b border-[var(--color-border)]">
+        <div className="text-[12px] font-semibold">How positions ended</div>
+        <p className="text-[11px] text-[var(--color-fg-muted)] mt-0.5">
+          Peak and give-back are measured against entry, so a bucket returning
+          −5% that peaked at +6% is a different system from one that never rose.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="text-[11px] uppercase tracking-wide text-[var(--color-fg-muted)]">
+            <tr className="border-b border-[var(--color-border)]">
+              <th scope="col" className="text-left font-medium px-3 py-1.5">Exit</th>
+              <th scope="col" className="text-right font-medium px-3 py-1.5">Trades</th>
+              <th scope="col" className="text-right font-medium px-3 py-1.5">Won</th>
+              <th scope="col" className="text-right font-medium px-3 py-1.5">Avg return</th>
+              <th scope="col" className="text-right font-medium px-3 py-1.5">Avg peak</th>
+              <th scope="col" className="text-right font-medium px-3 py-1.5">Gave back</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(([key, b]) => (
+              <tr key={key} className="border-b border-[var(--color-border)] last:border-0">
+                <td className="px-3 py-1.5">
+                  {EXIT_LABEL[key] ?? key}
+                  {!b.significant && (
+                    <span className="ml-1.5 text-[10px] uppercase tracking-wide text-[var(--color-fg-muted)]">
+                      thin
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{b.n}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums">{b.wins}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${returnColor(b.avg_return_pct)}`}>
+                  {fmtReturn(b.avg_return_pct)}
+                </td>
+                {/* Both excursion columns are blank rather than 0 when nothing
+                    was measured — every trade closed before the high-water mark
+                    existed has a return and no peak. */}
+                <td className="px-3 py-1.5 text-right tabular-nums">
+                  {b.measured_n > 0 ? fmtReturn(b.avg_mfe_pct) : '—'}
+                </td>
+                <td className="px-3 py-1.5 text-right tabular-nums">
+                  {b.measured_n > 0 ? fmtReturn(b.avg_gave_back_pct) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="px-3 py-1.5 text-[11px] text-[var(--color-fg-muted)] border-t border-[var(--color-border)]">
+        Peak and give-back cover{' '}
+        {rows.reduce((n, [, b]) => n + b.measured_n, 0)} of{' '}
+        {rows.reduce((n, [, b]) => n + b.n, 0)} closed trades.
+      </p>
+    </div>
+  )
+}
+
+
+/**
+ * Why a closed row says it closed.
+ *
+ * The stop/target comparison below now duplicates
+ * `trade_manager._classify_bracket_exit`, and deliberately: the server names the
+ * leg on rows it closes from here on, but a trade already settled as
+ * `bracket_or_manual` is never reconciled again and would otherwise stay
+ * unattributed forever. So this reads the same two inequalities for the back
+ * catalogue only. It must not gain rules the server does not have — a client
+ * that can explain an exit the server cannot is the drift that produced two
+ * disagreeing definitions of a dip.
  */
 function closedReason(t: ClosedTrade): string {
   const recorded = exitReasonLabel(t.exit_reason)
@@ -780,6 +881,7 @@ export default function PerformancePage() {
                 stats={trades.manual}
               />
             </div>
+            <ExitBreakdown exits={trades.exits} />
             <ClosedTradesTable trades={trades.recent_closed} />
           </div>
         )}

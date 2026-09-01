@@ -14,7 +14,7 @@ from app.dependencies import get_current_user
 from app.models.stock import PerformanceResponse, SignalPerformanceRecord
 from app.models.trade import TradeStatus
 from app.services.benchmark import benchmark_ticker
-from app.services.calibration import research_calibration_report
+from app.services.calibration import MIN_SAMPLES_FOR_SIGNAL, research_calibration_report
 from app.services.calibration import summarise as calibration_summary
 from app.services.risk_engine import RISK_MAX_FOR_BUY
 from app.utils.logger import get_logger
@@ -349,6 +349,7 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
 
     return {
         "signal_driven": summarise(signal_driven),
+        "exits": _exit_breakdown(trades),
         "approved": summarise(approved),
         "manual": summarise(manual),
         "agent_originated": summarise(agent_originated),
@@ -376,6 +377,13 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
                 ),
                 "stop_loss": t.get("stop_loss"),
                 "take_profit": t.get("take_profit"),
+                # What the position did between entry and exit. `mfe_pct` beside
+                # `return_pct` is the whole give-back story on one row: a trade
+                # that shows +0.09 and −0.05 ran nine percent and stopped out.
+                "mfe_pct": t.get("mfe_pct"),
+                "mae_pct": t.get("mae_pct"),
+                "gave_back_pct": t.get("gave_back_pct"),
+                "stop_raised_by": t.get("stop_raised_by"),
                 # Both halves of the story on one closed row: why it was
                 # bought, and why it was sold. A realised result read without
                 # the thesis behind it teaches nothing about the thesis.
@@ -393,6 +401,60 @@ async def get_trade_performance(current_user: dict = Depends(get_current_user)) 
             for t in recent
         ],
     }
+
+
+def _exit_breakdown(trades: list[dict]) -> dict:
+    """
+    How positions actually ended, and how much of the move was still there.
+
+    The three buckets above answer "who chose this trade". None of them answers
+    "how did it end", which for a strategy whose whole thesis is buying weakness
+    and selling strength is the other half of the question. `/performance/trades`
+    could not previously say how many exits were targets and how many were
+    stop-outs, because reconciliation stamped one value on both.
+
+    Grouped by `exit_trigger`, which is a *code* and never a guess: a close the
+    record cannot explain lands in `unknown` rather than being assigned to the
+    likelier leg. Rows from before excursions were recorded have no `mfe_pct`
+    and are counted in `n` but excluded from `avg_mfe_pct` — the same
+    absent-versus-zero rule as `alpha`, and for the same reason: folding them in
+    at zero would report every unmeasured trade as having given nothing back.
+
+    `avg_gave_back_pct` is the number a trailing stop should be argued from.
+    Against `avg_return_pct` in the same bucket it says what the current static
+    exit costs: a stop-loss bucket returning −5% that averaged +6% at its peak
+    is a different system from one that never rose at all, and until now those
+    two were the same row.
+    """
+    closed = [t for t in trades if t.get("status") == TradeStatus.CLOSED]
+
+    def _mean(rows: list[dict], field: str) -> float | None:
+        vals = [float(r[field]) for r in rows if r.get(field) is not None]
+        return round(sum(vals) / len(vals), 6) if vals else None
+
+    buckets: dict[str, list[dict]] = {}
+    for t in closed:
+        buckets.setdefault(t.get("exit_trigger") or "unknown", []).append(t)
+
+    out: dict[str, Any] = {}
+    for name, rows in buckets.items():
+        priced = [t for t in rows if t.get("pnl") is not None]
+        measured = [t for t in rows if t.get("mfe_pct") is not None]
+        out[name] = {
+            "n": len(rows),
+            "significant": len(rows) >= MIN_SAMPLES_FOR_SIGNAL,
+            "wins": sum(1 for t in priced if t["pnl"] > 0),
+            "total_pnl": round(sum(t["pnl"] for t in priced), 2) if priced else None,
+            "avg_return_pct": _mean(rows, "return_pct"),
+            # Sample size of its own, because the excursion series starts later
+            # than the trade series and a mean over four of forty rows must not
+            # read as a mean over forty.
+            "measured_n": len(measured),
+            "avg_mfe_pct": _mean(rows, "mfe_pct"),
+            "avg_mae_pct": _mean(rows, "mae_pct"),
+            "avg_gave_back_pct": _mean(rows, "gave_back_pct"),
+        }
+    return out
 
 
 @router.get("/performance/signals", summary="Recent individual signal history for your watchlist")
@@ -473,7 +535,16 @@ async def get_calibration(
          # — two explicit field lists over the same collection, and a field
          # added to one and not the other is a silent hole.
          "analyst_used": 1, "analyst_override": 1, "analyst_wanted": 1,
-         "rule_signal": 1},
+         "rule_signal": 1,
+         # The dip-buy setup behind the verdict, so the strategy this system
+         # actually runs can be measured rather than assumed. Carried here for
+         # the same reason as the override fields, and it is the same trap:
+         # a field named in one of these two lists and not the other is dropped
+         # silently by Mongo and the report describes nothing.
+         "technical_score": 1, "setup_trigger": 1,
+         "rsi_14": 1, "stoch_rsi": 1, "bb_pct": 1,
+         "macd_bullish": 1, "ma_cross_bullish": 1,
+         },
     ).to_list(length=100_000)
 
     report = calibration_summary(

@@ -14,6 +14,191 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.28.0] — 2026-09-01
+
+**Selling the rip.** 1.27.0 fixed the entry badge; this is the other half. A
+review of the exit path found that **every automated way out of a position was
+decided before the position ever moved** — the bracket's stop and target are set
+at entry and, apart from a scale-in, nothing revised them — and that nothing
+anywhere recorded what happened in between.
+
+**Your trades now record what they did while you held them.** A closed trade
+used to carry an entry and an exit and nothing else, so a position that ran 9%
+and reversed produced the same record as one that never moved: a stop-out at
+−5%. Reconciliation now writes a high- and low-water mark every two minutes from
+the venue's own mark — no extra data request — and a closed trade reports
+`mfe_pct` (the best it ever showed), `mae_pct` (the worst) and `gave_back_pct`
+(how much of the peak was gone by the exit). Each stays blank rather than zero
+when a position was never observed while open, because a give-back of zero
+claims a perfectly timed exit.
+
+**A closed trade can finally say whether it hit its target or its stop.**
+Reconciliation stamped `bracket_or_manual` on every bracket exit ever recorded,
+so the most basic question anyone asks of a trading record had no answer in it —
+even though the document held both levels and the fill price. The leg is now
+named from those: at or above the target is a take-profit, at or below the stop
+is a stop-out, and a fill between the two is left **unattributed** rather than
+assigned to the likelier one.
+
+**The Performance page has a "How positions ended" table.** The three buckets
+there answer *who chose the trade*; none of them answered *how it ended*, which
+for a strategy built on buying weakness and selling strength is the other half.
+Average peak beside average return says what the current static exit costs: a
+bucket returning −5% that had averaged +6% at its peak is a different system
+from one that never rose, and until now those were the same row. Peak and
+give-back carry their own sample count, because they start later than the trade
+record does.
+
+**The AI analyst is told when it is holding something.** It has always been
+called on every open position, deliberately, "because the exit decision is worth
+paying for at any score" — and it was never told a position was open. No holding
+flag, no cost basis, no working stop or target. So it answered "would I buy
+this?" every time, and its SELL meant "a bad name to own" rather than "take the
+profit". On a rip, where the company still looks excellent and only the price is
+extended, that is the wrong question, and the model's HOLD was a perfectly
+reasonable answer to it. It now sees blended cost, unrealised return, the peak
+since entry, the working levels and how long the position has been held, and the
+prompt separates keeping a position from opening one. Switchable with
+`ANALYST_POSITION_CONTEXT`, on by default. It cannot loosen anything: the
+analyst gate still reconciles whatever comes back against the rule.
+
+**A trailing stop, off by default.** `TRAILING_STOP_ENABLED` moves a stop to
+cost once a position is up `BREAKEVEN_TRIGGER_PCT` (4%), and thereafter follows
+the high-water mark down by `TRAILING_STOP_PCT` (8%). It ships off on purpose —
+whether a tighter exit beats a wider one is an empirical question and no closed
+trade carried an excursion until today, so the measurement lands first and the
+behaviour is argued from it. That is the same order `RESEARCH_VETO_ENABLED`
+followed.
+
+- **A stop is only ever raised.** The same invariant a scale-in obeys: shares
+  bought first never end up with looser protection than they had.
+- It is never placed through the market or through the target, and a move too
+  small to be worth a cancel and two placements is refused —
+  `TRAILING_STOP_MIN_STEP_PCT`, the rate limit that keeps a trail from
+  re-papering the venue every two minutes.
+- **The record is only updated once the venue accepts the new stop.** A record
+  claiming protection the venue never took is the one error that makes a
+  position look safer than it is.
+- A position found with nothing working is healed at its old stop and trailed on
+  the next pass, so a single cycle can never place two protective pairs.
+
+**A dead exit path was removed.** `execute_exit`'s trigger defaulted to
+`EXIT_ALERT`, both call sites passed something else, and the exit-reason table
+carried a sentence for it that could not be written by any code path. The
+trigger is now a required argument. The watchlist's overbought flag remains
+advisory — nothing sells on it.
+
+### Known gaps
+
+- **The trailing stop is off and should stay off until there is a sample.** Turn
+  it on once "How positions ended" shows a give-back worth paying for. Switching
+  it on today would be trading one unmeasured exit rule for another.
+- **Every excursion figure starts from this release.** Trades closed earlier
+  have a return and no peak, and can never get one. They are counted in `n` and
+  excluded from the peak and give-back means — which is why those columns carry
+  a separate count.
+- **The analyst still cannot see a per-user position.** The call is shared, one
+  per ticker per cycle, so the context is aggregated across holders. Behind
+  `/trading` there is one brokerage account, so the aggregate is also the truth
+  today; it would stop being true the moment there were two.
+- **Nothing automatically sells an overbought name.** The rule SELL is still
+  arithmetically out of reach from technicals alone — a technical score of
+  exactly 0.000 with every other factor neutral scores 0.350 against a 0.30
+  threshold — so the analyst and the bracket remain the only things that close
+  a position. `ENABLE_RANK_SIGNALS` is the existing lever, unchanged here.
+- **Mobile has no realised-performance screen**, so the exit breakdown is web
+  only. The exit vocabulary itself is kept in step across both clients, which is
+  the part that matters: a phone and a browser must not disagree about why a
+  position closed.
+- The stop distance at entry is still a flat percentage rather than ATR-scaled.
+  The trail is measured from the peak and does not change that.
+
+---
+
+## [1.27.0] — 2026-09-01
+
+**The dip-buy badge fired on stocks in free fall, and nothing anywhere recorded
+what a dip looked like when the engine acted on one.** A review of the dip-buy
+path found the two halves of the strategy disagreeing with each other and
+neither of them being measured.
+
+**A falling knife was badged as an entry.** `_technical_score` was rewritten
+some releases ago so that trend *gates* the oscillators — oversold is a reason
+to buy only when the trend is still intact — and it scores a pullback in an
+uptrend 0.907 against 0.388 for the same oscillator readings with MACD and the
+MA cross both bearish. The watchlist's ENTRY badge never got that change. It
+tested RSI, Stochastic and Bollinger alone, so it printed the same green
+marker on both, and the rail sorts an ENTRY above a high-conviction BUY — which
+made the least discriminating signal in the system the most prominent thing on
+the page. A name at a risk score of 7.2 was being surfaced as a buy prompt.
+
+- **An entry setup now also needs the trend.** At least one of MACD or the
+  MA-20/50 cross must still be bullish. The bar is one leg rather than two
+  because that is where the engine's own reading puts it: one bullish leg
+  scores 0.662, neither scores 0.388.
+- **There is now one definition of trend confirmation**, in `setup_scan.py`,
+  which the scoring path imports. Two copies of the same idea is how the badge
+  and the score came to disagree in the first place.
+- **An unknown trend reads as Neutral, not as an entry.** This is deliberately
+  the opposite of what the score does with missing trend inputs, where it falls
+  back to the additive blend — a score has to return a number for every ticker,
+  a badge has a third answer that costs nothing, so the side that prompts a
+  purchase fails closed.
+- **Exit alerts are unchanged and deliberately not trend-gated.** A condition
+  there would suppress warnings rather than prompts, which is the wrong
+  asymmetry — the same rule that keeps SELL clear of the risk gate,
+  confirmations and dwell.
+- The scan had **no tests at all**, which is how it kept the old rule for as
+  long as it did. It has fourteen now.
+
+**The strategy the system runs is the one thing it could not measure.**
+`stocks_signal_history` retained the score, the risk score, conviction and the
+input coverage — but nothing about the setup. `score` is a blend of six factors
+and cannot be taken apart twenty days later, so "did an entry setup predict
+forward alpha" was unanswerable however long anyone waited. The analyst gate
+and the research veto both have a counterfactual; the mean-reversion thesis the
+whole tool is built on had none.
+
+- Each history row now carries `technical_score`, `setup_trigger` and the five
+  indicators behind it. They come off the feature document the scorer already
+  returned, so they cost no extra read.
+- **The trigger is stored alongside its inputs, not instead of them.** The
+  thresholds are tunable: a replay recomputing the trigger from today's
+  constants would describe a rule that was never run, while the raw indicators
+  are what a *different* rule can be tested against.
+- Both projections over that collection carry the new fields, pinned by
+  `test_history_retention.py` — a field named in one list and not the other is
+  dropped silently by Mongo and the report describes nothing.
+
+### Known gaps
+
+- **No report reads the new fields yet, and none can for about twenty trading
+  days.** Settlement fills `return_20d` on a ~20-day horizon and no existing
+  row carries a setup at all, so the calibration question this release exists
+  to make answerable cannot be answered until a sample settles. Rows written
+  before this release have the keys *absent* and must be excluded rather than
+  read as missing indicators.
+- **The dip scan still drives nothing.** ENTRY has never placed an order and
+  EXIT_ALERT has never closed one; both remain display. That is unchanged by
+  this release and is deliberate until there is evidence to argue from.
+- **A perfect dip still cannot produce a BUY on the default weights.**
+  `technical_score` maxes at 1.000 and carries 0.30 of the composite against a
+  0.70 threshold, so the other 0.70 of the weight must average 0.571 — and
+  coverage weighting shrinks it toward 0.5 by construction. A textbook dip
+  works out at 0.622 and a theoretically perfect one at 0.650: both HOLD. This
+  is the 1.26.0 threshold finding landing on the dip path specifically, and
+  `ENABLE_RANK_SIGNALS` (floor 0.55, top quintile) is the existing lever, not
+  a new one. Untouched here.
+- **The placed stop still ignores volatility.** The ticker page suggests a
+  2×ATR stop while `_bracket_levels` places a flat 5% whenever the analyst
+  supplies no valid level; they cross at 40% annualised volatility, so on the
+  volatile names that produce the deepest dips the order is tighter than the
+  advice shown beside it. Not addressed.
+- Existing badge counts will fall. Some tickers that showed as entry setups
+  yesterday will show as Neutral today; that is the fix working, not data loss.
+
+---
+
 ## [1.26.0] — 2026-08-31
 
 **The agent has a threshold set above the range of its own score, and a second

@@ -386,6 +386,64 @@ class Settings(BaseSettings):
         default=2, ge=0, le=10,
         description="Maximum number of adds allowed on one position",
     )
+    # ── Selling the rip: moving a stop up as a position works ─────────────────
+    #
+    # Every automated exit here is decided BEFORE the position moves: the
+    # bracket's stop and target are set at entry and, apart from a scale-in,
+    # nothing revises them. So a name that ran 9% and reversed gave the whole
+    # move back and stopped out at −5%, and the record could not even say that
+    # had happened. `high_water_price` now records it; this decides what to do
+    # about it.
+    #
+    # OFF BY DEFAULT, deliberately. A trailing stop trades a worse average exit
+    # on winners for a smaller give-back, and which of those is the better deal
+    # is an empirical question this deployment cannot answer yet — no closed
+    # trade carries an excursion. Switch it on once `mfe_pct` and `gave_back_pct`
+    # over a real sample say it is worth it. That is the same discipline as
+    # `RESEARCH_VETO_ENABLED`: the measurement ships first and the behaviour is
+    # argued from it.
+    trailing_stop_enabled: bool = Field(
+        default=False,
+        description="Raise the stop as a position makes new highs. Never lowers one",
+    )
+    # Distance below the high-water mark. Wider than `bracket_stop_loss_pct`
+    # because it is measured from the peak rather than from entry: an 8% trail
+    # on a name up 20% still locks in ~10%, while a 5% trail sits inside the
+    # daily range of most things this system watches and converts a winner into
+    # a scratch on noise.
+    trailing_stop_pct: float = Field(
+        default=0.08, ge=0.01, le=0.50,
+        description="Trailing stop distance below the high-water mark",
+    )
+    # The trail does not engage until the position has actually made money.
+    # Without this it would tighten the stop on a position that never rose,
+    # which is not trailing — it is just a tighter stop, and the entry already
+    # chose one.
+    trailing_stop_activate_pct: float = Field(
+        default=0.06, ge=0.0, le=1.0,
+        description="Gain above entry (at the peak) before the trail engages",
+    )
+    # Move the stop to cost once the position is up this much. Separate from the
+    # trail and usually reached first — it is the cheapest risk reduction there
+    # is, and unlike the trail it can never give back a profit it had. 0
+    # disables it. Note this is break-even on PRICE, not net of commission:
+    # rounding the stop up to cover fees would put it above the level the
+    # position was sized against, and `commission_paid` is not knowable at the
+    # time this runs.
+    breakeven_trigger_pct: float = Field(
+        default=0.04, ge=0.0, le=1.0,
+        description="Gain above entry before the stop moves to cost; 0 disables",
+    )
+    # An order costs money to place and reconciliation runs every two minutes,
+    # so a trail with no step limit is a cancel-and-replace pair every pass for
+    # as long as a position keeps ticking up. This is the same rate-limiting
+    # instinct as `MIN_ADD_FRACTION` on the entry side: the stop only moves when
+    # the move is worth an order.
+    trailing_stop_min_step_pct: float = Field(
+        default=0.01, ge=0.0, le=0.20,
+        description="Smallest upward stop move worth cancelling and replacing for",
+    )
+
     # Fallbacks used when the AI analyst supplies no usable level, or supplies
     # one that fails validation (stop above entry, target below entry, etc).
     bracket_stop_loss_pct: float = Field(
@@ -448,6 +506,16 @@ class Settings(BaseSettings):
     #   3. Composite score has shifted >= analyst_score_change_threshold
     #   4. VIX is >= analyst_vix_spike_threshold (fear spike → re-evaluate everything)
     analyst_cache_minutes: int = Field(default=60, description="Minutes before Claude re-analyzes a ticker unconditionally")
+    # The analyst is called on every open position because "the exit decision is
+    # worth paying for at any score". It was never TOLD a position was open — no
+    # holding flag, no cost basis, no working levels — so it answered "would I
+    # buy this?" and its SELL meant "this is a bad name to own" rather than
+    # "take the profit". On a rip, where the company still looks excellent and
+    # only the price is extended, that is exactly the wrong question.
+    analyst_position_context: bool = Field(
+        default=True,
+        description="Tell the analyst when a position is open, and at what cost",
+    )
     analyst_price_change_pct: float = Field(default=0.03, description="Price move threshold (fraction) that triggers re-analysis")
     analyst_score_change_threshold: float = Field(default=0.12, description="Composite score shift that triggers re-analysis")
     analyst_vix_spike_threshold: float = Field(default=30.0, description="VIX level that forces re-analysis of all tickers")

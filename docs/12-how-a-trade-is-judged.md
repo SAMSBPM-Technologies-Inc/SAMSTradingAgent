@@ -90,6 +90,33 @@ Exits run a deliberately shorter path: no score threshold, no fee floor, no
 research veto, no stability delay. Everything that slows an entry is absent from
 an exit on purpose.
 
+**11. What the position does while it is held.** Every two minutes,
+reconciliation records the position's high- and low-water marks from the venue's
+own mark. On close these become `mfe_pct` (the best it ever showed), `mae_pct`
+(the worst) and `gave_back_pct` (how much of the peak was gone by the exit).
+Before this, a trade recorded its entry and its exit and nothing in between — so
+"ran 9% and gave it all back" and "never moved" were the same record, and no
+exit rule could be argued for or against. Each stays `None` rather than 0 when a
+position was never observed while open. [VERIFIED: `trade_manager.py`]
+
+**12. How it ended.** Reconciliation names the leg that fired by comparing the
+fill against the levels the trade carried: at or above the target is
+`TAKE_PROFIT`, at or below the stop is `STOP_LOSS`, and a fill between the two
+is left unattributed rather than assigned to the likelier one. It previously
+stamped `bracket_or_manual` on every bracket exit, so the most basic question
+about an exit had no answer in the record. `/performance/trades` groups closed
+trades by this.
+
+**13. Moving the stop up (off by default).** With `TRAILING_STOP_ENABLED`, a
+stop is raised to cost once the position is up `BREAKEVEN_TRIGGER_PCT`, and
+thereafter follows the high-water mark down by `TRAILING_STOP_PCT`. **A stop is
+only ever raised, never loosened** — the same invariant a scale-in obeys. It is
+never placed through the market or through the target, it is written to the
+record only after the venue accepts it, and a move smaller than
+`TRAILING_STOP_MIN_STEP_PCT` is refused because each one costs a cancel and two
+placements. It ships off because whether a tighter exit beats a wider one is an
+empirical question, and `gave_back_pct` is the number that answers it.
+
 ---
 
 ## Part B — What each system is worth

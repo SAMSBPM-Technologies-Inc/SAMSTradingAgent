@@ -347,8 +347,11 @@ A ticker shows up as an **Entry Setup** only when all three conditions are true 
 | RSI-14 | ≤ 45 | Stock is not overbought — still room to run |
 | Stochastic RSI | ≤ 20% | Momentum is oversold — buying pressure may be building |
 | Bollinger Band position | ≤ 35% | Price is near the lower Bollinger Band — statistically cheap relative to recent range |
+| MACD **or** MA-20/50 cross | still bullish | The trend has not broken — this is a pullback, not a collapse |
 
-All three must be true. A ticker with RSI of 40 but Stochastic RSI of 50% will **not** appear as an entry setup. This keeps the list tight and high-quality.
+All four must be true. A ticker with RSI of 40 but Stochastic RSI of 50% will **not** appear as an entry setup. This keeps the list tight and high-quality.
+
+The trend condition is the one that matters most. A stock in free fall reads exactly as oversold as a healthy pullback on all three oscillators, and only the second is worth buying — so an oversold name with both MACD and the MA cross turned bearish is shown as Neutral, not as an entry. If the trend indicators have not been computed yet, the ticker is Neutral too: an unknown trend is not a confirmed one.
 
 Entry cards are sorted by most oversold first (lowest Stochastic RSI at the top).
 

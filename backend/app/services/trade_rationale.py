@@ -219,9 +219,39 @@ def entry_rationale(
 #: trade has to be able to say what closed it.
 _EXIT_REASON: dict[str, str] = {
     "SELL_SIGNAL": "Score fell below the sell threshold",
-    "EXIT_ALERT": "Exit alert — the setup scan flagged the position overbought",
     "MANUAL_CLOSE": "Closed by you from the Positions screen",
+    # Named by reconciliation from the levels the trade carried, not submitted
+    # by us — see `trade_manager._classify_bracket_exit`. Before that these two
+    # were one value, `bracket_or_manual`, and the most basic question anyone
+    # can ask of an exit record — did we hit targets or get stopped out — had no
+    # answer in it.
+    "TAKE_PROFIT": "Target reached — the take-profit leg filled",
+    "STOP_LOSS": "Stopped out — the protective stop filled",
 }
+
+#: `EXIT_ALERT` is deliberately NOT here. It had a sentence for years and no
+#: caller: `execute_exit`'s `trigger` defaulted to it and both call sites passed
+#: something else, so this string could never be written. The setup scan's
+#: overbought flag remains advisory — nothing sells on it — and a reason string
+#: for an exit that cannot happen is the same class of lie as a gate panel that
+#: contradicts the badge beside it. If that exit is ever wired, add it back with
+#: the code that writes it.
+
+#: Short phrases for the fill notification, which is a line rather than a
+#: sentence. Separate from `_EXIT_REASON` because a push notification reads
+#: "closed — target reached", not "Closed — Target reached — the take-profit
+#: leg filled".
+_TRIGGER_PHRASE: dict[str, str] = {
+    "TAKE_PROFIT": "target reached",
+    "STOP_LOSS": "stopped out",
+    "SELL_SIGNAL": "sell signal",
+    "MANUAL_CLOSE": "you closed it",
+}
+
+
+def exit_trigger_phrase(trigger: str | None) -> str | None:
+    """A few words for a notification, or None when the trigger is unknown."""
+    return _TRIGGER_PHRASE.get(trigger or "")
 
 
 def exit_rationale(
