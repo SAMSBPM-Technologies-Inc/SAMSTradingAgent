@@ -493,9 +493,25 @@ jobs:
             # Started only when the flag is on: with it off the capability is
             # declined, and a socket-reading sidecar should not be running for
             # nothing.
+            # NON-FATAL, and that is the load-bearing part. `set -e` is on for
+            # this whole script, so the first cut of this block aborted the
+            # deploy when the image failed to pull — before `up -d api` had
+            # run. A recovery capability took down the thing it exists to
+            # recover, and left the box half-deployed: gateway recreated, api
+            # on the previous image. Whatever happens here, the api and the
+            # tunnel must still come up; the worst case is a restart button
+            # that reports the proxy is unreachable, which is the situation we
+            # were already in.
             if [ "$ALLOW_GATEWAY_RESTART" = "true" ]; then
               echo "=== starting dockerproxy (UI gateway restart is enabled) ==="
-              $COMPOSE up -d --no-deps dockerproxy
+              if $COMPOSE up -d --no-deps dockerproxy; then
+                echo "OK: dockerproxy running — the UI restart button can reach Docker."
+              else
+                echo "::warning::dockerproxy failed to start. ALLOW_GATEWAY_RESTART is on,"
+                echo "  so the button will be offered and will fail at press time with"
+                echo "  'Could not reach the Docker proxy'. Recover over SSH meanwhile —"
+                echo "  see runbooks/ib-gateway-offline.md. Deploy continues."
+              fi
             else
               echo "=== dockerproxy not started (ALLOW_GATEWAY_RESTART is not true) ==="
               docker rm -f trading_dockerproxy 2>/dev/null || true

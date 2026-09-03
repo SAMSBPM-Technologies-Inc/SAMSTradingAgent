@@ -29,7 +29,14 @@ services:
   # the host. If you would rather grant nothing at all, delete this service, set
   # ALLOW_GATEWAY_RESTART=false, and recover over SSH — the runbook covers it.
   dockerproxy:
-    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    # Docker Hub, not ghcr.io. The ghcr copy is public and pulls fine from a
+    # workstation, but the daemon on the deploy host answers
+    # "error from registry: denied" for it — a stale ghcr credential in the
+    # host's docker config, most likely. The ib-gateway image is also on ghcr
+    # and works only because it was already cached there; this one had never
+    # been pulled. Everything else here comes from Docker Hub, so this follows
+    # the path that is known to work on that box.
+    image: tecnativa/docker-socket-proxy:0.3.0
     container_name: trading_dockerproxy
     restart: unless-stopped
     environment:

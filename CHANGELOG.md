@@ -53,6 +53,16 @@ restart clears that, which is exactly the button that could not run.
 `runbooks/ib-gateway-offline.md` remains the reference, and the SSH path in it
 needs no grant at all.
 
+**The first attempt at this broke the deploy**, and the fix is worth recording
+because it is the more important of the two. Starting the proxy was added ahead
+of `up -d api` under `set -e`, so when the image failed to pull the whole run
+aborted with the gateway already recreated and the API still on the previous
+image — a recovery capability taking down the thing it exists to recover. That
+step is now non-fatal: the worst it can do is warn, and the API and tunnel come
+up regardless. The image also moved from ghcr.io to Docker Hub, which is where
+every other image on that host comes from and the only registry it can
+demonstrably pull from.
+
 ### Known gaps
 
 - The grant is not a precise "restart only" capability. The proxy answers the
