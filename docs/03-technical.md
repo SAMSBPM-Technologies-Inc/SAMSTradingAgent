@@ -372,7 +372,7 @@ When `ENABLE_AI_ANALYST=true`, Claude `claude-sonnet-4-6` generates a full resea
   "conviction": "HIGH | MEDIUM | LOW",
   "price_target": 195.00,
   "stop_loss": 165.00,
-  "time_horizon": "2-4 weeks",
+  "time_horizon": "1-2 weeks | 2-6 weeks | 1-3 months | 3-6 months",
   "thesis": "Primary rationale in 2-3 sentences",
   "bull_case": "What needs to go right",
   "bear_case": "What could go wrong",

@@ -295,7 +295,13 @@ Price target and stop loss are computed using ATR-based multiples:
 - SELL: target = price − 2.5 × ATR; stop = price + 1.5 × ATR
 - HOLD: target and stop are symmetric around current price
 
-Time horizon is determined by ATR volatility: low ATR → longer horizon, high ATR → shorter horizon.
+Time horizon is **judged by the analyst, not computed** — there has never been a
+rule mapping ATR to a horizon, and this line previously described one. It is
+constrained to four buckets by the response schema (`analyst._TIME_HORIZONS`),
+and the system prompt directs the model to derive it from the earnings and
+catalyst dates in its context and from how far the price target sits from spot
+in ATR. Until 1.29.0 it was an unconstrained, unmentioned string, and every
+ticker came back "3-6 months".
 
 ---
 

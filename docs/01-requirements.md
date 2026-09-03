@@ -112,7 +112,7 @@ The analysis response for each ticker shall include:
 - **Confidence:** percentage (0–100%) derived from signal-to-threshold margin
 - **Price Target:** estimated upside/downside price level
 - **Stop Loss:** suggested risk management level
-- **Time Horizon:** short (days), medium (weeks), or long (months)
+- **Time Horizon:** one of `1-2 weeks`, `2-6 weeks`, `1-3 months`, `3-6 months`. Constrained to these four rather than free text so a stated horizon can be compared against what actually happened; capped at 3-6 months because signals settle at 20 trading days and a longer claim is one nothing here can judge. The analyst shall derive it from the catalyst and earnings dates it is shown and from the distance to the price target in ATR, and shall not use a distant horizon to express uncertainty — that is what conviction is for.
 - **Current Price:** last known closing price
 - **Timestamp:** when the signal was generated
 
