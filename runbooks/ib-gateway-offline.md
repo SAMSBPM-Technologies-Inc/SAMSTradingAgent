@@ -101,8 +101,14 @@ the gateway being ready.
 
 ## Enabling the UI restart button
 
-Off by default — set `ALLOW_GATEWAY_RESTART=true` in `.env.production` and
-recreate the API container.
+Off by default. Set the `ALLOW_GATEWAY_RESTART` **variable** to `true` in the
+repository's *Production* environment (Settings → Environments → Production →
+Variables) and run the deploy. The workflow writes it into `.env.production`,
+recreates the API container, and starts the `dockerproxy` sidecar — which it
+starts *only* when the flag is on, so both halves of the capability arrive
+together. Setting the value anywhere else does nothing: until 1.28.1 the
+workflow did not carry this key at all, and the button stayed greyed out
+whatever was configured.
 
 **What you are granting.** The API never sees the host Docker socket. A
 `dockerproxy` sidecar holds it read-only and the API talks HTTP to that, on an
@@ -117,9 +123,9 @@ and use the SSH steps above; they achieve the same result.
 
 `GET /trading/broker/status` reports `restart_available` so the UI never offers a
 button that cannot work, and says which piece is missing when it is unavailable.
-
-`GET /trading/broker/status` reports `restart_available` so the UI never offers
-a button that cannot work.
+It reports the flag and `DOCKER_PROXY_URL` only — it does not probe the proxy,
+so a sidecar that is not running shows up when the button is pressed
+(*"Could not reach the Docker proxy"*) rather than in the status.
 
 ---
 

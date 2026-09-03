@@ -14,6 +14,60 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.28.1] — 2026-09-03
+
+**The "Restart gateway" button has never been able to work in production.** It
+was shipped behind `ALLOW_GATEWAY_RESTART`, deliberately off by default — and
+the deploy workflow then never mentioned the flag at all. So the key was never
+written to `.env.production`, docker-compose fell back to its `:-false`
+default, and the button sat greyed out reading *"Gateway restart is disabled on
+this server"* however the deployment was configured. Setting it in GitHub could
+not change that, because nothing carried it to the server. This is the same
+defect this file already records for `ANTHROPIC_API_KEY` and the market-data
+keys, on the one control whose whole purpose is to recover an outage without
+SSH.
+
+**The sidecar it talks to was never started either.** `dockerproxy` — the
+filtered Docker API the API container restarts the gateway through, so it never
+touches the host socket — has been declared in `docker-compose.prod.yml` since
+it was introduced, and named by no `up` in the deploy. Every `up` there is
+`--no-deps`, so nothing pulled it in. Turning the flag on alone would have moved
+the failure from a disabled button to *"Could not reach the Docker proxy"*,
+which is a harder message to act on. The deploy now starts it, and **only when
+the flag is on** — a container holding the Docker socket should not be running
+for a capability the deployment has declined.
+
+Both are now driven by an `ALLOW_GATEWAY_RESTART` GitHub **variable**, the same
+shape as `AUTO_TRADE_ENABLED` and `ENABLE_RANK_SIGNALS`: an unset variable
+resolves to `false`, so the safe direction survives both a missing variable and
+a missing `envs:` entry. It is injected rather than seeded, because
+`set_if_missing_or_empty` would write `false` once and never flip it — the trap
+already recorded here three times.
+
+**What this does not fix.** Nothing here brings a gateway back on its own, and
+nothing changes why one goes down: IBKR's weekend maintenance, an unanswered
+2FA push, or the nightly `AUTO_RESTART_TIME` landing badly still leave the
+container *running but unauthenticated*, where **Reconnect cannot help** — it
+asks this process for a session, and the process is not what is broken. Only a
+restart clears that, which is exactly the button that could not run.
+`runbooks/ib-gateway-offline.md` remains the reference, and the SSH path in it
+needs no grant at all.
+
+### Known gaps
+
+- The grant is not a precise "restart only" capability. The proxy answers the
+  `/containers` endpoints with `POST=1`, which permits other container verbs —
+  a much smaller blast radius than the raw socket, not zero. Leave the variable
+  unset and use SSH if that trade is not worth making.
+- Nothing verifies the button end-to-end. `restart_available` reports the flag
+  and `DOCKER_PROXY_URL`; it does not prove the proxy is reachable, so a
+  stopped sidecar still surfaces at press time rather than in the status.
+- A restart usually triggers a 2FA push. If nobody approves it, the session
+  does not come back and the button looks broken — stated in the panel before
+  it is pressed, but still the most likely reason a recovery stalls.
+
+---
+
 ## [1.28.0] — 2026-09-01
 
 **Selling the rip.** 1.27.0 fixed the entry badge; this is the other half. A

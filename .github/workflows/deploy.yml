@@ -85,6 +85,15 @@ jobs:
           # which names the agent buys, so an unset variable must not turn it
           # on. See services/cross_section.py.
           ENABLE_RANK_SIGNALS: ${{ vars.ENABLE_RANK_SIGNALS || 'false' }}
+          # Lets the "Restart gateway" button in the UI actually restart the
+          # container, through the filtered dockerproxy sidecar. Absent from
+          # this workflow entirely until now — so the key never reached
+          # .env.production, docker-compose fell back to its `:-false` default,
+          # and the button was permanently greyed out with "Gateway restart is
+          # disabled on this server" no matter what was configured in GitHub.
+          # Exactly the failure mode this file records for ANTHROPIC_API_KEY.
+          # See runbooks/ib-gateway-offline.md for what the grant covers.
+          ALLOW_GATEWAY_RESTART: ${{ vars.ALLOW_GATEWAY_RESTART || 'false' }}
           # SMTP for trade-execution emails. Leaving SMTP_HOST unset disables
           # email entirely; trading is unaffected either way.
           SMTP_HOST: ${{ vars.SMTP_HOST }}
@@ -101,7 +110,7 @@ jobs:
           # the names listed here. A variable set above and omitted here arrives
           # as an empty string, with no error from either side — which is how
           # ANTHROPIC_API_KEY reached the server blank. Add to BOTH places.
-          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,MASSIVE_API_KEY,ALPHAVANTAGE_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,ENABLE_RANK_SIGNALS,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
+          envs: CLOUDFLARE_TUNNEL_TOKEN,ENCRYPTION_KEY,ANTHROPIC_API_KEY,FINNHUB_API_KEY,FRED_API_KEY,MASSIVE_API_KEY,ALPHAVANTAGE_API_KEY,TWS_USERID,TWS_PASSWORD,TWS_USERID_PAPER,TWS_PASSWORD_PAPER,TRADING_MODE,AUTO_TRADE_ENABLED,AUTO_TRADE_LIVE_ALLOWED,IBKR_ACCOUNT_ID,IBKR_ACCOUNT_ID_PAPER,ENABLE_RANK_SIGNALS,ALLOW_GATEWAY_RESTART,SMTP_HOST,SMTP_PORT,SMTP_FROM,SMTP_USERNAME,SMTP_PASSWORD
           command_timeout: 30m
           script: |
             set -e
@@ -276,6 +285,19 @@ jobs:
             # both a missing variable and a missing envs: entry.
             inject_secret ENABLE_RANK_SIGNALS "$ENABLE_RANK_SIGNALS"
             echo "ENABLE_RANK_SIGNALS=$ENABLE_RANK_SIGNALS (verdicts are $([ "$ENABLE_RANK_SIGNALS" = "true" ] && echo 'ranked against the watchlist' || echo 'on the absolute rule'))"
+
+            # ── Gateway restart from the UI ───────────────────────────────────
+            # Injected for the same reason as the two flags above: seeding it
+            # would write `false` once and then never flip. Driven by `vars.`
+            # because it is a grant the operator turns on and off, and an unset
+            # variable resolves to `false` — the safe direction.
+            #
+            # The flag alone is not sufficient. gateway_control.restart_gateway
+            # POSTs to DOCKER_PROXY_URL, so the dockerproxy sidecar must be
+            # running or the button fails with "Could not reach the Docker
+            # proxy". That is started below, next to the other services.
+            inject_secret ALLOW_GATEWAY_RESTART "$ALLOW_GATEWAY_RESTART"
+            echo "ALLOW_GATEWAY_RESTART=$ALLOW_GATEWAY_RESTART (UI restart button $([ "$ALLOW_GATEWAY_RESTART" = "true" ] && echo 'enabled' || echo 'disabled — recover over SSH'))"
 
             # ── Deep research (agent orchestrator) ────────────────────────────
             # Split deliberately between the two helpers, applying the lesson
@@ -457,6 +479,26 @@ jobs:
                 echo "WARNING: TWS_USERID_PAPER/TWS_PASSWORD_PAPER not set — skipping ibgateway."
               fi
               echo "         Auto-trading will stay disconnected until they are configured."
+            fi
+
+            # ── Filtered Docker proxy ─────────────────────────────────────────
+            # The api reaches this over HTTP to restart the gateway container;
+            # it never sees the host socket. Like ibgateway above, this service
+            # was in docker-compose.prod.yml but named by no `up` in this
+            # workflow — and every `up` here is --no-deps — so the container did
+            # not exist on the box. The restart button would then fail at the
+            # proxy even with ALLOW_GATEWAY_RESTART=true, which is a harder
+            # failure to read than the flag being off.
+            #
+            # Started only when the flag is on: with it off the capability is
+            # declined, and a socket-reading sidecar should not be running for
+            # nothing.
+            if [ "$ALLOW_GATEWAY_RESTART" = "true" ]; then
+              echo "=== starting dockerproxy (UI gateway restart is enabled) ==="
+              $COMPOSE up -d --no-deps dockerproxy
+            else
+              echo "=== dockerproxy not started (ALLOW_GATEWAY_RESTART is not true) ==="
+              docker rm -f trading_dockerproxy 2>/dev/null || true
             fi
 
             # Start api alone first so we can capture its logs if it crashes
