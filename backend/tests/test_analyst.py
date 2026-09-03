@@ -84,7 +84,10 @@ def _output(**over):
         "conviction": "HIGH",
         "price_target": 220.0,
         "stop_loss": 180.0,
-        "time_horizon": "2-4 weeks",
+        # Must be one of `_TIME_HORIZONS`: this fixture stands for a response
+        # the schema would actually permit, and an illegal value here would
+        # quietly route every other test through the dropped-horizon path.
+        "time_horizon": "2-6 weeks",
         "thesis": "Margins are expanding into a strong tape.",
         "bull_case": "Operating leverage.",
         "bear_case": "The multiple is full.",
@@ -195,6 +198,87 @@ def test_an_unrecognised_signal_falls_back_to_hold_not_to_a_trade():
     """
     assert _call(_output(signal="STRONG BUY"))["signal"] == "HOLD"
     assert _call(_output(conviction="VERY HIGH"))["conviction"] == "LOW"
+
+
+# ── The horizon ───────────────────────────────────────────────────────────────
+#
+# `time_horizon` was a bare string and, uniquely among the required fields, the
+# system prompt said nothing about it. A required free-text field with no
+# instruction gets the safest generic answer, so every ticker ever analysed came
+# back "3-6 months" — a per-ticker judgement in shape, a constant in fact, shown
+# on the ticker page, the report export, the phone and the push notification.
+
+def test_the_horizon_is_an_enum_not_free_text():
+    """Free text cannot be grouped, and a horizon nobody can compare against
+    what happened is not worth printing."""
+    field = A._RESPONSE_SCHEMA["properties"]["time_horizon"]
+    assert field["enum"] == list(A._TIME_HORIZONS)
+
+
+def test_the_prompt_actually_asks_for_a_horizon():
+    """The whole defect: it was required and unmentioned. Every other required
+    field has a rule."""
+    assert "time_horizon" in A._SYSTEM_PROMPT
+
+
+def test_the_prompt_tells_the_model_not_to_reach_for_the_longest_bucket():
+    """
+    The failure mode being fenced is the one that produced the constant. An
+    uncertain view is LOW conviction, not a distant horizon, and the prompt has
+    to say so or the enum just relocates the default.
+    """
+    assert "shortest horizon" in A._SYSTEM_PROMPT
+    assert "conviction, not a distant horizon" in A._SYSTEM_PROMPT
+
+
+def test_the_buckets_stop_at_the_longest_thing_the_system_can_judge():
+    """
+    Signals settle at 20 trading days and positions resolve on a stop, a target
+    or a SELL. A "1-2 years" bucket would be a horizon nothing here could ever
+    check — the defect this replaces, not a fix for it.
+    """
+    assert A._TIME_HORIZONS[-1] == "3-6 months"
+
+
+@pytest.mark.parametrize("horizon", A._TIME_HORIZONS)
+def test_every_bucket_reads_naturally_where_it_is_rendered(horizon):
+    """
+    Four render sites print the value straight into a sentence: "<h> horizon",
+    "Expected horizon: <h>", "Horizon: <h>", and "Monitor over <h>". They all
+    require the same "N-M unit" shape, which is why "days" is not a bucket.
+    """
+    assert f"Monitor over {horizon}".endswith(("weeks", "months"))
+    head = horizon.split()[0]
+    assert "-" in head and head.replace("-", "").isdigit()
+
+
+def test_a_valid_horizon_passes_through():
+    assert _call(_output(time_horizon="2-6 weeks"))["time_horizon"] == "2-6 weeks"
+
+
+def test_an_unrecognised_horizon_is_dropped_rather_than_bucketed():
+    """
+    There is no conservative direction here. LOW is the safe read of an unknown
+    conviction; no horizon is the safe read of an unknown horizon. Mapping one
+    in would reinstate exactly the constant the enum removes, and every render
+    site already tests the field before printing it.
+    """
+    assert "time_horizon" not in _call(_output(time_horizon="3-6 years"))
+    assert "time_horizon" not in _call(_output(time_horizon=""))
+
+
+def test_the_horizon_enum_survives_every_provider_shaper():
+    """
+    Gemini rejects `const` and `additionalProperties` outright, so the schema is
+    reshaped per provider. `enum` is the one constraint all three keep — which
+    `signal` and `conviction` have relied on since this schema was written, and
+    which this field now relies on too.
+    """
+    from app.services.llm import registry
+
+    for provider in registry.PROVIDERS.values():
+        shaped = provider.normalise_schema(A._RESPONSE_SCHEMA)
+        assert shaped["properties"]["time_horizon"]["enum"] == list(A._TIME_HORIZONS)
 
 
 # ── run_analysis ──────────────────────────────────────────────────────────────

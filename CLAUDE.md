@@ -177,6 +177,24 @@ npm run web
    the system prompt. AMZN was bought at 0.62 and CBRS at 0.66 on a risk score
    of 6.3, past a veto documented here as unconditional.
 
+   **A required field with no instruction is a constant.** `time_horizon` was
+   a bare string, and it was the only required field in `_RESPONSE_SCHEMA` the
+   system prompt never mentioned — so the model filled it with the safest
+   generic answer and every ticker ever analysed came back "3-6 months", shown
+   on the ticker page, the report export, the phone and the push notification
+   as if it were a per-ticker judgement. It is now an enum
+   (`analyst._TIME_HORIZONS`) with a prompt rule telling the model to derive it
+   from the earnings and catalyst dates already in its context and from the
+   distance to target in ATR. Three properties: the buckets **stop at 3-6
+   months**, because signals settle at 20 trading days and a longer claim is one
+   nothing here can check; the prompt says **an uncertain view is LOW
+   conviction, not a distant horizon**, or the enum merely relocates the
+   default; and an unrecognised value is **dropped, not bucketed** — LOW is the
+   safe read of an unknown conviction, but no horizon is the safe read of an
+   unknown horizon, and mapping one in would reinstate the constant. `enum` is
+   the one constraint every provider in `llm/registry.py` keeps, which `signal`
+   and `conviction` already rely on.
+
    **The analyst is told when it is holding something.** It is called on every
    open position because "the exit decision is worth paying for at any score" —
    and for as long as that gate existed it was never *told* a position was open.

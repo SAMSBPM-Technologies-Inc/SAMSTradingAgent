@@ -14,6 +14,62 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.29.0] — 2026-09-03
+
+**Every ticker claimed the same "3-6 months" horizon.** It was not a hardcoded
+string — the model wrote it on every call, because `time_horizon` was the only
+required field in the analyst's response schema that the system prompt never
+mentioned. A required free-text field with no instruction gets the safest
+generic answer, identically, forever. It read as a per-ticker judgement on the
+ticker page, the report export, the phone and the push notification, and carried
+no information at all.
+
+Worse, it contradicted the system printing it: signals settle at **20 trading
+days**, the analyst is re-run whenever price moves 3% or the score moves 0.12,
+and positions resolve on a stop, a target or a SELL. The tool advised in
+quarters while grading itself in a month.
+
+- **The horizon is now one of four buckets** — `1-2 weeks`, `2-6 weeks`,
+  `1-3 months`, `3-6 months` — enforced by the schema rather than requested in
+  prose, so it can be grouped and compared against what actually happened.
+- **The prompt tells the model where to get it**: the earnings and catalyst
+  dates already in its context, and how far the price target sits from spot
+  measured in ATR. A target two ATR away is weeks; one needing a re-rating is
+  months.
+- **It also tells the model not to reach for the longest bucket when unsure.**
+  An uncertain view is LOW conviction, not a distant horizon — without that the
+  enum would simply relocate the default it replaces.
+- **Capped at 3-6 months on purpose.** A longer bucket would be a horizon
+  nothing in this system can ever check, which is the defect being fixed rather
+  than a fix for it.
+- **An unrecognised horizon is dropped, not bucketed.** There is no conservative
+  direction to fall back to, and every screen already omits the field when it is
+  absent.
+
+Three documents described this field wrongly and are corrected.
+`docs/02-architecture.md` claimed "time horizon is determined by ATR volatility:
+low ATR → longer horizon" — a deterministic rule that has never existed in the
+code. `docs/01-requirements.md` had always specified buckets ("short (days),
+medium (weeks), long (months)"), which is what makes this a mistake rather than
+a decision.
+
+### Known gaps
+
+- **Cached analyses keep their old horizon until they refresh.** A stored report
+  written before this release still reads "3-6 months" and will until price,
+  score or VIX moves enough to re-run the analyst for that ticker. Nothing
+  rewrites them, and nothing should — the stored answer is what the model
+  actually said at the time.
+- **Whether the new horizons are any good is unmeasured.** Nothing yet compares
+  a claimed horizon against how long the position or signal actually took to
+  resolve, which is the obvious next question now that the field can be grouped
+  at all. The 20-day settlement and `gave_back_pct` are the two series it would
+  be read against.
+- The horizon still does not feed any decision — not sizing, not the bracket,
+  not the analyst gate. It is reporting, as before.
+
+---
+
 ## [1.28.1] — 2026-09-03
 
 **The "Restart gateway" button has never been able to work in production.** It

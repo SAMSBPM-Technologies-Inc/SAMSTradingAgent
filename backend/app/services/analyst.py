@@ -15,7 +15,7 @@ Output schema stored in signal doc under "analyst_output":
   conviction   : HIGH | MEDIUM | LOW
   price_target : float | null
   stop_loss    : float | null
-  time_horizon : str
+  time_horizon : one of _TIME_HORIZONS, or absent
   thesis       : str  (1-2 sentences)
   bull_case    : str
   bear_case    : str
@@ -76,6 +76,13 @@ Rules:
   one distinct claim per bullet, leading with the number or fact that carries it, no
   hedging clauses, no sentence-final punctuation. They must not introduce anything the
   corresponding case does not say.
+- time_horizon: how long THIS thesis needs to resolve — not a generic investing
+  horizon. Derive it from the data in front of you: an earnings date inside the
+  window, a catalyst with a date, how far the price target sits from spot
+  measured in ATR. A target two ATR away is weeks; one that needs a re-rating is
+  months. Say the shortest horizon the thesis honestly supports, and do not
+  reach for the longest bucket because the outcome is uncertain — an uncertain
+  view is LOW conviction, not a distant horizon.
 - Signal must be exactly one of: BUY, SELL, HOLD
 - Conviction must be exactly one of: HIGH, MEDIUM, LOW
 - When technicals and fundamentals conflict, reason through the dominant driver before deciding
@@ -106,6 +113,25 @@ Holding versus buying:
 # length bounds, no array bounds. Structured outputs reject those outright with
 # a 400 rather than ignoring them — the incident `tests/test_research_schemas.py`
 # fences against. Bounds that matter are enforced in Python below.
+#: The horizons the analyst may claim, nearest first.
+#:
+#: This was a bare free-text string and — uniquely among the required fields —
+#: the system prompt said nothing about it at all. A required field with no
+#: instruction gets the safest generic answer, so every ticker ever analysed
+#: came back "3-6 months": a per-ticker judgement in shape, a constant in fact.
+#:
+#: Four buckets rather than free text because a horizon is only worth printing
+#: if it can be compared against what happened, and free text cannot be grouped.
+#: All four read naturally in every slot that renders them — "2-6 weeks
+#: horizon", "Expected horizon: 2-6 weeks", "Monitor over 2-6 weeks" — which is
+#: why they share one "N-M unit" shape.
+#:
+#: Capped at 3-6 months deliberately: signals settle at 20 trading days and
+#: positions here resolve on a stop, a target or a SELL. A longer bucket would
+#: be a horizon the system has no way to judge, which is the defect this
+#: replaces rather than a fix for it.
+_TIME_HORIZONS = ("1-2 weeks", "2-6 weeks", "1-3 months", "3-6 months")
+
 _NUMBER_OR_NULL = {"type": ["number", "null"]}
 _STRING = {"type": "string"}
 _STRING_LIST = {"type": "array", "items": {"type": "string"}}
@@ -117,7 +143,11 @@ _RESPONSE_SCHEMA: dict = {
         "conviction": {"type": "string", "enum": ["HIGH", "MEDIUM", "LOW"]},
         "price_target": _NUMBER_OR_NULL,
         "stop_loss": _NUMBER_OR_NULL,
-        "time_horizon": _STRING,
+        # Enum, not free text — see `_TIME_HORIZONS`. Enums are the one
+        # constraint every provider in `llm/registry.py` keeps: Gemini strips
+        # `const` and `additionalProperties`, never `enum`, and `signal` and
+        # `conviction` have relied on that since this schema was written.
+        "time_horizon": {"type": "string", "enum": list(_TIME_HORIZONS)},
         "thesis": _STRING,
         "bull_case": _STRING,
         "bear_case": _STRING,
@@ -826,6 +856,15 @@ async def _call_claude(
         parsed["signal"] = "HOLD"
     if parsed["conviction"] not in ("HIGH", "MEDIUM", "LOW"):
         parsed["conviction"] = "LOW"
+
+    # An unrecognised horizon is dropped rather than mapped to a bucket. There
+    # is no conservative direction to fall back to here — LOW is the safe read
+    # of an unknown conviction, but no horizon is the safe read of an unknown
+    # horizon — and picking one would reinstate exactly the constant this enum
+    # exists to remove. Every render site already tests the field before
+    # printing it, so absent degrades to "no horizon shown".
+    if parsed.get("time_horizon") not in _TIME_HORIZONS:
+        parsed.pop("time_horizon", None)
 
     logger.info(
         "analyst_claude_usage",
