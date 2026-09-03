@@ -698,7 +698,7 @@ class Settings(BaseSettings):
         default=48, description="Ignore dossiers older than this when vetoing"
     )
 
-    # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────
+    # ── Scoring weights (7 base weights must sum to 1.0) ──────────────────────
     #
     # weight_volatility defaults to 0.0 — volatility is priced at the risk gate,
     # not in the alpha score.
@@ -724,6 +724,29 @@ class Settings(BaseSettings):
     weight_macro:        float = Field(default=0.15)
     weight_volatility:   float = Field(default=0.00)
     weight_catalyst:     float = Field(default=0.15)
+    # weight_momentum defaults to 0.0 — the factor is computed and stored on
+    # every cycle, and contributes nothing until somebody raises this.
+    #
+    # See services/momentum.py. The short version: under
+    # `technical_stance=mean_reversion` trend enters `_technical_score` only as
+    # a multiplier capped at 1.0, so momentum could never add a point, and an
+    # extended market leader scored 0.037 technically against a falling knife's
+    # 0.391. There is no other rate-of-change or relative-strength term in the
+    # composite, which is why the engine cannot express "this is working".
+    #
+    # It ships at 0.00 for the reason `enable_rank_signals` ships off and
+    # `RESEARCH_VETO_ENABLED` ships off: it changes which names an agent with
+    # real money buys, and nothing has measured whether it ranks outcomes
+    # better yet. `/performance/calibration` answers that, and needs about
+    # twenty trading days of settled history under it first.
+    #
+    # Raising it requires taking the weight from somewhere — the sum check
+    # below enforces that. `weight_macro` is the candidate worth considering
+    # first: it is market-wide by construction, so it shifts every ticker in
+    # the watchlist by the same amount and cannot rank any two against each
+    # other. Momentum is the opposite by construction, since the benchmark leg
+    # removes exactly the common mode macro is made of.
+    weight_momentum:     float = Field(default=0.00)
     # Alternative data weight: additive modifier applied on top of the 6-weight
     # base score, so it does NOT participate in the sum-to-1.0 constraint.
     # score = base_score + weight_alt * (alt_score - 0.5)
@@ -739,12 +762,14 @@ class Settings(BaseSettings):
             + self.weight_macro
             + self.weight_volatility
             + self.weight_catalyst
+            + self.weight_momentum
         )
         if abs(total - 1.0) > 1e-6:
             raise ValueError(
                 f"Scoring weights must sum to 1.0, got {total:.6f}. "
                 "Check weight_technical, weight_fundamental, weight_sentiment, "
-                "weight_macro, weight_volatility, weight_catalyst in .env"
+                "weight_macro, weight_volatility, weight_catalyst, "
+                "weight_momentum in .env"
             )
         return self
 

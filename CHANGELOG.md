@@ -14,6 +14,79 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.30.0] — 2026-09-03
+
+**The score could not say "this is working".** Every trend input in the system
+was consumed as a discount. Under the production stance
+(`technical_stance=mean_reversion`) `_technical_score` gates its oscillators as
+`osc × (0.40 + 0.60 × trend)` — a multiplier whose ceiling is 1.0 — and the
+stance weights for MACD (0.15) and the MA cross (0.10) are discarded on that
+path entirely. Momentum could only ever subtract.
+
+Measured on the real function, an extended market leader scored **0.037**
+technically while a stock in free fall scored **0.391**: the composite ranked a
+collapsing name ten times above a leader. Nothing else filled the gap — there
+was no rate-of-change, relative-strength or 52-week-position term anywhere in
+`feature_engineering`, `scoring` or `catalyst`, and `week52_high` was fetched by
+the Alpha Vantage provider and scored by nothing.
+
+- **A new `momentum` factor** (`services/momentum.py`), stored as
+  `momentum_score` on every feature document. Three components, coverage
+  weighted: 3-month relative strength, 6-month relative strength with the most
+  recent month skipped, and range position against the benchmark's own.
+- **Every component is measured against the benchmark**, and a missing
+  benchmark returns a flat 0.5 at zero coverage rather than a raw reading. In a
+  rising market every absolute return is positive, so an absolute momentum
+  factor would move the whole book in one direction and rank nothing — the
+  `_macro_score` defect rebuilt somewhere new.
+- **It is return-based, never indicator-based.** MACD and the MA cross are
+  already read by `trend_confirmation` in both the technical score and the
+  ENTRY badge; reading them again here would re-weight an existing factor
+  rather than add one.
+- **Price history now runs 400 calendar days**, matched to
+  `benchmark._SERIES_DAYS`. At the old 90 days a ticker held ~62 trading bars —
+  short of the 148 the 6-1 component needs and the 120 the range needs, so the
+  factor could never have returned more than its 3-month leg. Fixed-window
+  indicators are unchanged; `/chart/{ticker}/series` can now actually serve a
+  request longer than three months, which it previously could not.
+
+**It ships at weight 0.00 and changes no score.** Same posture as
+`enable_rank_signals` and `RESEARCH_VETO_ENABLED`: this decides which names an
+agent with real money buys, and nothing has measured whether it ranks outcomes
+better yet. The factor is computed and stored every cycle so
+`/performance/calibration` can settle history under it first. `Settings`
+includes it in the sum-to-1.0 check, so raising it forces an explicit
+rebalance rather than silently inflating every score.
+
+### Known gaps
+
+- **Nothing has been measured yet.** The factor is stored, not weighted. Any
+  claim that it improves selection is currently unsupported, and about twenty
+  trading days of settled history are needed before `/performance/calibration`
+  can speak to it.
+- **Added additively at a meaningful weight, it makes the composite
+  discriminate *less*.** On the eleven-name watchlist, momentum and the
+  technical score rank names almost inversely (Spearman −0.373), so at
+  `technical 0.25 / macro 0.05 / momentum 0.15` the best-to-worst spread
+  *narrows* from 0.145 to 0.105. The two factors partially cancel. Feeding
+  relative strength into the existing trend gate instead — `osc × (0.40 + 0.60
+  × momentum)` — widens the spread to 0.568 from 0.482 in the same test, which
+  is the more promising shape and is **not** implemented.
+- **This does not fix the AAPL SELL.** AAPL's oscillators read genuinely
+  extended (bb_pct 1.03, stoch_rsi 0.99), so 0.066 is a *correct* answer to
+  "is there a dip to buy here" on a stock up 24% in six months and sitting at
+  0.87 of its 52-week range. The defect is that a mean-reversion entry-timing
+  score is 0.30 of a composite whose bottom end publishes SELL — and SELL is
+  exempt from the risk gate, confirmations, dwell and the research veto.
+  Untouched by this release.
+- **The bands are unvalidated.** `_SHORT_BAND` 0.25, `_LONG_BAND` 0.40 and
+  `_RANGE_BAND` 0.35 are reasoned from typical cross-sectional dispersion, not
+  fitted to this watchlist.
+- Feature documents written before this release carry no `momentum_score` and
+  read as neutral, not weak.
+
+---
+
 ## [1.29.0] — 2026-09-03
 
 **Every ticker claimed the same "3-6 months" horizon.** It was not a hardcoded

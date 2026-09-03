@@ -12,7 +12,7 @@ XGBoost feature vector (14 features — must match training schema in scripts/tr
     vix (from macro)
 
 Weighted fallback:
-    score = base(6 weights, sum=1.0) + weight_alt * (alt_score - 0.5)
+    score = base(7 weights, sum=1.0) + weight_alt * (alt_score - 0.5)
 """
 import os
 from typing import Optional
@@ -39,6 +39,7 @@ FACTORS: tuple[tuple[str, str, str], ...] = (
     ("macro",            "macro_score",            "Macro"),
     ("volatility",       "volatility_score",       "Volatility"),
     ("catalyst",         "catalyst_score",         "Catalyst"),
+    ("momentum",         "momentum_score",         "Momentum"),
 )
 
 ALT_FACTOR = ("alternative_data", "alternative_data_score", "Alternative Data")
@@ -64,6 +65,7 @@ def effective_weights(user_weights: dict | None) -> dict[str, float]:
         "macro":            settings.weight_macro,
         "volatility":       settings.weight_volatility,
         "catalyst":         settings.weight_catalyst,
+        "momentum":         settings.weight_momentum,
         "alternative_data": settings.weight_alternative_data,
     }
     if not user_weights:
@@ -83,7 +85,7 @@ def explain_score(feat: dict, user_weights: dict | None = None) -> dict:
     """
     Where the composite score came from, factor by factor.
 
-    The six sub-scores have always been computed and stored, and nothing ever
+    The sub-scores have always been computed and stored, and nothing ever
     returned them: the UI showed a 0–100 number with no attribution while
     offering sliders to reweight it. This is that attribution.
 
@@ -210,7 +212,7 @@ async def score_ticker(ticker: str) -> dict:
 
 def _weighted_score(feat: dict, settings) -> float:
     """
-    6-weight base score (weights sum to 1.0) plus an alternative-data modifier.
+    7-weight base score (weights sum to 1.0) plus an alternative-data modifier.
     alt_score=0.5 → no change; >0.5 → boost; <0.5 → drag.
     Max effect: ±weight_alternative_data/2 on the composite.
     """
@@ -221,6 +223,7 @@ def _weighted_score(feat: dict, settings) -> float:
         + settings.weight_macro       * feat.get("macro_score",       0.5)
         + settings.weight_volatility  * feat.get("volatility_score",  0.5)
         + settings.weight_catalyst    * feat.get("catalyst_score",    0.5)
+        + settings.weight_momentum    * feat.get("momentum_score",    0.5)
     )
     alt_modifier = settings.weight_alternative_data * (
         feat.get("alternative_data_score", 0.5) - 0.5
