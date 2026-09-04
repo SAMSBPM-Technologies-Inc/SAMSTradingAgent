@@ -14,6 +14,29 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+**The signal rule, written out as a prompt** — `docs/13-daily-signal-prompt.md`.
+The BUY/SELL/HOLD decision is spread over six modules and about four hundred
+lines; this is the same rule as one copy-pasteable text prompt, so an AI agent
+on a daily schedule can score a list of tickers and hand back the same shape of
+answer. Every threshold in it is quoted from a named file and the mapping is
+tabulated at the bottom, so a tuned constant and its prompt copy move together.
+
+Documentation only — no engine, API or client behaviour changes.
+
+**Known gaps** (also listed in the document): a prompt holds no state, so
+hysteresis and confirmation are inert unless the previous run's output is fed
+back in; sentiment is a model read rather than the VADER + finance-lexicon
+score, so it lands in the same region but not on the same number; alternative
+data is usually unavailable to an agent, which drops the ±0.05 modifier; and
+none of `trade_manager`'s guard chain is reachable from a prompt — the veto in
+Step 7 shapes the agent's own output and nothing else.
+
+---
+
 ## [1.29.0] — 2026-09-03
 
 **Every ticker claimed the same "3-6 months" horizon.** It was not a hardcoded
