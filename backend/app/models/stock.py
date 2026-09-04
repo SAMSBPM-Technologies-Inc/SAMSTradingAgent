@@ -187,6 +187,23 @@ class SignalGate(BaseModel):
     decided_by: str
     analyst: Optional[AnalystGate] = None
 
+    #: The number the SELL test was measured against. The BUY side reads the
+    #: composite; the exit side reads `scoring.exit_score`, which swaps the
+    #: mean-reversion oscillator component for a trend-and-relative-strength
+    #: one. Without this the panel prints "score 0.30 / sell below 0.30" beside
+    #: a published HOLD and reads as the engine ignoring its own rule — the
+    #: same defect `effective_buy_threshold` was added to fix.
+    #:
+    #: `None` means the SELL test read the composite itself: a document written
+    #: before 1.31.0, or one scored by XGBoost, where the weights did not
+    #: produce the score and an exit reading derived from them would be a
+    #: fabrication. That is a different fact from the reading being neutral.
+    exit_score: Optional[float] = None
+    #: Whether the exit reading is below the level that sells. Measured against
+    #: `exit_score` where there is one and the composite otherwise, so it always
+    #: describes the test that actually ran.
+    score_passes_sell: Optional[bool] = None
+
     #: The reader's own `min_signal_score`: the *second* score bar, applied at
     #: `execute_entry` rather than at classification. It is reported here
     #: because a panel that shows only the first one is not describing what
@@ -780,7 +797,7 @@ class PerformanceResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     db_connected: bool
-    version: str = "1.29.0"
+    version: str = "1.31.0"
     #: True when JWT_SECRET_KEY is still the placeholder shipped in the repo,
     #: which means tokens can be forged. Surfaced here because it is otherwise
     #: invisible — the deployment works perfectly with a guessable signing key.

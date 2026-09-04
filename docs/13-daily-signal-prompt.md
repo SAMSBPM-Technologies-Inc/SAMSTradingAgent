@@ -296,6 +296,39 @@ lands near 0.75 and a typical one near 0.57. A composite of 0.62 is not
 lukewarm; it is well above average on this scale. Do not talk yourself into
 scoring generously to reach the BUY threshold.
 
+── The exit reading (the SELL test uses this, not the composite) ──────
+The composite answers "is this the better opportunity to ENTER". Under
+mean_reversion an extended name floors its oscillators by design, so the low
+end of the composite is where the dip-buy timer says "not here" — not where the
+company is failing. Read as an exit it sells winners: a leader at bb_pct 1.03
+and stoch_rsi 0.99, up 24% in six months, scores 0.066 technically and lands
+under 0.30. Compute a second number, used on the SELL side only:
+
+  trend      = the trend_confirmation of Step 6 —
+               1.0 if both MACD and the MA cross are bullish, 0.5 if one is,
+               0.0 if neither, MISSING if neither flag is known
+  momentum   = sustained relative strength against the benchmark (SPY), 0–1:
+                 0.40 × 3-month excess return, scaled (excess + 0.25) / 0.50
+                 0.35 × 6-month excess return skipping the most recent month,
+                        scaled (excess + 0.40) / 0.80
+                 0.25 × how much nearer its own 12-month high this name sits
+                        than SPY sits to its own, scaled (gap + 0.35) / 0.70
+               each clamped to 0–1, coverage weighted like every other factor
+               here: weight what you could compute, pull the rest to 0.5. With
+               no benchmark it is 0.5 at zero coverage — every component is
+               measured against SPY, and an absolute momentum reading would
+               move the whole list in one direction and rank nothing.
+  condition  = 0.45 × trend + 0.55 × momentum, over whichever of the two you
+               have; 0.5 if you have neither
+  exit_score = the composite recomputed with `condition` in place of
+               `technical_score`. Every other factor and weight is unchanged,
+               so it is on the same 0–1 scale and 0.30 keeps its meaning.
+
+Momentum decides exits; the oscillators decide entries. If neither trend nor
+momentum can be computed the condition is 0.5 — never the oscillator reading.
+SELL has no brakes anywhere in this system, so the safe reading of an unknown
+condition is "do not manufacture an exit".
+
 ═══════════════════════════════════════════════════════════════════════
 STEP 4 — RISK SCORE (0 safest, 10 most dangerous)
 ═══════════════════════════════════════════════════════════════════════
@@ -322,8 +355,8 @@ name moves more than 100% annualised" are the same statement.
 STEP 5 — THE VERDICT
 ═══════════════════════════════════════════════════════════════════════
 
+  SELL  if exit_score < 0.30                        (tested first)
   BUY   if composite > 0.70 AND risk_score < 6.0
-  SELL  if composite < 0.30
   HOLD  otherwise
 
 BUY is the only verdict gated on risk, and that asymmetry is deliberate. The
@@ -335,7 +368,7 @@ confirmation requirement to the SELL side.
 ── Hysteresis (needs yesterday's published verdict) ───────────────────
 If you have the verdict you published for this ticker on the previous run:
   a standing BUY  is kept until composite falls to 0.67 or below
-  a standing SELL is kept until composite rises to 0.33 or above
+  a standing SELL is kept until exit_score rises to 0.33 or above
 Entering a verdict still requires clearing the full threshold. The band is
 one-sided: it makes an existing verdict sticky, never easier to acquire. A
 score recomputed daily from live prices will sit within a rounding error of
@@ -358,7 +391,7 @@ Compute each ticker's percentile as the fraction of the OTHER tickers in the
 list it scores strictly above (ties count against you — a field of identical
 scores ranks every member at 0.0). Then:
 
-  SELL  if composite < 0.30            (the absolute exit, tested first, never withdrawn)
+  SELL  if exit_score < 0.30           (the absolute exit, tested first, never withdrawn)
         OR (percentile <= 0.20 AND composite <= 0.50)
   BUY   if percentile >= 0.80 AND composite >= 0.55 AND risk_score < 6.0
   HOLD  otherwise
@@ -379,7 +412,7 @@ Confidence is distance from the boundary that would flip the verdict, scaled to
 rate — so report it as "conviction in the arithmetic".
 
   BUY   → clamp((composite - 0.70) / 0.30)
-  SELL  → clamp((0.30 - composite) / 0.30)
+  SELL  → clamp((0.30 - exit_score) / 0.30)
   HOLD  → clamp(min(|composite - 0.70|, |composite - 0.30|) / 0.40)
 
 Timing setup, reported separately from the verdict and never overriding it:
@@ -498,6 +531,12 @@ differences worth knowing before you trust a disagreement between the two.
   means `alternative_score` falls back to 0.5 and the ±0.05 modifier disappears.
   That is the correct behaviour, not a bug, but it shifts the composite slightly
   against tickers the engine would have lifted.
+- **The exit reading needs a year of two series.** `exit_score` reads relative
+  strength against SPY over 3 and 6 months plus a 12-month range position, so an
+  agent without both price histories computes the condition from
+  `trend_confirmation` alone, or from nothing — in which case it is 0.5 and the
+  agent will publish fewer SELLs than the engine. That is the intended direction
+  of the error, but it is a difference.
 - **Cohorts differ.** The engine's percentile is measured across the whole union
   of watched tickers; the agent's is measured across the list you handed it. The
   same ticker can rank differently in the two fields, legitimately.
@@ -523,6 +562,8 @@ Change one of these and change the prompt in the same commit.
 | Prompt section | Source |
 |---|---|
 | BUY/SELL thresholds, hysteresis, rank rule, confidence | `backend/app/services/signal_generator.py` |
+| The exit reading and its condition component | `scoring.exit_score`, `scoring.exit_condition` (`_CONDITION_WEIGHTS`) |
+| Momentum components, lookbacks and bands | `backend/app/services/momentum.py` |
 | Composite weights (0.30 / 0.20 / 0.20 / 0.15 / 0.00 / 0.15, alt 0.10) | `backend/app/config.py` (`weight_*`), applied in `services/scoring.py` |
 | Technical stance, oscillator weights, trend gate and floor | `backend/app/services/feature_engineering.py` (`_STANCE_WEIGHTS`, `_OSC_WEIGHTS`, `_TREND_FLOOR`, `_technical_score`) |
 | Fundamental components and coverage weighting | `feature_engineering._fundamental_score` |

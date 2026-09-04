@@ -395,16 +395,37 @@ class Settings(BaseSettings):
     # had happened. `high_water_price` now records it; this decides what to do
     # about it.
     #
-    # OFF BY DEFAULT, deliberately. A trailing stop trades a worse average exit
-    # on winners for a smaller give-back, and which of those is the better deal
-    # is an empirical question this deployment cannot answer yet — no closed
-    # trade carries an excursion. Switch it on once `mfe_pct` and `gave_back_pct`
-    # over a real sample say it is worth it. That is the same discipline as
-    # `RESEARCH_VETO_ENABLED`: the measurement ships first and the behaviour is
-    # argued from it.
+    # **The trail and the target ratchet are ONE mechanism, behind this one
+    # flag.** Enabling either alone is a defect, and the trail alone was one for
+    # as long as it existed. Measured on the shipped defaults — target +10%,
+    # break-even +4%, activate +6%, trail 8%, min step 1% — a position running
+    # from entry to its target moved its stop exactly twice:
+    #
+    #     peak +4.00%   breakeven -> stop 100.00
+    #     peak +9.89%   trail     -> stop 101.10   <- take-profit fills at +10%
+    #
+    # The trail fired once, locked in 1.1%, inside the last 0.11% of price
+    # travel before the limit leg closed the trade. The worked example below —
+    # "an 8% trail on a name up 20%" — described a position that could not
+    # exist, because nothing ever raised the target. That is the `EXIT_ALERT`
+    # ghost again: a dead path reading as a live one, in the code that sells
+    # things. `trailing_target_headroom_pct` is the other half of the fix and
+    # must never be split from this flag.
+    #
+    # ON BY DEFAULT as of 1.31.0, which is a deliberate departure from the
+    # posture of `RESEARCH_VETO_ENABLED`, `enable_rank_signals` and
+    # `weight_momentum`. Those ship off because nothing has measured them; the
+    # honest statement here is the same — the excursion series began 30 Aug 2026
+    # when the paper account was switched, so the trade-off a trail makes (a
+    # worse average exit on winners for a smaller give-back) has not been
+    # settled on this deployment either. It ships on because the alternative was
+    # shipping a mechanism that provably could not fire, and because a static
+    # +10% ceiling is itself an unmeasured choice — just an invisible one.
+    # `mfe_pct` / `gave_back_pct` on `/performance/trades` are still what it has
+    # to be argued from.
     trailing_stop_enabled: bool = Field(
-        default=False,
-        description="Raise the stop as a position makes new highs. Never lowers one",
+        default=True,
+        description="Raise the stop and the target as a position makes new highs. Never lowers either",
     )
     # Distance below the high-water mark. Wider than `bracket_stop_loss_pct`
     # because it is measured from the peak rather than from entry: an 8% trail
@@ -442,6 +463,23 @@ class Settings(BaseSettings):
     trailing_stop_min_step_pct: float = Field(
         default=0.01, ge=0.0, le=0.20,
         description="Smallest upward stop move worth cancelling and replacing for",
+    )
+    # How far ahead of the high-water mark the target is re-placed once the
+    # trail is armed. This is the half of the mechanism that lets a winner run:
+    # without it the take-profit leg stays where entry put it and closes the
+    # position before the trail can ever bite (see `trailing_stop_enabled`).
+    #
+    # Measured from the PEAK, not from entry, for the same reason the trail is:
+    # a level derived from a cost basis the position has long since left behind
+    # is a ceiling on how right the entry is allowed to have been. A target
+    # ratchets up only; it is never lowered, because lowering one pulls the exit
+    # toward the market and can fill instantly.
+    #
+    # 0.10 keeps the target a full trail-width plus a margin above the peak, so
+    # `_reprotect`'s `0 < stop < target` holds by construction on every pass.
+    trailing_target_headroom_pct: float = Field(
+        default=0.10, ge=0.01, le=1.00,
+        description="Distance above the high-water mark the target is re-placed at",
     )
 
     # Fallbacks used when the AI analyst supplies no usable level, or supplies
@@ -698,7 +736,7 @@ class Settings(BaseSettings):
         default=48, description="Ignore dossiers older than this when vetoing"
     )
 
-    # ── Scoring weights (6 base weights must sum to 1.0) ──────────────────────
+    # ── Scoring weights (7 base weights must sum to 1.0) ──────────────────────
     #
     # weight_volatility defaults to 0.0 — volatility is priced at the risk gate,
     # not in the alpha score.
@@ -724,6 +762,29 @@ class Settings(BaseSettings):
     weight_macro:        float = Field(default=0.15)
     weight_volatility:   float = Field(default=0.00)
     weight_catalyst:     float = Field(default=0.15)
+    # weight_momentum defaults to 0.0 — the factor is computed and stored on
+    # every cycle, and contributes nothing until somebody raises this.
+    #
+    # See services/momentum.py. The short version: under
+    # `technical_stance=mean_reversion` trend enters `_technical_score` only as
+    # a multiplier capped at 1.0, so momentum could never add a point, and an
+    # extended market leader scored 0.037 technically against a falling knife's
+    # 0.391. There is no other rate-of-change or relative-strength term in the
+    # composite, which is why the engine cannot express "this is working".
+    #
+    # It ships at 0.00 for the reason `enable_rank_signals` ships off and
+    # `RESEARCH_VETO_ENABLED` ships off: it changes which names an agent with
+    # real money buys, and nothing has measured whether it ranks outcomes
+    # better yet. `/performance/calibration` answers that, and needs about
+    # twenty trading days of settled history under it first.
+    #
+    # Raising it requires taking the weight from somewhere — the sum check
+    # below enforces that. `weight_macro` is the candidate worth considering
+    # first: it is market-wide by construction, so it shifts every ticker in
+    # the watchlist by the same amount and cannot rank any two against each
+    # other. Momentum is the opposite by construction, since the benchmark leg
+    # removes exactly the common mode macro is made of.
+    weight_momentum:     float = Field(default=0.00)
     # Alternative data weight: additive modifier applied on top of the 6-weight
     # base score, so it does NOT participate in the sum-to-1.0 constraint.
     # score = base_score + weight_alt * (alt_score - 0.5)
@@ -739,12 +800,14 @@ class Settings(BaseSettings):
             + self.weight_macro
             + self.weight_volatility
             + self.weight_catalyst
+            + self.weight_momentum
         )
         if abs(total - 1.0) > 1e-6:
             raise ValueError(
                 f"Scoring weights must sum to 1.0, got {total:.6f}. "
                 "Check weight_technical, weight_fundamental, weight_sentiment, "
-                "weight_macro, weight_volatility, weight_catalyst in .env"
+                "weight_macro, weight_volatility, weight_catalyst, "
+                "weight_momentum in .env"
             )
         return self
 

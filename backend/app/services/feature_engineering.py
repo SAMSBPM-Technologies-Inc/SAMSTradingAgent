@@ -5,7 +5,8 @@ Reads raw price/fundamental/macro data from MongoDB and computes:
 
   Technical indicators  : RSI-14, MACD, Bollinger Bands, Stochastic RSI,
                           ATR, MA-20/50, volume anomaly, OBV, ADX-14, VWAP-20
-  Sub-scores (all 0–1)  : technical, fundamental, sentiment, macro, volatility
+  Sub-scores (all 0–1)  : technical, fundamental, sentiment, macro, volatility,
+                          momentum
   Composite             : delegated to scoring.py (not computed here)
 
 The `ta` library handles indicator math; numpy/pandas handle series ops.
@@ -60,6 +61,19 @@ async def compute_features(ticker: str) -> dict:
     # ── Sub-scores ────────────────────────────────────────────────────────────
     technical_score  = _technical_score(tech, current_price)
     volatility_score = _volatility_score(tech["volatility_20d"])
+
+    # Momentum / relative strength. `benchmark_closes` is cached for an hour and
+    # never raises, so this costs one fetch per hour across the whole watchlist
+    # rather than one per ticker per cycle. A None benchmark drops the two
+    # relative components and coverage weighting pulls the rest toward neutral
+    # — see services/momentum.py for why it must not fall back to the raw
+    # return.
+    from app.services.benchmark import benchmark_closes
+    from app.services.momentum import compute_momentum
+
+    momentum_score, momentum_coverage, momentum_detail = compute_momentum(
+        closes, await benchmark_closes()
+    )
 
     sentiment_raw   = raw_doc.get("sentiment_raw", {})
     sentiment_score = clamp(float(sentiment_raw.get("score", 0.5)))
@@ -132,7 +146,15 @@ async def compute_features(ticker: str) -> dict:
         "macro_score":        round(macro_score,       4),
         "volatility_score":   round(volatility_score,  4),
         "catalyst_score":            round(catalyst_score,          4),
+        "momentum_score":            round(momentum_score,          4),
         "alternative_data_score":    round(alternative_data_score,  4),
+        # Stored beside the score, not instead of it. The bands in
+        # `momentum.py` are tunable, so a replay recomputing this factor from a
+        # later set of constants would describe a rule that never ran — the raw
+        # excess returns are what a *different* rule can be tested against.
+        # Same reasoning as `setup_trigger` and its five indicators.
+        "momentum_coverage":         round(momentum_coverage,       4),
+        "momentum_detail":           momentum_detail,
         # ── What the score was made of ───────────────────────────────────────
         # Every source here degrades to 0.5 rather than failing the cycle, so a
         # composite assembled from four fallbacks looked identical to one
@@ -161,6 +183,7 @@ async def compute_features(ticker: str) -> dict:
         macro=round(macro_score, 4),
         volatility=round(volatility_score, 4),
         catalyst=round(catalyst_score, 4),
+        momentum=round(momentum_score, 4),
         alternative=round(alternative_data_score, 4),
     )
     return feature_doc

@@ -25,7 +25,10 @@ on a daily schedule can score a list of tickers and hand back the same shape of
 answer. Every threshold in it is quoted from a named file and the mapping is
 tabulated at the bottom, so a tuned constant and its prompt copy move together.
 
-Documentation only — no engine, API or client behaviour changes.
+Documentation only — no engine, API or client behaviour changes. The prompt
+carries the 1.31.0 exit reading: its SELL test, hysteresis band and confidence
+read `exit_score` (trend and relative strength in place of the oscillators),
+not the composite.
 
 **Known gaps** (also listed in the document): a prompt holds no state, so
 hysteresis and confirmation are inert unless the previous run's output is fed
@@ -34,6 +37,204 @@ score, so it lands in the same region but not on the same number; alternative
 data is usually unavailable to an agent, which drops the ±0.05 modifier; and
 none of `trade_manager`'s guard chain is reachable from a prompt — the veto in
 Step 7 shapes the agent's own output and nothing else.
+
+---
+
+## [1.31.0] — 2026-09-03
+
+**Selling the rip: the exit asked the entry question, and the trailing stop
+could not fire.** Two defects, both on the path that closes positions.
+
+### The composite had winners and losers backwards
+
+Under `technical_stance=mean_reversion` an extended name floors the oscillators
+*by design* — RSI ≥ 70 scores 0.0, a Bollinger reading at the top band scores
+`1 - bb_pct`. An oversold reading is the entry timer. But `weight_technical` is
+0.30 and the low end of the composite publishes SELL, so a leader running away
+from its cost basis walked itself into an exit for a reason that said nothing
+about the company. AAPL: `bb_pct` 1.03, `stoch_rsi` 0.99, up 24% in six months,
+technical score 0.066, published SELL.
+
+Measured on the real functions, an extended leader scored **0.297** and a name
+with a broken trend, negative relative strength and weak fundamentals scored
+**0.340**. The ordering was inverted, so no choice of threshold could have
+fixed it. And SELL is the one verdict with no brakes: it skips the risk gate,
+skips confirmations and dwell, is unreachable by the research veto, and is
+unappealable by the analyst.
+
+- **`scoring.exit_score`** recomputes the composite with the oscillator
+  component swapped for a **condition** component — `trend_confirmation` and
+  `momentum_score`, both already on the feature document, so it costs no read.
+  Every other factor and weight is untouched, so `SELL_THRESHOLD` keeps its
+  meaning. Momentum decides exits; technical decides entries — which gives the
+  factor 1.30.0 shipped at weight 0.00 a job without touching `weight_momentum`,
+  and so without narrowing the BUY spread that release measured.
+- **It is not a brake.** It changes which number the exit is measured against,
+  upstream of the verdict; it adds no veto, no delay and no gate. A
+  deteriorating name still sells immediately and unconditionally.
+- **The exit clause is now tested first** in `classify_signal`. While both sides
+  read one number this was unobservable — nothing is above 0.70 and below 0.30
+  at once — but they are two numbers now, and the ordering matches
+  `_classify_relative` and `_gate_analyst_signal`, which both already put the
+  exit first.
+- **An unknown condition reads 0.5, never the oscillators**, and the **XGBoost
+  path returns `None`** and falls back to the composite: the weights did not
+  produce that score, so an exit reading built from them would be a fabrication
+  — the refusal `explain_score` already makes.
+- `_gate_analyst_signal` takes the same reading. A gate recomputing the rule
+  from the composite alone would have stamped `sell_restored` on every extended
+  leader the engine had decided to hold — and `sell_restored` is unappealable,
+  so it would have sold the position.
+- Retained on `stocks_signal_history` and carried by **both** calibration
+  projections; surfaced on the gate panel and on both clients, so the panel can
+  no longer print "over the 30 that would trigger a sell" beneath a score of 29.
+
+### The trailing stop was a dead path that read as a live one
+
+Simulated across a position walking from entry to its target on the shipped
+defaults — target +10%, break-even +4%, activate +6%, trail 8%, min step 1%:
+
+```
+peak +4.00%   breakeven -> stop 100.00
+peak +9.89%   trail     -> stop 101.10   <- take-profit fills at +10%
+```
+
+The trail fired **once**, locked in **1.1%**, inside the last 0.11% of price
+travel before the limit leg closed the trade. Nothing ever raised the target, so
+the peak could not exceed +10%, so the trail had no room to work.
+`TRAILING_STOP_ENABLED=true` bought break-even and nothing else, while
+`config.py` advertised "an 8% trail on a name up 20% still locks in ~10%" — a
+position that could not exist.
+
+- **`_ratcheted_target`** raises the target with the high-water mark, a
+  `TRAILING_TARGET_HEADROOM_PCT` (0.10) ahead of the peak. A target may only
+  move up, never moves before the trail arms, and is never placed at or below
+  the market.
+- **Both legs are one mechanism behind one flag.** A trail under a fixed target
+  is inert and a ratchet without a trail moves the exit away while the stop sits
+  at −5%, so neither is separately switchable.
+- **One trip to the venue.** Stop and target are re-placed as a single OCA pair
+  through the existing `_reprotect`, so the rate limit is charged to the pair —
+  either leg being worth the move carries the other along free.
+- Written to the record only after the venue accepts, as the stop already was.
+
+### The overbought flag, finally measurable
+
+`EXIT_ALERT` still sells nothing and `trade_rationale._EXIT_REASON` still has no
+entry for it. `setup_trigger` was retained on the *signal* row, which answers
+"did an ENTRY predict forward alpha" — but the exit question is about a
+position's path, not a ticker's. Positions now record `first_exit_alert_price`,
+closed trades report `return_at_first_exit_alert_pct`, and
+`/performance/trades` carries it with its own `alerted_n` beside
+`avg_gave_back_pct`.
+
+### Ships on
+
+`TRAILING_STOP_ENABLED` now defaults **true**, and the exit reading is not
+gated at all.
+
+### Known gaps
+
+- **The trail ships on without the measurement it was supposed to wait for.**
+  This is a deliberate departure from the posture of `RESEARCH_VETO_ENABLED`,
+  `enable_rank_signals` and `weight_momentum`. The excursion series began 30 Aug
+  2026 when the paper account was switched, so roughly four days of closed
+  trades exist and the trade-off a trail makes — a worse average exit on winners
+  for a smaller give-back — has **not** been settled on this deployment.
+  `mfe_pct` / `gave_back_pct` on `/performance/trades` are still what it has to
+  be argued from, and the honest reading today is that a static +10% ceiling was
+  also an unmeasured choice, just an invisible one.
+- **`TRAILING_TARGET_HEADROOM_PCT` is reasoned, not fitted.** 0.10 keeps the
+  target clear of the trail on every pass; nothing says it is the right
+  distance, and it caps nothing — a position now exits on the trail rather than
+  on the target in most paths, which is the intended change and also an
+  untested one.
+- **The exit reading has no settled history either.** It changes which SELLs are
+  published from this deploy. `exit_score` is retained from now on, so
+  `/performance/calibration` can speak to it in about twenty trading days; it
+  cannot today, and rows written before this release carry the key **absent**
+  and must be excluded rather than read as agreement.
+- **Two changes at once.** The trail changes which exits happen and the exit
+  reading changes which SELLs are published. `/performance/trades` will not be
+  able to attribute a change in realised return to one or the other.
+- **`_CONDITION_WEIGHTS` (0.45 trend / 0.55 momentum) is a judgement**, not a
+  fit. It was chosen because relative strength is the more durable of the two
+  and trend the faster, and nothing has tested the ratio.
+- The AAPL figures above are from the 1.30.0 investigation, not a fresh replay:
+  no stored row carried an exit reading until this release.
+
+---
+
+## [1.30.0] — 2026-09-03
+
+**The score could not say "this is working".** Every trend input in the system
+was consumed as a discount. Under the production stance
+(`technical_stance=mean_reversion`) `_technical_score` gates its oscillators as
+`osc × (0.40 + 0.60 × trend)` — a multiplier whose ceiling is 1.0 — and the
+stance weights for MACD (0.15) and the MA cross (0.10) are discarded on that
+path entirely. Momentum could only ever subtract.
+
+Measured on the real function, an extended market leader scored **0.037**
+technically while a stock in free fall scored **0.391**: the composite ranked a
+collapsing name ten times above a leader. Nothing else filled the gap — there
+was no rate-of-change, relative-strength or 52-week-position term anywhere in
+`feature_engineering`, `scoring` or `catalyst`, and `week52_high` was fetched by
+the Alpha Vantage provider and scored by nothing.
+
+- **A new `momentum` factor** (`services/momentum.py`), stored as
+  `momentum_score` on every feature document. Three components, coverage
+  weighted: 3-month relative strength, 6-month relative strength with the most
+  recent month skipped, and range position against the benchmark's own.
+- **Every component is measured against the benchmark**, and a missing
+  benchmark returns a flat 0.5 at zero coverage rather than a raw reading. In a
+  rising market every absolute return is positive, so an absolute momentum
+  factor would move the whole book in one direction and rank nothing — the
+  `_macro_score` defect rebuilt somewhere new.
+- **It is return-based, never indicator-based.** MACD and the MA cross are
+  already read by `trend_confirmation` in both the technical score and the
+  ENTRY badge; reading them again here would re-weight an existing factor
+  rather than add one.
+- **Price history now runs 400 calendar days**, matched to
+  `benchmark._SERIES_DAYS`. At the old 90 days a ticker held ~62 trading bars —
+  short of the 148 the 6-1 component needs and the 120 the range needs, so the
+  factor could never have returned more than its 3-month leg. Fixed-window
+  indicators are unchanged; `/chart/{ticker}/series` can now actually serve a
+  request longer than three months, which it previously could not.
+
+**It ships at weight 0.00 and changes no score.** Same posture as
+`enable_rank_signals` and `RESEARCH_VETO_ENABLED`: this decides which names an
+agent with real money buys, and nothing has measured whether it ranks outcomes
+better yet. The factor is computed and stored every cycle so
+`/performance/calibration` can settle history under it first. `Settings`
+includes it in the sum-to-1.0 check, so raising it forces an explicit
+rebalance rather than silently inflating every score.
+
+### Known gaps
+
+- **Nothing has been measured yet.** The factor is stored, not weighted. Any
+  claim that it improves selection is currently unsupported, and about twenty
+  trading days of settled history are needed before `/performance/calibration`
+  can speak to it.
+- **Added additively at a meaningful weight, it makes the composite
+  discriminate *less*.** On the eleven-name watchlist, momentum and the
+  technical score rank names almost inversely (Spearman −0.373), so at
+  `technical 0.25 / macro 0.05 / momentum 0.15` the best-to-worst spread
+  *narrows* from 0.145 to 0.105. The two factors partially cancel. Feeding
+  relative strength into the existing trend gate instead — `osc × (0.40 + 0.60
+  × momentum)` — widens the spread to 0.568 from 0.482 in the same test, which
+  is the more promising shape and is **not** implemented.
+- **This does not fix the AAPL SELL.** AAPL's oscillators read genuinely
+  extended (bb_pct 1.03, stoch_rsi 0.99), so 0.066 is a *correct* answer to
+  "is there a dip to buy here" on a stock up 24% in six months and sitting at
+  0.87 of its 52-week range. The defect is that a mean-reversion entry-timing
+  score is 0.30 of a composite whose bottom end publishes SELL — and SELL is
+  exempt from the risk gate, confirmations, dwell and the research veto.
+  Untouched by this release.
+- **The bands are unvalidated.** `_SHORT_BAND` 0.25, `_LONG_BAND` 0.40 and
+  `_RANGE_BAND` 0.35 are reasoned from typical cross-sectional dispersion, not
+  fitted to this watchlist.
+- Feature documents written before this release carry no `momentum_score` and
+  read as neutral, not weak.
 
 ---
 

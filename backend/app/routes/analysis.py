@@ -425,11 +425,24 @@ def _build_gate(
             # An overridden analyst verdict was not published; the rule's was.
             decided_by = "rule" if stored.get("overridden") else "analyst"
 
+    # The exit side is measured on its own reading where the document carries
+    # one. Absent — on a pre-1.31.0 row or an XGBoost score — the SELL test read
+    # the composite, and so does this.
+    stored_exit = doc.get("exit_score")
+    exit_reading = None if stored_exit is None else float(stored_exit)
+    sell_basis = score if exit_reading is None else exit_reading
+    standing_sell = doc.get("signal") == "SELL"
+    effective_sell = (
+        SELL_THRESHOLD + SIGNAL_HYSTERESIS if standing_sell else SELL_THRESHOLD
+    )
+
     return SignalGate(
         buy_threshold=BUY_THRESHOLD,
         sell_threshold=SELL_THRESHOLD,
         risk_max_for_buy=RISK_MAX_FOR_BUY,
         score_passes_buy=score > effective_buy,
+        exit_score=None if exit_reading is None else round(exit_reading, 4),
+        score_passes_sell=sell_basis < effective_sell,
         risk_passes_buy=risk_score < RISK_MAX_FOR_BUY,
         hysteresis=SIGNAL_HYSTERESIS,
         effective_buy_threshold=round(effective_buy, 4),

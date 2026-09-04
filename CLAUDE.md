@@ -129,6 +129,37 @@ npm run web
    `cohort_size`, **absent** (not null) under the absolute rule, the same
    convention as `analyst_override`.
 
+   **The BUY test and the SELL test read different numbers.** The composite
+   ranks *entry* opportunity, and under `mean_reversion` an extended name floors
+   the oscillators by design — an oversold reading is the entry timer. At
+   `weight_technical` 0.30 that walked a leader into the low end of the
+   composite, which publishes SELL. Measured on the real functions the ordering
+   was **inverted**: an extended leader scored 0.297 and a name with a broken
+   trend, negative relative strength and weak fundamentals scored 0.340, so no
+   threshold could have fixed it. AAPL was sold at `bb_pct` 1.03 / `stoch_rsi`
+   0.99, up 24% in six months.
+
+   `scoring.exit_score` is what the SELL test reads: the same composite with the
+   oscillator component swapped for a **condition** component
+   (`trend_confirmation` + `momentum_score`, both already on the feature
+   document). Momentum decides exits, technical decides entries — which is how
+   the factor shipped at weight 0.00 earns a job without touching
+   `weight_momentum` and narrowing the BUY spread.
+
+   Four properties. **It is not a brake** — it changes which number the exit is
+   measured against, upstream of the verdict, and adds no veto, delay or gate; a
+   deteriorating name still sells immediately. **The exit clause is tested
+   first**, as it already is in `_classify_relative` and `_gate_analyst_signal`;
+   with one number that was unobservable, with two it is not. **An unknown
+   condition reads 0.5, never the oscillators**, because SELL has no brakes and
+   the safe reading of unknown is *do not manufacture an exit*. And **the
+   XGBoost path returns `None`** and falls back to the composite: the weights
+   did not produce that score, so deriving an exit reading from them is the
+   fabrication `explain_score` already refuses. Omitting it gives the raw rule,
+   which is what calibration replays want. Anything recomputing the rule must
+   take it — `_gate_analyst_signal` without it stamps `sell_restored` on every
+   held leader, and that override is unappealable.
+
    **A verdict is not published until it holds.** Computing a signal and
    publishing one are different acts, and `services/signal_stability.py` sits
    between them. A changed verdict becomes a *candidate*: it publishes only
@@ -348,8 +379,41 @@ npm run web
    took is the one direction of error that makes a position look safer than it
    is. `_track_and_trail` places nothing when no orders are working: heal
    re-places from the record in that same pass, and both acting would put two
-   pairs on one holding. It ships **off**, like `RESEARCH_VETO_ENABLED` — the
-   measurement lands first and the behaviour is argued from it.
+   pairs on one holding.
+
+   **The stop and the target are one mechanism, behind one flag.** For as long
+   as the trail existed it could not fire: nothing raised the target, so on the
+   shipped defaults a position walking from entry to its target moved its stop
+   twice — break-even at +4%, then one trail move at peak +9.89% locking in
+   1.1%, 0.11% of price travel before the limit leg closed the trade. The config
+   comment advertised "an 8% trail on a name up 20%", a position the bracket
+   made unreachable. That is the `EXIT_ALERT` ghost again, in the code that
+   sells things. `_ratcheted_target` raises the target with the peak
+   (`TRAILING_TARGET_HEADROOM_PCT`), a target may only ever move up, and it
+   never moves before the trail arms. Both legs go out as **one OCA pair through
+   `_reprotect`**, so the rate limit is charged to the pair — either leg being
+   worth the trip carries the other. Never split them behind two flags: a trail
+   under a fixed target is inert, and a ratchet without a trail widens the exit
+   while the stop sits at entry minus 5%.
+
+   It ships **on** as of 1.31.0, which is a deliberate departure from
+   `RESEARCH_VETO_ENABLED`'s posture and is recorded as such in the changelog's
+   Known gaps. The measurement (`mfe_pct` / `gave_back_pct`) is still what it
+   has to be argued from; the reason it did not wait is that the alternative was
+   shipping a mechanism that provably could not fire, and a static +10% ceiling
+   is an unmeasured choice too — just an invisible one.
+
+   **The overbought flag is advisory and now measurable.** Nothing sells on
+   `EXIT_ALERT` and `trade_rationale._EXIT_REASON` still has no entry for it.
+   But `setup_trigger` is retained on the *signal* row, which answers "did an
+   ENTRY predict forward alpha" — and the exit question is about a **position's
+   path**, not a ticker's, so no stored row could ever answer it. Positions now
+   record `first_exit_alert_price`, closed trades report
+   `return_at_first_exit_alert_pct`, and `/performance/trades` carries it with
+   its own `alerted_n` (a position can close having never drawn an alert, and
+   that is an absence, not a zero — the `commission_paid` rule). Wiring this to
+   `execute_exit` must be argued from that number against `avg_return_pct` in
+   the same bucket.
 
    **`EXIT_ALERT` was a ghost and is gone.** `execute_exit`'s `trigger`
    defaulted to it, both callers passed something else, and

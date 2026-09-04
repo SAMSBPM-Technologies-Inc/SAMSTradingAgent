@@ -143,6 +143,16 @@ export interface SignalGate {
   risk_passes_buy: boolean
   hysteresis: number
   effective_buy_threshold: number
+  /**
+   * The number the SELL test was measured against. The BUY side reads the
+   * composite; the exit side reads a version of it with the mean-reversion
+   * oscillator component swapped for trend and relative strength, because an
+   * extended winner floors the oscillators by design and that says nothing
+   * about whether to sell. `null` on a pre-1.31.0 document or an XGBoost score.
+   */
+  exit_score?: number | null
+  /** Whether the exit reading is below the level that sells. */
+  score_passes_sell?: boolean | null
   /** Which component produced the verdict. An overridden analyst read is `rule`. */
   decided_by: 'rule' | 'analyst'
   analyst?: AnalystGate | null

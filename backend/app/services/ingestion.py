@@ -22,8 +22,27 @@ from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# How many calendar days of history to pull on each ingestion run
-HISTORY_DAYS = 90
+# How many calendar days of history to pull on each ingestion run.
+#
+# Raised from 90 for the momentum factor, and matched to
+# `benchmark._SERIES_DAYS` deliberately: relative strength subtracts one series
+# from the other, so a ticker holding less history than the benchmark simply
+# cannot be measured over the longer horizon. 90 calendar days is roughly 62
+# trading bars — short of the 148 the 6-month-skip-1-month component needs and
+# short of the 120 the range position needs, so at 90 the factor could only
+# ever return its 3-month leg, marginally, and coverage-weight the rest to
+# neutral for every ticker forever.
+#
+# It is one provider call either way; only the row count changes. The cost is
+# that `stocks_raw.bars` grows roughly fourfold, and that document is read on
+# every ticker on the 5-minute cycle — a few tens of KB per ticker, which is
+# why this is a considered number rather than "as much as possible".
+#
+# Fixed-window indicators (RSI-14, MACD, Bollinger-20, ATR-14, MA-20/50,
+# volatility-20d) are unchanged by the extra warm-up; `/chart/{ticker}/series`
+# slices to the window the client asked for and can now actually serve a
+# request longer than three months.
+HISTORY_DAYS = 400
 
 
 async def ingest_ticker(ticker: str) -> dict:
