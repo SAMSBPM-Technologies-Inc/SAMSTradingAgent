@@ -224,7 +224,9 @@ def _classify_relative(
     return "HOLD"
 
 
-def boundary_confidence(score: float, signal: str, cohort=None) -> float:
+def boundary_confidence(
+    score: float, signal: str, cohort=None, sell_basis: float | None = None
+) -> float:
     """
     How far *score* sits from the nearest boundary that would change *signal*,
     scaled to [0, 1].
@@ -245,21 +247,37 @@ def boundary_confidence(score: float, signal: str, cohort=None) -> float:
     is a *rank*, and measuring distance from `BUY_THRESHOLD` would report a BUY
     at 0.60 as 0% confident. Measuring the wrong boundary is the identical
     mistake the analyst clause above exists to prevent.
+
+    `sell_basis` (`scoring.exit_score`) is that same requirement on the exit
+    side, and the SELL branch was making exactly the mistake the paragraph
+    above warns about. Since 1.31.0 the SELL test reads the exit reading while
+    this function was still handed the composite, so a SELL at composite 0.52
+    on an exit reading of 0.28 stored `clamp((0.30 - 0.52)/0.30)` = **0.0** —
+    a verdict two points past its threshold reported as maximally marginal,
+    into `stocks_signal_history` and the confidence buckets built on it.
+
+    Omit it and the SELL branch measures `score`, which is the rule exactly as
+    it was — the same convention `cohort` and `previous_signal` follow, and
+    what calibration replays want.
     """
+    basis = score if sell_basis is None else sell_basis
+
     if cohort is not None and cohort.size >= RANK_MIN_COHORT:
-        return _relative_confidence(score, signal, cohort)
+        return _relative_confidence(score, signal, cohort, basis)
 
     if signal == "BUY":
         return clamp((score - BUY_THRESHOLD) / (1.0 - BUY_THRESHOLD))
     if signal == "SELL":
-        return clamp((SELL_THRESHOLD - score) / SELL_THRESHOLD)
+        return clamp((SELL_THRESHOLD - basis) / SELL_THRESHOLD)
     # Certainty of being in the middle band.
     return clamp(
         min(abs(score - BUY_THRESHOLD), abs(score - SELL_THRESHOLD)) / 0.40
     )
 
 
-def _relative_confidence(score: float, signal: str, cohort) -> float:
+def _relative_confidence(
+    score: float, signal: str, cohort, sell_basis: float | None = None
+) -> float:
     """
     Distance from the rank boundary, for a verdict decided on rank.
 
@@ -272,11 +290,19 @@ def _relative_confidence(score: float, signal: str, cohort) -> float:
     HOLD reports distance from whichever entry boundary is nearer, normalised
     over the widest gap either side, so the number keeps its meaning — "how
     settled is this verdict" — across both rules.
+
+    One exception, and it is the same rule `_classify_relative` follows: the
+    absolute exit is tested **first** there and can fire on a name that is not
+    in the bottom quintile at all. When it did — `sell_basis` under
+    `SELL_THRESHOLD` — the rank is not the boundary that decided this verdict,
+    and reporting rank distance would describe a test that never ran.
     """
     if signal == "BUY":
         headroom = 1.0 - RANK_BUY_PERCENTILE
         return clamp((cohort.percentile - RANK_BUY_PERCENTILE) / headroom) if headroom else 1.0
     if signal == "SELL":
+        if sell_basis is not None and sell_basis < SELL_THRESHOLD:
+            return clamp((SELL_THRESHOLD - sell_basis) / SELL_THRESHOLD)
         headroom = RANK_SELL_PERCENTILE
         return clamp((RANK_SELL_PERCENTILE - cohort.percentile) / headroom) if headroom else 1.0
     nearest = min(
@@ -326,7 +352,7 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
         score, risk_score, previous_signal, cohort, exit_score=exit_reading,
     )
 
-    confidence = boundary_confidence(score, signal, cohort)
+    confidence = boundary_confidence(score, signal, cohort, sell_basis=exit_reading)
 
     # ── Entry / exit suggestions ──────────────────────────────────────────────
     price = feat.get("current_price", 0.0)
@@ -345,7 +371,11 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
         # before 1.31.0: absent means "this row predates the exit reading and
         # says nothing about it", which is not the same fact as a row where it
         # was computed and agreed. Same distinction as `analyst_override`.
-        "exit_score": round(exit_reading, 4),
+        # `None` when the composite did not produce it — the XGBoost path,
+        # where `scoring.exit_score` refuses to derive a reading from weights
+        # that did not make the score. The key is present and null, which is
+        # not the same fact as the key being absent (a row predating 1.31.0).
+        "exit_score": round(exit_reading, 4) if exit_reading is not None else None,
         "risk": risk_dict,
         "signal": signal,
         "confidence": round(confidence, 4),
@@ -360,9 +390,16 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
         # before ranking existed or while it is switched off; a consumer that
         # cannot tell those apart reads "ranked bottom" for every historical
         # row. Same distinction as `analyst_override`.
+        # `cohort_for` returns a field of two or more, but `classify_signal`
+        # only *uses* the relative rule at `RANK_MIN_COHORT`. Stamping these on
+        # a verdict the absolute rule decided breaks the convention two lines
+        # up — and `pipeline._execute_trades` reads their presence as
+        # `rank_decided`, which hands `_order_score_bar` the rank floor (0.55)
+        # for a BUY the rule required 0.70 of. The condition must be the same
+        # one that chose the rule.
         **(
             {"score_percentile": cohort.percentile, "cohort_size": cohort.size}
-            if cohort is not None else {}
+            if cohort is not None and cohort.size >= RANK_MIN_COHORT else {}
         ),
     }
 

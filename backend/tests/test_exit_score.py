@@ -171,3 +171,101 @@ def test_the_sell_band_still_applies_to_the_exit_reading():
     just_over = SELL_THRESHOLD + 0.02
     assert classify_signal(0.50, 3.0, None, None, exit_score=just_over) == "HOLD"
     assert classify_signal(0.50, 3.0, "SELL", None, exit_score=just_over) == "SELL"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Three readers of the exit boundary that the 1.31.0 split did not reach.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def test_ml_path_writes_a_null_exit_score_rather_than_crashing():
+    """
+    `exit_score` returns `None` on the XGBoost path by contract — the weights
+    did not produce that score, so deriving an exit reading from them would be
+    the fabrication `explain_score` already refuses.
+
+    Both signal writers then called `round(exit_reading, 4)` on it. With a
+    trained model present, every ticker raised `TypeError` inside
+    `generate_signal`, the pipeline logged `pipeline_failed`, and no signal, no
+    exit evaluation and no trade ran for any ML-scored name. A mechanism that
+    provably cannot work when switched on — sitting under the roadmap's next
+    priority.
+    """
+    from app.services.scoring import exit_score
+
+    feat = {
+        "scoring_method": "xgboost", "composite_score": 0.61,
+        "macd_bullish": True, "ma_cross_bullish": True,
+        "momentum_score": 0.7, "momentum_coverage": 1.0,
+    }
+    reading = exit_score(feat)
+    assert reading is None
+
+    # The expression both writers now use. Before the guard this raised.
+    assert (round(reading, 4) if reading is not None else None) is None
+
+
+def test_sell_confidence_is_measured_from_the_number_that_decided_it():
+    """
+    SELL is decided on the exit reading; confidence was still measured from the
+    composite. A SELL at composite 0.52 on an exit reading of 0.28 stored
+    `clamp((0.30 - 0.52)/0.30)` = 0.0 — a verdict two points past its threshold
+    reported as maximally marginal, into `stocks_signal_history` and the
+    confidence buckets built on it.
+    """
+    from app.services.signal_generator import SELL_THRESHOLD, boundary_confidence
+
+    composite, exit_reading = 0.52, 0.28
+    assert boundary_confidence(composite, "SELL") == 0.0
+    assert boundary_confidence(
+        composite, "SELL", sell_basis=exit_reading
+    ) == pytest.approx((SELL_THRESHOLD - exit_reading) / SELL_THRESHOLD)
+
+
+def test_omitting_the_sell_basis_reproduces_the_previous_rule():
+    """
+    The same convention `cohort` and `previous_signal` follow: omit it and you
+    get the raw rule, which is what calibration replays want.
+    """
+    from app.services.signal_generator import boundary_confidence
+
+    for score in (0.05, 0.18, 0.29, 0.45, 0.71, 0.92):
+        for signal in ("BUY", "SELL", "HOLD"):
+            assert boundary_confidence(score, signal) == boundary_confidence(
+                score, signal, sell_basis=None
+            )
+
+
+def test_the_buy_branch_never_reads_the_exit_basis():
+    """BUY is decided on the composite and must stay that way."""
+    from app.services.signal_generator import boundary_confidence
+
+    assert boundary_confidence(0.85, "BUY", sell_basis=0.10) == boundary_confidence(
+        0.85, "BUY"
+    )
+
+
+def test_an_absolute_exit_under_the_relative_rule_reports_absolute_distance():
+    """
+    `_classify_relative` tests the absolute exit FIRST and it can fire on a name
+    that is nowhere near the bottom quintile. When it did, the rank is not the
+    boundary that decided the verdict, and reporting rank distance would
+    describe a test that never ran.
+    """
+    from app.services.cross_section import Cohort
+    from app.services.signal_generator import SELL_THRESHOLD, boundary_confidence
+
+    mid_field = Cohort(percentile=0.55, size=12)
+    assert boundary_confidence(
+        0.52, "SELL", mid_field, sell_basis=0.24
+    ) == pytest.approx((SELL_THRESHOLD - 0.24) / SELL_THRESHOLD)
+
+
+def test_a_rank_decided_sell_still_reports_rank_distance():
+    """When the absolute exit did NOT fire, the rank is what decided it."""
+    from app.services.cross_section import Cohort
+    from app.services.signal_generator import boundary_confidence
+
+    bottom = Cohort(percentile=0.05, size=12)
+    ranked = boundary_confidence(0.45, "SELL", bottom, sell_basis=0.45)
+    assert ranked == pytest.approx(boundary_confidence(0.45, "SELL", bottom))
+    assert ranked > 0

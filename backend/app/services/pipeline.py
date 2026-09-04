@@ -25,7 +25,8 @@ This reduces Claude calls by ~90% at steady state (60-ticker watchlist → 1 cal
 per ticker vs 12 calls/hr = ~$180/day vs ~$2,160/day).
 
 Every pipeline run upserts a record to stocks_signal_history keyed on
-(ticker, hour_bucket) to prevent duplicates within the same hour.
+(ticker, hour_bucket, signal): one row per *published verdict* per hour, so a
+repeated verdict dedupes while a change within the hour records itself.
 """
 from datetime import datetime, timezone
 
@@ -189,6 +190,7 @@ async def run_pipeline(ticker: str) -> dict:
                         ticker, signal, prev_signal, prev_stability,
                         extra={"current_price": current_price,
                                "day_change_pct": day_change_pct},
+                        feat=feat_doc,
                     )
                     await _append_history(signal, raw_doc, scored)
                     logger.info("pipeline_complete", ticker=ticker, mode="ai_analyst",
@@ -213,6 +215,7 @@ async def run_pipeline(ticker: str) -> dict:
     changed = await _publish_verdict(
         ticker, signal, prev_signal, prev_stability,
         extra={"current_price": current_price, "day_change_pct": day_change_pct},
+        feat=scored,
     )
     await _append_history(signal, raw_doc, scored)
     logger.info("pipeline_complete", ticker=ticker, mode="rule_based", signal=signal.get("signal"))
@@ -275,6 +278,17 @@ async def _analyst_worth_calling(ticker: str, feat_doc: dict) -> tuple[bool, str
     The margin is measured against signal_generator's own thresholds rather
     than a hard-coded band, so moving a threshold moves the gate with it.
 
+    **Each boundary is measured on the number that decides it.** The BUY side
+    reads the composite; the SELL side reads `scoring.exit_score`, because
+    since 1.31.0 that is what `classify_signal` tests. Measuring the SELL band
+    on the composite skipped the call on a name one tick from an exit — a
+    falling knife at exit reading 0.2925 behind a composite of 0.4125 reported
+    `mid_range` — and spent it on a name nowhere near one, an extended leader
+    whose composite of 0.3750 sat inside the SELL band on an exit reading of
+    0.6435. Both cases are pinned in `tests/test_exit_boundary_readers.py`.
+    Holdings are covered either way by `analyst_always_analyse_holdings`; the
+    names this stranded were the advisory SELLs on things watched but not held.
+
     Returns (should_call, reason).
     """
     settings = get_settings()
@@ -288,6 +302,15 @@ async def _analyst_worth_calling(ticker: str, feat_doc: dict) -> tuple[bool, str
         return True, "no_score"
 
     margin = settings.analyst_gate_margin
+
+    # Local import: `scoring` imports `classify_signal` back out of
+    # `signal_generator`, and this module sits downstream of both — the same
+    # cycle `generate_signal` breaks the same way. `exit_score` is a pure
+    # function over the document already in hand, so this costs no read.
+    from app.services.scoring import exit_score as _exit_score
+
+    exit_reading = _exit_score(feat_doc)
+    sell_basis = float(score) if exit_reading is None else exit_reading
 
     if settings.enable_rank_signals:
         # Proximity has to be measured against the boundary that will actually
@@ -310,14 +333,19 @@ async def _analyst_worth_calling(ticker: str, feat_doc: dict) -> tuple[bool, str
                 return True, f"near_buy_rank_{cohort.percentile:.2f}"
             if cohort.percentile <= RANK_SELL_PERCENTILE + RANK_HYSTERESIS:
                 return True, f"near_sell_rank_{cohort.percentile:.2f}"
+            # `_classify_relative` tests the absolute exit before the rank and
+            # it can fire on a name that is mid-field, so proximity to it is a
+            # live call under the relative rule too.
+            if sell_basis <= SELL_THRESHOLD + margin:
+                return True, f"near_sell_exit_{sell_basis:.2f}"
             if settings.analyst_always_analyse_holdings and await _has_open_position(ticker):
                 return True, f"position_open_{score:.2f}"
             return False, f"mid_field_{cohort.percentile:.2f}"
 
     if score >= BUY_THRESHOLD - margin:
         return True, f"near_buy_{score:.2f}"
-    if score <= SELL_THRESHOLD + margin:
-        return True, f"near_sell_{score:.2f}"
+    if sell_basis <= SELL_THRESHOLD + margin:
+        return True, f"near_sell_{sell_basis:.2f}"
 
     if settings.analyst_always_analyse_holdings and await _has_open_position(ticker):
         return True, f"position_open_{score:.2f}"
@@ -417,6 +445,7 @@ async def _publish_verdict(
     prev_stability: StabilityState,
     *,
     extra: dict,
+    feat: dict | None = None,
 ) -> bool:
     """
     Decide what this cycle actually publishes, and persist it.
@@ -432,6 +461,27 @@ async def _publish_verdict(
     Mutates `signal` in place so the caller's history record, alert and trade
     path all see the published verdict, never the unconfirmed candidate.
     Returns whether the published verdict changed.
+
+    **Every derived field describes the published verdict**, which is the rule
+    `_gate_analyst_signal` already follows one layer down and which this
+    function was breaking. `confidence`, `entry_suggestion` and
+    `exit_suggestion` are computed by the signal path *for the candidate* and
+    persisted by its own upsert before this runs — so a held-back BUY under a
+    published HOLD left a full buy plan, entry price, stop and target, on the
+    document. That is the exact defect the analyst gate exists to prevent,
+    reintroduced by the layer above it. The candidate's confidence also reached
+    the history row against the published signal, where the calibration buckets
+    read it.
+
+    So when the published verdict differs from the candidate, the three derived
+    fields are recomputed for what was actually published. On the analyst path
+    that replaces model-derived suggestions with rule-derived ones: deliberate,
+    and the same trade the gate makes — a suggestion describing a verdict nobody
+    published is worse than a blunter one describing the verdict they got.
+
+    `feat` is the feature document the suggestions are derived from. Optional
+    only so existing callers and tests that do not exercise an override keep
+    working; both pipeline call sites pass it.
     """
     settings = get_settings()
     db = await get_db()
@@ -462,6 +512,17 @@ async def _publish_verdict(
                 f"[{held} candidate not yet confirmed — {decision.reason}; "
                 f"holding {decision.signal} until it does.]"
             ).strip()
+        _rederive_for_published(signal, decision.signal, feat or {})
+        # Only on an override. Both signal paths write these three for their own
+        # candidate, so persisting them otherwise is a no-op that says nothing;
+        # here it is the correction itself.
+        rederived = {
+            "confidence":        signal.get("confidence"),
+            "entry_suggestion":  signal.get("entry_suggestion"),
+            "exit_suggestion":   signal.get("exit_suggestion"),
+        }
+    else:
+        rederived = {}
 
     signal[STABILITY_FIELD] = decision.state.to_doc()
 
@@ -471,10 +532,48 @@ async def _publish_verdict(
             **extra,
             "signal": decision.signal,
             "explanation": signal.get("explanation", ""),
+            **rederived,
             STABILITY_FIELD: decision.state.to_doc(),
         }},
     )
     return decision.changed
+
+
+def _rederive_for_published(signal: dict, published: str, feat: dict) -> None:
+    """
+    Recompute the fields that describe a verdict, for the verdict published.
+
+    Mutates `signal` in place, like its caller. Reads the cohort back off the
+    document rather than recomputing it: the rank the verdict was classified
+    with is stored there for exactly this reason, and re-reading the watchlist
+    half a second later could rank against a different field.
+
+    `sell_basis` is the stored exit reading, so the confidence of a published
+    SELL is measured against the number that decides a SELL — the same
+    correction made in `boundary_confidence` itself. Absent on rows written
+    before 1.31.0, where `None` gives the pre-split rule unchanged.
+    """
+    from app.services.cross_section import Cohort
+    from app.services.signal_generator import _price_suggestions, boundary_confidence
+
+    cohort = None
+    if "score_percentile" in signal and "cohort_size" in signal:
+        cohort = Cohort(
+            percentile=signal["score_percentile"], size=signal["cohort_size"]
+        )
+
+    score = float(signal.get("score") or 0.5)
+    signal["confidence"] = round(
+        boundary_confidence(
+            score, published, cohort, sell_basis=signal.get("exit_score")
+        ),
+        4,
+    )
+
+    price = float(signal.get("current_price") or feat.get("current_price") or 0.0)
+    entry, exit_s = _price_suggestions(published, price, feat)
+    signal["entry_suggestion"] = entry
+    signal["exit_suggestion"] = exit_s
 
 
 #: Bumped whenever the meaning of a `data_sources` value changes.
@@ -530,8 +629,26 @@ def _build_data_sources(raw_doc: dict) -> dict:
 
 async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
     """
-    Upsert a history record to stocks_signal_history keyed on (ticker, hour_bucket).
-    Prevents duplicate records when pipeline is triggered multiple times within one hour.
+    Append a history record, keyed on (ticker, hour_bucket, **signal**).
+
+    One row per published verdict per hour. A cycle that republishes the same
+    verdict dedupes onto the existing row, which is what the hour bucket is
+    for — the pipeline runs every five minutes and twelve identical HOLDs an
+    hour is noise, not evidence.
+
+    **The verdict is part of the key, and that is the whole point.** Keyed on
+    (ticker, hour_bucket) alone with `$setOnInsert`, only the *first*
+    evaluation of each clock-hour was ever retained. But trades execute on
+    every cycle and SELL publishes immediately — it skips confirmations and
+    dwell — so a SELL at :35 closed a real position and left the :05 HOLD
+    standing as the hour's record. `stocks_signal_history` is the only retained
+    series and the sole basis for `override_counterfactual`, the setup replay
+    and every settled outcome; it was under-sampling exactly the
+    decision-bearing rows it exists to hold.
+
+    A later-in-hour analyst override under an *unchanged* published verdict is
+    the same loss in miniature — same key, so `$setOnInsert` writes nothing —
+    and is handled below by promoting the gate fields onto the standing row.
 
     `feat_doc` is the document `score_ticker` just returned, so the setup fields
     below cost no read.
@@ -541,7 +658,9 @@ async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
         ao = signal.get("analyst_output") or {}
         now = signal.get("generated_at", utcnow())
 
-        # Idempotency key: same ticker within the same clock-hour = same record
+        # Idempotency key: same ticker, same clock-hour, same published
+        # verdict = same record. A verdict *change* within the hour is a
+        # different observation and gets its own row.
         hour_bucket = now.replace(minute=0, second=0, microsecond=0)
 
         # What the gate made of the analyst's verdict, flattened.
@@ -632,11 +751,33 @@ async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
             "return_20d":      None,
             "was_correct":     None,
         }
-        await db[COLL_SIGNAL_HISTORY].update_one(
-            {"ticker": signal["ticker"], "hour_bucket": hour_bucket},
+        key = {
+            "ticker": signal["ticker"],
+            "hour_bucket": hour_bucket,
+            "signal": record["signal"],
+        }
+        result = await db[COLL_SIGNAL_HISTORY].update_one(
+            key,
             {"$setOnInsert": record, "$set": {"hour_bucket": hour_bucket}},
             upsert=True,
         )
+
+        # An override that lands later in the hour under an unchanged verdict
+        # matches the standing row, so `$setOnInsert` writes nothing and the
+        # gate's decision is lost — the same hole the key change closes, one
+        # size down. Promote the three gate fields onto the row when it is
+        # carrying nothing and this cycle has something to say. Absent stays
+        # absent; `None` (the gate ran and agreed) is never overwritten by a
+        # later `None`, and never overwrites a recorded override.
+        if result.matched_count and record.get("analyst_override") is not None:
+            await db[COLL_SIGNAL_HISTORY].update_one(
+                {**key, "analyst_override": None},
+                {"$set": {
+                    "analyst_override": record["analyst_override"],
+                    "analyst_wanted":   record.get("analyst_wanted"),
+                    "rule_signal":      record.get("rule_signal"),
+                }},
+            )
     except Exception as exc:
         logger.warning("history_append_failed", ticker=signal.get("ticker"), error=str(exc))
 

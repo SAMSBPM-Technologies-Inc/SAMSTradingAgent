@@ -40,6 +40,12 @@ _FACTOR_WORDS: dict[str, tuple[str, str]] = {
     "macro":            ("a supportive macro backdrop", "an adverse macro backdrop"),
     "volatility":       ("steady volatility", "elevated volatility"),
     "catalyst":         ("a near-term catalyst", "no near-term catalyst"),
+    # Present at weight 0.00, which is exactly why it is written now: raising
+    # `weight_momentum` is the measured next step this factor was built for,
+    # and a factor absent from this table is silently dropped from both the
+    # supporting list and the concession. `test_trade_rationale` asserts this
+    # table covers every factor `scoring.FACTORS` knows about.
+    "momentum":         ("sustained relative strength", "lagging the market"),
     "alternative_data": ("supportive options and insider flow",
                          "weak options and insider flow"),
 }
@@ -90,11 +96,17 @@ def score_drivers(
 
     lifts: list[tuple[float, str]] = []
     for key, feature_key, _label in FACTORS:
-        score = float(feat.get(feature_key, 0.5) or 0.5)
+        # Not `or 0.5`: a factor scoring exactly 0.0 is the single strongest
+        # thing arguing the other way, and reading it as neutral deletes it
+        # from `opposing` — which is precisely the concession this module
+        # exists to force. See the same fix in `scoring.explain_score`.
+        raw = feat.get(feature_key)
+        score = 0.5 if raw is None else float(raw)
         lifts.append((float(weights.get(key, 0.0)) * (score - 0.5), key))
 
     alt_key, alt_feature, _alt_label = ALT_FACTOR
-    alt_score = float(feat.get(alt_feature, 0.5) or 0.5)
+    alt_raw = feat.get(alt_feature)
+    alt_score = 0.5 if alt_raw is None else float(alt_raw)
     lifts.append((float(weights.get(alt_key, 0.0)) * (alt_score - 0.5), alt_key))
 
     supporting = [

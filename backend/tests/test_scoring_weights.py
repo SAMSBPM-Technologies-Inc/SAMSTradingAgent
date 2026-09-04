@@ -113,3 +113,60 @@ def test_personalized_signal_thresholds_match_the_generator():
                 macro_score=0.0, catalyst_score=0.0, alternative_data_score=0.0)
     _, sig = compute_personalized_score(cold, None)
     assert sig == "SELL"
+
+
+# ── A measured zero is not a missing value ────────────────────────────────────
+#
+# `explain_score` read every sub-score as `float(feat.get(key, 0.5) or 0.5)`,
+# and in Python `0.0 or 0.5` is `0.5`. The engine itself (`_weighted_score`) has
+# no `or`, so the two disagreed by up to 0.20 — exactly on the names where it
+# matters, since under `mean_reversion` an extended leader floors
+# `technical_score` at exactly 0.0 by design.
+#
+# The breakdown panel exists so the engine and the UI cannot drift. These pin
+# that they cannot.
+
+def _zero_technical():
+    return {
+        "technical_score": 0.0, "fundamental_score": 0.60,
+        "sentiment_score": 0.50, "macro_score": 0.50, "volatility_score": 0.50,
+        "catalyst_score": 0.50, "momentum_score": 0.50,
+        "alternative_data_score": 0.50,
+    }
+
+
+def test_explain_score_matches_the_engine_on_a_zero_sub_score():
+    from app.services.scoring import (
+        _WeightView, _weighted_score, effective_weights, explain_score,
+    )
+    feat = _zero_technical()
+    engine = _weighted_score(feat, _WeightView(effective_weights(None)))
+    assert explain_score(feat)["composite"] == pytest.approx(engine, abs=1e-9)
+
+
+def test_a_zero_sub_score_is_reported_as_zero_not_neutral():
+    from app.services.scoring import explain_score
+    technical = next(
+        f for f in explain_score(_zero_technical())["factors"]
+        if f["key"] == "technical"
+    )
+    assert technical["score"] == 0.0
+    assert technical["contribution"] == 0.0
+
+
+def test_a_zero_alternative_score_still_drags():
+    """The additive modifier is centred on 0.5, so 0.0 must subtract."""
+    from app.services.scoring import explain_score
+    feat = _zero_technical() | {"alternative_data_score": 0.0}
+    assert explain_score(feat)["alternative_data"]["contribution"] < 0
+
+
+def test_a_missing_sub_score_still_reads_neutral():
+    """The `or` was wrong; the default was not. An absent factor is 0.5."""
+    from app.services.scoring import explain_score
+    feat = _zero_technical()
+    del feat["fundamental_score"]
+    fundamental = next(
+        f for f in explain_score(feat)["factors"] if f["key"] == "fundamental"
+    )
+    assert fundamental["score"] == 0.5

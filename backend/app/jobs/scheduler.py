@@ -650,10 +650,26 @@ async def _daily_digest_job() -> None:
         logger.error("daily_digest_error", error=str(exc))
 
 
+def _aware(value: datetime) -> datetime:
+    """
+    A stored datetime as UTC-aware.
+
+    Mongo hands back naive datetimes, and subtracting one from an aware `now`
+    raises `TypeError` — which the settlement loop's own `except Exception`
+    would swallow into a `perf_tracker_ticker_failed` warning, silently
+    stopping settlement for that ticker. Normalise rather than assume.
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 async def _performance_tracker_job() -> None:
     """
     Settle historical signal records that are ≥20 trading days old.
     Fetches latest price from Yahoo Finance and records the realized return.
+
+    Each settled row records `settle_window_days` — the span actually measured,
+    which is 20 trading days only when the job ran on time. See the note beside
+    the write.
     """
     try:
         db = await get_db()
@@ -718,12 +734,34 @@ async def _performance_tracker_job() -> None:
                             bench_ret = (bench_close_now - bench_open) / bench_open
                     excess = alpha(ret, bench_ret)
 
+                    # How long this row's window ACTUALLY was.
+                    #
+                    # Settlement selects everything past the horizon and marks
+                    # it to the current price, so a row left behind by a job
+                    # outage or a backlog records a 60-day return in a field
+                    # named `return_20d` — and `was_correct` and `alpha_20d`
+                    # inherit that window. The alpha stays internally
+                    # consistent, since the benchmark is measured over the same
+                    # actual span, but calibration pools 20-day and N-day
+                    # outcomes in one series with nothing to separate them.
+                    #
+                    # Reported, not filtered: the field has to exist before
+                    # anyone can decide what tolerance to exclude on. `None`
+                    # rather than a guess when the open date is unreadable.
+                    opened_at = rec.get("generated_at")
+                    window_days = (
+                        (settled_at - _aware(opened_at)).days
+                        if isinstance(opened_at, datetime) else None
+                    )
+
                     await db[COLL_SIGNAL_HISTORY].update_one(
                         {"_id": rec["_id"]},
                         {"$set": {
                             "price_20d_later": round(current_price, 4),
                             "return_20d":      round(ret, 6),
                             "was_correct":     was_correct,
+                            "settled_at":         settled_at,
+                            "settle_window_days": window_days,
                             "benchmark_ticker":     benchmark_ticker(),
                             "benchmark_return_20d": (
                                 round(bench_ret, 6) if bench_ret is not None else None

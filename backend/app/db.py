@@ -261,12 +261,30 @@ async def _ensure_indexes() -> None:
     await db[COLL_SIGNAL_HISTORY].create_index(
         [("generated_at", 1), ("return_20d", 1)], background=True
     )
+    # One row per published verdict per hour — the verdict is part of the key.
+    #
+    # This was `(ticker, hour_bucket)`, which combined with `$setOnInsert` in
+    # `pipeline._append_history` meant only the FIRST evaluation of each
+    # clock-hour was ever retained. Trades execute every five minutes and SELL
+    # publishes immediately, so a SELL at :35 closed a real position and left
+    # the :05 HOLD as the hour's record. `stocks_signal_history` is the only
+    # retained series and every counterfactual is computed from it.
     await db[COLL_SIGNAL_HISTORY].create_index(
-        [("ticker", 1), ("hour_bucket", 1)],
+        [("ticker", 1), ("hour_bucket", 1), ("signal", 1)],
         unique=True,
         partialFilterExpression={"hour_bucket": {"$type": "date"}},
         background=True,
     )
+    # Drop the superseded two-key unique index. It is *unique*, so leaving it
+    # in place would reject the second verdict of an hour — the exact row the
+    # new key exists to admit — and the insert would fail silently inside
+    # `_append_history`'s try/except. Same pattern as the legacy ticker_1 drop
+    # below: named, guarded, safe to run on a database that never had it.
+    try:
+        await db[COLL_SIGNAL_HISTORY].drop_index("ticker_1_hour_bucket_1")
+        logger.info("dropped_superseded_signal_history_index")
+    except Exception:
+        pass  # already gone, or this database was created after the change
     # Drop legacy global-unique ticker index if it still exists from pre-auth deployment
     try:
         await db[COLL_WATCHED].drop_index("ticker_1")
