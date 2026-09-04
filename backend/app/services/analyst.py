@@ -469,7 +469,11 @@ async def run_analysis(
         "score": score,
         # Written on both paths or the retained series has holes on every cycle
         # the analyst ran — see `signal_generator.generate_signal`.
-        "exit_score": round(exit_reading, 4),
+        # `None` when the composite did not produce it — the XGBoost path,
+        # where `scoring.exit_score` refuses to derive a reading from weights
+        # that did not make the score. The key is present and null, which is
+        # not the same fact as the key being absent (a row predating 1.31.0).
+        "exit_score": round(exit_reading, 4) if exit_reading is not None else None,
         "risk": risk,
         "signal": published_signal,
         # A conviction-derived confidence describes the model's view. Once the
@@ -477,7 +481,8 @@ async def run_analysis(
         # the confidence has to be the rule's too — otherwise a HOLD nobody was
         # confident about is reported at the model's 0.85.
         "confidence": (
-            boundary_confidence(score, published_signal, cohort) if gate["overridden"]
+            boundary_confidence(score, published_signal, cohort,
+                                sell_basis=exit_reading) if gate["overridden"]
             else _conviction_to_confidence(analyst_output.get("conviction", "LOW"))
         ),
         "entry_suggestion": _entry_suggestion(published_output, price),
@@ -488,9 +493,16 @@ async def run_analysis(
         # reads `score_percentile` to decide which bar the order is held to, so
         # omitting it here would judge every analyst-path BUY under the
         # absolute rule while the verdict was decided under the relative one.
+        # `cohort_for` returns a field of two or more, but `classify_signal`
+        # only *uses* the relative rule at `RANK_MIN_COHORT`. Stamping these on
+        # a verdict the absolute rule decided breaks the convention two lines
+        # up — and `pipeline._execute_trades` reads their presence as
+        # `rank_decided`, which hands `_order_score_bar` the rank floor (0.55)
+        # for a BUY the rule required 0.70 of. The condition must be the same
+        # one that chose the rule.
         **(
             {"score_percentile": cohort.percentile, "cohort_size": cohort.size}
-            if cohort is not None else {}
+            if cohort is not None and cohort.size >= RANK_MIN_COHORT else {}
         ),
         # Extended analyst fields
         "analyst_output": analyst_output,

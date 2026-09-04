@@ -343,3 +343,40 @@ def test_an_add_updates_the_positions_reason_rather_than_writing_a_new_row(monke
     _, update = sink["updates"][-1]
     assert update["entry_reason"].startswith("Added to the position")
     assert update["pending_add"]["entry_reason"] == update["entry_reason"]
+
+
+# ── The concession must survive a factor scoring exactly zero ─────────────────
+
+def test_a_zero_scored_factor_is_conceded_not_dropped():
+    """
+    `float(feat.get(key, 0.5) or 0.5)` read a measured 0.0 as neutral, so the
+    factor arguing hardest against the trade produced a lift of exactly 0.0 and
+    fell out of `opposing` — deleting the concession precisely when it was
+    strongest. A missing factor reads neutral; a measured zero does not.
+    """
+    feat = {
+        "technical_score": 0.0, "fundamental_score": 0.90,
+        "sentiment_score": 0.80, "macro_score": 0.50, "volatility_score": 0.50,
+        "catalyst_score": 0.60, "momentum_score": 0.50,
+        "alternative_data_score": 0.50,
+    }
+    supporting, opposing, attributable = score_drivers(feat, None)
+    assert attributable
+    assert "weak technicals" in opposing, (
+        "a factor at 0.0 carries the largest negative lift there is and must "
+        "be the first thing conceded"
+    )
+
+
+def test_every_scored_factor_has_a_name():
+    """
+    A factor absent from `_FACTOR_WORDS` is filtered out of both the supporting
+    list and the concession, silently. `momentum` was missing for as long as its
+    weight was 0.00 — which is exactly how long nobody would have noticed.
+    """
+    from app.services.scoring import ALT_FACTOR, FACTORS
+    from app.services.trade_rationale import _FACTOR_WORDS
+    known = {key for key, _, _ in FACTORS} | {ALT_FACTOR[0]}
+    assert known <= set(_FACTOR_WORDS), (
+        f"factors with no phrasing: {known - set(_FACTOR_WORDS)}"
+    )

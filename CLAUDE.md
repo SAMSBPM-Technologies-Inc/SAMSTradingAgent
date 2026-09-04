@@ -294,6 +294,16 @@ npm run web
    writes AUTO for accounts that were already trading unattended, so the safe
    default never silently stops a live system.
 
+   **The dial governs entries only.** `execute_exit` does not read `mode`, so a
+   published SELL closes an open position unattended in every mode — the same
+   asymmetry that exempts SELL from the risk gate, from confirmations and dwell,
+   and from both vetoes. A MANUAL account is therefore not a read-only account,
+   which is the one place the dial's name over-promises; the bracket already
+   sells unattended for the same reason. An account that wants no unattended
+   orders at all sets `enabled=false`, which `execute_exit` does honour for the
+   agent's own exits. Never add `mode` to that check: it would be the first
+   brake on the exit path.
+
    **Every order path shares one guard chain.** `_prepare_entry` holds all of
    them (the account's plan, CIRO, the risk gate, position cap, daily-loss kill
    switch, cash reserve, refusal to open unbracketed). `execute_entry` and

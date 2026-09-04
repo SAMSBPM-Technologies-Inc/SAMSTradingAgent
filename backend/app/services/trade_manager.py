@@ -974,6 +974,16 @@ class EntryPlan:
     #: one-share adds. Only meaningful on an opening entry; an add reuses the
     #: value already stored on the position.
     size_basis_equity: float = 0.0
+    #: The volatility scaling applied to `position_size_pct` at the moment this
+    #: position was opened, frozen for exactly the reason above.
+    #:
+    #: `size_basis_equity` closed half the leak. The cap is a product — equity ×
+    #: pct × this factor — and freezing one multiplicand while reading the other
+    #: live leaves the same drift running through the other term: as a name's
+    #: 20-day volatility decays the factor rises, the cap rises with it, and the
+    #: standing-BUY retry loop spends the freed room in one- and two-share adds.
+    #: A decay from 0.40 to 0.35 lifts the cap by roughly 14%.
+    size_factor: float = 1.0
 
     @property
     def is_add(self) -> bool:
@@ -1265,6 +1275,9 @@ async def _prepare_entry(
         return None, "No current price available"
 
     vol = await _ticker_volatility(ticker)
+    # Computed once and carried, so the opening order, the add-room ceiling and
+    # the stored record cannot disagree about how violent this name is.
+    size_factor = _volatility_size_factor(vol)
     sized_qty = _calculate_qty(price, equity, settings.position_size_pct, vol)
 
     adjustment: str | None = None
@@ -1328,9 +1341,15 @@ async def _prepare_entry(
         # position into eight orders on 25 Aug 2026 — the cap was never
         # breached, it just kept moving. `or equity` covers positions opened
         # before the basis was recorded.
+        #
+        # The volatility factor is frozen alongside it, and for the same reason:
+        # the cap is a product, and a decaying 20-day volatility re-opens room
+        # through the other multiplicand just as steadily. Same fallback shape,
+        # covering positions opened before the factor was recorded.
         held_cost = held_qty * blended_cost
         size_basis = float(add_to.get("size_basis_equity") or 0.0) or equity
-        max_dollars = size_basis * settings.position_size_pct * _volatility_size_factor(vol)
+        held_factor = float(add_to.get("size_factor_at_entry") or 0.0) or size_factor
+        max_dollars = size_basis * settings.position_size_pct * held_factor
         room = max_dollars - held_cost
         room_qty = int(room / price) if price > 0 else 0
         if room_qty < 1:
@@ -1368,7 +1387,7 @@ async def _prepare_entry(
     logger.info(
         "position_sized",
         ticker=ticker, qty=qty, volatility_20d=vol,
-        size_factor=round(_volatility_size_factor(vol), 3),
+        size_factor=round(size_factor, 3),
         requested_qty=requested_qty,
     )
 
@@ -1379,6 +1398,14 @@ async def _prepare_entry(
     # whether the cash exists. Every position sizes off the same equity
     # figure, so N positions commit N x pct of it and the account quietly
     # borrows the difference. Size against real available funds instead.
+    #
+    # NOTE, unresolved: `total_cash` is IB's TotalCashValue, which includes
+    # proceeds from sales that have not settled. In a cash account — the TFSA
+    # this runs against — sizing off it can commit funds that are not yet
+    # available, which is the thing this guard exists to prevent. Whether the
+    # account summary exposes a settled figure for this account type needs a
+    # live check against the gateway; until someone has run that, changing the
+    # field would be swapping a known approximation for an assumed one.
     available = (
         acct.get("buying_power", 0.0) if env.allow_margin
         else acct.get("total_cash", 0.0)
@@ -1489,6 +1516,7 @@ async def _prepare_entry(
         held_qty=held_qty,
         blended_entry=blended_entry,
         size_basis_equity=equity,
+        size_factor=size_factor,
     ), None
 
 
@@ -1546,8 +1574,10 @@ async def _submit_entry(
         # preference — the server's TRADING_MODE decides which account is hit.
         "is_paper": is_paper,
         # Frozen denominator for the position cap on any later add — see
-        # EntryPlan.size_basis_equity.
+        # EntryPlan.size_basis_equity. Both terms of the cap are frozen, or the
+        # drift simply moves to whichever one is still read live.
         "size_basis_equity": plan.size_basis_equity,
+        "size_factor_at_entry": plan.size_factor,
         "opened_at": now, "closed_at": None,
     }
     if plan.adjustment:
@@ -1972,6 +2002,23 @@ async def execute_exit(
     because they had auto-trading switched off would trap them in it, and
     `POST /trading/close/{ticker}` did exactly that — it returned success while
     silently doing nothing for every manual-mode user.
+
+    **The autonomy dial governs entries only, and this function deliberately
+    does not read it.** Under MANUAL — and under SEMI_AUTO below
+    `auto_execute_conviction` — `execute_entry` writes a PROPOSED trade instead
+    of sending an order. A published SELL is not treated that way: it closes an
+    open position unattended, in every mode, on the same reasoning that exempts
+    SELL from the risk gate, from confirmations and dwell, and from both vetoes.
+    Delaying an exit costs money; delaying an entry costs an opportunity.
+
+    It is worth stating plainly because it is the one place the dial's name
+    over-promises: a MANUAL account is not a read-only account. The bracket
+    already sells unattended for the same reason, and an account that wants no
+    unattended orders at all must set `enabled=false` — which this function does
+    honour, for the agent's own exits.
+
+    `_prepare_entry`'s plan check is likewise absent here: a downgraded account's
+    open positions must stay closable.
 
     No-op if no open position exists.
     """

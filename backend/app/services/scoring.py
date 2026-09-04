@@ -101,7 +101,13 @@ def explain_score(feat: dict, user_weights: dict | None = None) -> dict:
     factors = []
     base_total = 0.0
     for key, feature_key, label in FACTORS:
-        score = float(feat.get(feature_key, 0.5) or 0.5)
+        # `or 0.5` here would swallow a legitimate 0.0. Under `mean_reversion`
+        # that is not a hypothetical: an extended name floors `technical_score`
+        # at exactly 0.0 by design, and `_weighted_score` — which has no `or` —
+        # would then report a composite 0.20 lower than the breakdown beside it.
+        # A missing factor reads neutral; a measured zero reads zero.
+        raw = feat.get(feature_key)
+        score = 0.5 if raw is None else float(raw)
         weight = float(weights.get(key, 0.0))
         contribution = weight * score
         base_total += contribution
@@ -114,7 +120,8 @@ def explain_score(feat: dict, user_weights: dict | None = None) -> dict:
         })
 
     alt_key, alt_feature, alt_label = ALT_FACTOR
-    alt_score = float(feat.get(alt_feature, 0.5) or 0.5)
+    alt_raw = feat.get(alt_feature)
+    alt_score = 0.5 if alt_raw is None else float(alt_raw)
     alt_weight = float(weights.get(alt_key, 0.0))
     # Additive modifier centred on 0.5: it nudges the base rather than being a
     # share of it, so its "contribution" is signed and can drag the score down.

@@ -14,9 +14,90 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
-## [Unreleased]
+## [1.32.0] — 2026-09-04
+
+**The readers the exit split left behind, and the series they were written into.**
+
+### Fixed
+
+**The readers the exit split left behind.** 1.31.0 gave the engine two numbers —
+the composite decides entries, `exit_score` decides exits — and rewired the three
+places that *decide* a verdict. Three places that *describe* one were still
+reading the composite, and none of them failed loudly.
+
+A **SELL published on the exit reading now carries real confidence**. Measured
+against the composite, a name selling at an exit reading of 0.29 behind a
+composite of 0.41 stored confidence `0.0` — a verdict past its threshold
+reported as maximally marginal, and that number is what the calibration buckets
+are built from.
+
+The **analyst is now called on names that are about to be sold**. The spend gate
+measured its SELL band on the composite, so a name one tick from an exit was
+reported mid-range and never got the second opinion, while a name whose
+composite merely *looked* low — an extended leader, trend and relative strength
+both intact — spent a research call every cycle. Holdings were unaffected either
+way; this was the advisory SELLs on watched-but-unheld names.
+
+**A held-back candidate no longer publishes a buy plan.** When the stability
+layer refused to promote a BUY, it corrected the verdict and left the
+candidate's entry price, stop and target on the document — a full buy plan
+underneath a published HOLD, which is the exact thing the analyst gate exists to
+prevent, one layer up. Confidence and both suggestions are now re-derived for
+the verdict that was actually published.
+
+**The factor breakdown no longer overstates a factor scoring zero.** Reading a
+sub-score as `value or 0.5` turns a measured `0.0` into neutral, and under the
+production stance an extended name floors its technical score at exactly `0.0`
+by design. The breakdown panel and the engine disagreed by up to 0.20 on
+precisely those names. The same bug in the order rationale deleted the strongest
+factor arguing *against* a trade, which is the one the sentence is required to
+concede.
+
+**The ML scoring path no longer crashes signal generation.** `exit_score`
+returns nothing on that path by contract, and both signal writers called
+`round()` on it. With a trained model present, every ticker raised, the pipeline
+logged a failure, and no signal, no exit evaluation and no trade ran for any
+ML-scored name. Latent until now — the model file never ships — and directly
+under the next roadmap item.
+
+**The signal history keeps every published verdict.** It was keyed on ticker and
+clock-hour with insert-only semantics, so only the first evaluation of each hour
+survived. The pipeline runs every five minutes and a SELL publishes immediately,
+so a SELL at :35 closed a real position and left the :05 HOLD standing as the
+hour's record. This is the only retained series and every counterfactual is
+computed from it. A verdict *change* inside an hour now writes its own row; a
+repeat still dedupes. An analyst override landing later in the hour under an
+unchanged verdict is promoted onto the standing row rather than lost.
+
+**Order sizing no longer trickles out room as volatility decays.** The position
+cap is a product — frozen equity × size percentage × a volatility factor — and
+only the equity term was frozen at entry. A name whose 20-day volatility decays
+from 0.35 to 0.25 lifted the cap by 40% without the account moving, and the
+five-minute retry loop spends that in one- and two-share adds. Both terms are
+frozen now; positions opened before this fall back to live volatility and behave
+exactly as they did.
+
+**A verdict decided by the absolute rule no longer loosens the order bar.** The
+rank fields were stamped on any signal with a cohort of two or more, while the
+relative rule only engages at five — and the order path reads their presence to
+decide which bar applies. With ranking on and a cohort thinned by a bad ingest,
+a BUY the rule required 0.70 of was held to 0.55 at the order.
 
 ### Added
+
+**Settled signals record the window they were actually measured over.**
+Settlement marks any overdue row to the current price, so a row left behind by
+an outage recorded a 60-day return in a field named for 20 days, with
+correctness and alpha inheriting it. `settle_window_days` is now stored beside
+it. Reported, not filtered — the field has to exist before anyone can decide
+what tolerance to exclude on.
+
+**`scripts/verify_history_index.py`** — the index migration above changes a
+unique key on a live collection, and that is startup-path code a stubbed
+database cannot check. `--inspect` is read-only and reports what a live
+collection currently carries, including whether it has been migrated; the
+default mode runs the migration against a scratch database and asserts the
+outcome, and refuses a hosted-cluster URL unless `--allow-remote` is passed.
 
 **The signal rule, written out as a prompt** — `docs/13-daily-signal-prompt.md`.
 The BUY/SELL/HOLD decision is spread over six modules and about four hundred
@@ -30,13 +111,36 @@ carries the 1.31.0 exit reading: its SELL test, hysteresis band and confidence
 read `exit_score` (trend and relative strength in place of the oscillators),
 not the composite.
 
-**Known gaps** (also listed in the document): a prompt holds no state, so
+**Known gaps for the prompt** (also listed in the document): a prompt holds no state, so
 hysteresis and confirmation are inert unless the previous run's output is fed
 back in; sentiment is a model read rather than the VADER + finance-lexicon
 score, so it lands in the same region but not on the same number; alternative
 data is usually unavailable to an agent, which drops the ±0.05 modifier; and
 none of `trade_manager`'s guard chain is reachable from a prompt — the veto in
 Step 7 shapes the agent's own output and nothing else.
+
+### Changed
+
+**The autonomy dial is documented as governing entries only.** Under MANUAL
+every entry becomes a proposal, but a published SELL has always closed an open
+position unattended, in every mode — the same asymmetry that exempts SELL from
+the risk gate, from confirmations and dwell, and from both vetoes. Behaviour is
+unchanged; it was simply stated nowhere, and a MANUAL account is not a read-only
+account. An account that wants no unattended orders at all sets `enabled=false`.
+
+**`SCALE_IN_DIP_PCT`, `MIN_ADD_FRACTION` and `MAX_SCALE_INS` are now in
+`.env.example`.** The shipped defaults are 0.02, 0.25 and 2; none appeared in
+the example file, which is how a review came to describe them from memory and
+get two of the three wrong by a factor of three.
+
+**Known gaps.** The index migration has **not** yet been verified against a real
+MongoDB — do that before deploying, with the script above. Calibration does not
+yet filter on `settle_window_days`; it records the window without acting on it,
+so mixed-horizon rows are still pooled. Sizing against available cash still
+reads IB's total cash value, which includes unsettled proceeds — a known
+approximation, now recorded in the code, pending a live check of whether the
+account summary exposes a settled figure for this account type. And the exit
+alert remains advisory: nothing sells on it.
 
 ---
 

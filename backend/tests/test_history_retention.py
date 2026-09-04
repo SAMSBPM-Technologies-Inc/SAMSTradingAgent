@@ -46,12 +46,53 @@ EXIT_FIELDS = {"exit_score"}
 RETAINED_FIELDS = OVERRIDE_FIELDS | SETUP_FIELDS | EXIT_FIELDS
 
 
+class _Result:
+    """What Motor hands back — `_append_history` reads `matched_count`."""
+
+    def __init__(self, matched_count):
+        self.matched_count = matched_count
+        self.upserted_id = None if matched_count else object()
+
+
 class _History:
+    """
+    An in-memory stand-in that honours the collection's *key* semantics, so a
+    test can ask what the unique index would actually admit. `rows` is keyed on
+    (ticker, hour_bucket, signal) — the index defined in `db._ensure_indexes`.
+    """
+
     def __init__(self):
         self.writes = []
+        self.rows: dict[tuple, dict] = {}
+
+    @staticmethod
+    def _key(query):
+        return (query.get("ticker"), query.get("hour_bucket"), query.get("signal"))
 
     async def update_one(self, query, update, upsert=False):
         self.writes.append((query, update, upsert))
+        key = self._key(query)
+        existing = self.rows.get(key)
+
+        # A filter carrying extra conditions (the override promotion) only
+        # matches a row that satisfies them.
+        if existing is not None:
+            for field, expected in query.items():
+                if field in ("ticker", "hour_bucket", "signal"):
+                    continue
+                if existing.get(field) != expected:
+                    return _Result(0)
+
+        if existing is None:
+            if not upsert:
+                return _Result(0)
+            row = dict(update.get("$setOnInsert", {}))
+            row.update(update.get("$set", {}))
+            self.rows[key] = row
+            return _Result(0)
+
+        existing.update(update.get("$set", {}))
+        return _Result(1)
 
 
 class _Db:
@@ -277,3 +318,142 @@ def test_a_feature_document_with_no_indicators_writes_nulls_not_absences(
     assert rec["rsi_14"] is None
     assert rec["technical_score"] is None
     assert rec["setup_trigger"] == "NEUTRAL"
+
+
+# ── What the hour bucket may and may not collapse ─────────────────────────────
+#
+# Keyed on (ticker, hour_bucket) with `$setOnInsert`, only the FIRST evaluation
+# of each clock-hour was ever retained. The pipeline runs every five minutes and
+# SELL publishes immediately — no confirmations, no dwell — so a SELL at :35
+# closed a real position and left the :05 HOLD standing as the hour's record.
+# The series every counterfactual is computed from was dropping precisely the
+# rows that carried a decision.
+
+def append_into(history, monkeypatch, signal, feat=None):
+    """Append to an existing `_History`, so a sequence shares one collection."""
+    async def fake_get_db():
+        return _Db(history)
+
+    monkeypatch.setattr(P, "get_db", fake_get_db)
+    asyncio.run(P._append_history(
+        signal, {"current_price": 100.0}, PULLBACK if feat is None else feat,
+    ))
+    return history
+
+
+def at(minute, **over):
+    from datetime import datetime, timezone
+    return signal_doc(
+        generated_at=datetime(2026, 8, 31, 14, minute, tzinfo=timezone.utc), **over
+    )
+
+
+def test_a_verdict_change_inside_one_hour_gets_its_own_row(monkeypatch):
+    history = _History()
+    append_into(history, monkeypatch, at(5, signal="HOLD"))
+    append_into(history, monkeypatch, at(35, signal="SELL"))
+
+    signals = sorted(row["signal"] for row in history.rows.values())
+    assert signals == ["HOLD", "SELL"], (
+        "a SELL published at :35 executes a real exit; it cannot be the one "
+        "observation the hour discards"
+    )
+
+
+def test_the_same_verdict_repeated_within_the_hour_still_dedupes(monkeypatch):
+    history = _History()
+    for minute in (5, 10, 15, 20, 25):
+        append_into(history, monkeypatch, at(minute, signal="HOLD"))
+
+    assert len(history.rows) == 1, (
+        "twelve identical HOLDs an hour is noise, not evidence — that is what "
+        "the hour bucket is for"
+    )
+
+
+def test_the_same_verdict_in_a_later_hour_is_a_new_row(monkeypatch):
+    from datetime import datetime, timezone
+    history = _History()
+    append_into(history, monkeypatch, at(55, signal="HOLD"))
+    append_into(history, monkeypatch, signal_doc(
+        signal="HOLD",
+        generated_at=datetime(2026, 8, 31, 15, 5, tzinfo=timezone.utc),
+    ))
+    assert len(history.rows) == 2
+
+
+def test_a_later_override_is_promoted_onto_the_standing_row(monkeypatch):
+    """
+    An override landing later in the hour under an *unchanged* published verdict
+    matches the standing row, so `$setOnInsert` writes nothing and the gate's
+    decision is lost — the same hole the key change closes, one size down.
+    """
+    history = _History()
+    append_into(history, monkeypatch, at(5, signal="HOLD"))
+    append_into(history, monkeypatch, at(35, signal="HOLD", analyst_gate={
+        "model_signal": "BUY", "rule_signal": "HOLD", "overridden": True,
+        "override": "buy_refused", "reason": "…under the 0.70 a BUY needs.",
+    }))
+
+    row = next(iter(history.rows.values()))
+    assert row["analyst_override"] == "buy_refused"
+    assert row["analyst_wanted"] == "BUY"
+    assert row["rule_signal"] == "HOLD"
+
+
+def test_a_recorded_override_is_never_overwritten_by_a_later_agreement(monkeypatch):
+    """
+    `None` means the gate ran and had nothing to override. It must not erase a
+    refusal already recorded for that hour and verdict.
+    """
+    history = _History()
+    append_into(history, monkeypatch, at(5, signal="HOLD", analyst_gate={
+        "model_signal": "BUY", "rule_signal": "HOLD", "overridden": True,
+        "override": "buy_refused", "reason": "…",
+    }))
+    append_into(history, monkeypatch, at(35, signal="HOLD", analyst_gate={
+        "model_signal": "HOLD", "rule_signal": "HOLD", "overridden": False,
+        "override": None, "reason": None,
+    }))
+
+    row = next(iter(history.rows.values()))
+    assert row["analyst_override"] == "buy_refused"
+
+
+def test_the_history_key_matches_the_unique_index(monkeypatch):
+    """
+    The filter and the index must name the same fields. They are declared in
+    two files — `pipeline._append_history` and `db._ensure_indexes` — and a
+    disagreement fails silently: the insert is rejected by the index and
+    swallowed by `_append_history`'s own try/except.
+    """
+    history = append(monkeypatch, signal_doc())
+    assert set(history.writes[0][0]) == {"ticker", "hour_bucket", "signal"}
+
+
+def test_the_unique_index_admits_one_row_per_published_verdict():
+    """
+    The filter in `_append_history` and the unique index in `db._ensure_indexes`
+    are declared in two files, and a disagreement fails silently in the worst
+    direction: the index rejects the insert, `_append_history` swallows it, and
+    the series quietly stops recording verdict changes again.
+
+    Pinned by reading the source, the same way the two projections above are.
+    The live index is verified against a real MongoDB at deploy — a stubbed one
+    let an index bug reach production once already.
+    """
+    text = (Path(__file__).resolve().parents[1] / "app" / "db.py").read_text()
+    block = re.search(
+        r"COLL_SIGNAL_HISTORY\]\.create_index\(\s*"
+        r"\[\(\"ticker\", 1\), \(\"hour_bucket\", 1\), \(\"signal\", 1\)\],\s*"
+        r"unique=True",
+        text, re.S,
+    )
+    assert block, (
+        "the history index must be unique on (ticker, hour_bucket, signal) — "
+        "the same three fields `_append_history` filters on"
+    )
+    assert 'drop_index("ticker_1_hour_bucket_1")' in text, (
+        "the superseded two-key unique index must be dropped, or it rejects "
+        "the second verdict of an hour — the exact row the new key admits"
+    )

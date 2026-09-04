@@ -368,6 +368,54 @@ def test_rising_equity_cannot_trickle_out_room_for_one_share_adds(monkeypatch):
     assert "full size" in reason
 
 
+def test_decaying_volatility_cannot_trickle_out_room_either(monkeypatch):
+    """
+    The other half of the same leak.
+
+    The cap is a *product* — `equity x position_size_pct x volatility_factor` —
+    and freezing only the equity term leaves the drift running through the
+    other one. The factor is `0.35 / vol`, so a name whose 20-day volatility
+    decays from 0.35 to 0.25 lifts the cap by 40% without the account moving a
+    cent, and the standing-BUY retry loop spends the freed room the same way it
+    spent the equity drift.
+    """
+    # 450 @ $88 = $39,600: exactly the 5% cap on $792k at a factor of 1.0.
+    full = dict(HELD, entry_price=88.0,
+                size_basis_equity=792_000.0, size_factor_at_entry=1.0)
+    # Volatility has since fallen to 0.25, which would lift the factor to 1.4
+    # and hand out $15,840 of room the position never earned.
+    tm, _ = _patch_tm(monkeypatch, position=full, vol=0.25)
+    plan, reason = _prepare(tm, price=86.00)
+    assert plan is None, "a full position must stay full when only vol moved"
+    assert "full size" in reason
+
+
+def test_a_position_without_a_frozen_factor_falls_back_to_live_volatility(monkeypatch):
+    """
+    Same fallback shape as the equity basis: positions opened before the factor
+    was recorded must still be addable, behaving exactly as they did before.
+    """
+    legacy = dict(HELD, entry_price=88.0, size_basis_equity=792_000.0)
+    assert "size_factor_at_entry" not in legacy
+    tm, _ = _patch_tm(monkeypatch, position=legacy, vol=0.25)
+    plan, reason = _prepare(tm, price=86.00)
+    assert reason is None and plan.qty > 0
+
+
+def test_the_opening_entry_records_the_factor_it_was_sized_with(monkeypatch):
+    """
+    The stored factor has to be the one the order was actually sized on, or the
+    freeze pins the wrong number.
+    """
+    from app.services.trade_manager import _volatility_size_factor
+
+    tm, _ = _patch_tm(monkeypatch, vol=0.70)
+    plan, reason = _prepare(tm, price=86.00)
+    assert reason is None
+    assert plan.size_factor == pytest.approx(_volatility_size_factor(0.70))
+    assert plan.size_factor < 1.0, "a wild name must size smaller, not larger"
+
+
 def test_a_position_without_a_frozen_basis_falls_back_to_live_equity(monkeypatch):
     """Positions opened before the basis was recorded must still be addable."""
     legacy = dict(HELD)  # no size_basis_equity
@@ -652,3 +700,33 @@ def test_healing_never_invents_a_level(monkeypatch):
     naked = dict(HELD, stop_loss=None, take_profit=None)
     assert asyncio.run(tm._heal_unprotected(naked, {"HXL": 450}, "DU123")) is False
     assert broker.protective == []
+
+
+# ── The autonomy dial does not reach exits, and that is deliberate ───────────
+
+def test_the_exit_path_does_not_read_the_trading_mode():
+    """
+    Under MANUAL every entry becomes a proposal; a published SELL still closes
+    the position unattended. That is intended — SELL is exempt from the risk
+    gate, from confirmations and dwell, and from both vetoes, on the reasoning
+    that delaying an exit costs money — but it was stated nowhere, and a MANUAL
+    account is not a read-only account.
+
+    Pinned rather than merely documented: adding `mode` to this check would be
+    the first brake on the exit path, and it would look like a tightening.
+    """
+    from pathlib import Path
+    import re
+
+    src = (Path(__file__).resolve().parents[1]
+           / "app" / "services" / "trade_manager.py").read_text()
+    body = re.search(r"\nasync def execute_exit\((.*?)\nasync def ", src, re.S)
+    assert body, "execute_exit not found"
+    text = body.group(1)
+
+    assert "settings.mode" not in text and "may_auto_execute" not in text, (
+        "execute_exit must not gate on the autonomy dial — see its docstring"
+    )
+    assert "autonomy dial governs entries only" in text, (
+        "the asymmetry has to be stated where someone would go to add the gate"
+    )
