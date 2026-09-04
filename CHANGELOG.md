@@ -14,6 +14,131 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.31.0] — 2026-09-03
+
+**Selling the rip: the exit asked the entry question, and the trailing stop
+could not fire.** Two defects, both on the path that closes positions.
+
+### The composite had winners and losers backwards
+
+Under `technical_stance=mean_reversion` an extended name floors the oscillators
+*by design* — RSI ≥ 70 scores 0.0, a Bollinger reading at the top band scores
+`1 - bb_pct`. An oversold reading is the entry timer. But `weight_technical` is
+0.30 and the low end of the composite publishes SELL, so a leader running away
+from its cost basis walked itself into an exit for a reason that said nothing
+about the company. AAPL: `bb_pct` 1.03, `stoch_rsi` 0.99, up 24% in six months,
+technical score 0.066, published SELL.
+
+Measured on the real functions, an extended leader scored **0.297** and a name
+with a broken trend, negative relative strength and weak fundamentals scored
+**0.340**. The ordering was inverted, so no choice of threshold could have
+fixed it. And SELL is the one verdict with no brakes: it skips the risk gate,
+skips confirmations and dwell, is unreachable by the research veto, and is
+unappealable by the analyst.
+
+- **`scoring.exit_score`** recomputes the composite with the oscillator
+  component swapped for a **condition** component — `trend_confirmation` and
+  `momentum_score`, both already on the feature document, so it costs no read.
+  Every other factor and weight is untouched, so `SELL_THRESHOLD` keeps its
+  meaning. Momentum decides exits; technical decides entries — which gives the
+  factor 1.30.0 shipped at weight 0.00 a job without touching `weight_momentum`,
+  and so without narrowing the BUY spread that release measured.
+- **It is not a brake.** It changes which number the exit is measured against,
+  upstream of the verdict; it adds no veto, no delay and no gate. A
+  deteriorating name still sells immediately and unconditionally.
+- **The exit clause is now tested first** in `classify_signal`. While both sides
+  read one number this was unobservable — nothing is above 0.70 and below 0.30
+  at once — but they are two numbers now, and the ordering matches
+  `_classify_relative` and `_gate_analyst_signal`, which both already put the
+  exit first.
+- **An unknown condition reads 0.5, never the oscillators**, and the **XGBoost
+  path returns `None`** and falls back to the composite: the weights did not
+  produce that score, so an exit reading built from them would be a fabrication
+  — the refusal `explain_score` already makes.
+- `_gate_analyst_signal` takes the same reading. A gate recomputing the rule
+  from the composite alone would have stamped `sell_restored` on every extended
+  leader the engine had decided to hold — and `sell_restored` is unappealable,
+  so it would have sold the position.
+- Retained on `stocks_signal_history` and carried by **both** calibration
+  projections; surfaced on the gate panel and on both clients, so the panel can
+  no longer print "over the 30 that would trigger a sell" beneath a score of 29.
+
+### The trailing stop was a dead path that read as a live one
+
+Simulated across a position walking from entry to its target on the shipped
+defaults — target +10%, break-even +4%, activate +6%, trail 8%, min step 1%:
+
+```
+peak +4.00%   breakeven -> stop 100.00
+peak +9.89%   trail     -> stop 101.10   <- take-profit fills at +10%
+```
+
+The trail fired **once**, locked in **1.1%**, inside the last 0.11% of price
+travel before the limit leg closed the trade. Nothing ever raised the target, so
+the peak could not exceed +10%, so the trail had no room to work.
+`TRAILING_STOP_ENABLED=true` bought break-even and nothing else, while
+`config.py` advertised "an 8% trail on a name up 20% still locks in ~10%" — a
+position that could not exist.
+
+- **`_ratcheted_target`** raises the target with the high-water mark, a
+  `TRAILING_TARGET_HEADROOM_PCT` (0.10) ahead of the peak. A target may only
+  move up, never moves before the trail arms, and is never placed at or below
+  the market.
+- **Both legs are one mechanism behind one flag.** A trail under a fixed target
+  is inert and a ratchet without a trail moves the exit away while the stop sits
+  at −5%, so neither is separately switchable.
+- **One trip to the venue.** Stop and target are re-placed as a single OCA pair
+  through the existing `_reprotect`, so the rate limit is charged to the pair —
+  either leg being worth the move carries the other along free.
+- Written to the record only after the venue accepts, as the stop already was.
+
+### The overbought flag, finally measurable
+
+`EXIT_ALERT` still sells nothing and `trade_rationale._EXIT_REASON` still has no
+entry for it. `setup_trigger` was retained on the *signal* row, which answers
+"did an ENTRY predict forward alpha" — but the exit question is about a
+position's path, not a ticker's. Positions now record `first_exit_alert_price`,
+closed trades report `return_at_first_exit_alert_pct`, and
+`/performance/trades` carries it with its own `alerted_n` beside
+`avg_gave_back_pct`.
+
+### Ships on
+
+`TRAILING_STOP_ENABLED` now defaults **true**, and the exit reading is not
+gated at all.
+
+### Known gaps
+
+- **The trail ships on without the measurement it was supposed to wait for.**
+  This is a deliberate departure from the posture of `RESEARCH_VETO_ENABLED`,
+  `enable_rank_signals` and `weight_momentum`. The excursion series began 30 Aug
+  2026 when the paper account was switched, so roughly four days of closed
+  trades exist and the trade-off a trail makes — a worse average exit on winners
+  for a smaller give-back — has **not** been settled on this deployment.
+  `mfe_pct` / `gave_back_pct` on `/performance/trades` are still what it has to
+  be argued from, and the honest reading today is that a static +10% ceiling was
+  also an unmeasured choice, just an invisible one.
+- **`TRAILING_TARGET_HEADROOM_PCT` is reasoned, not fitted.** 0.10 keeps the
+  target clear of the trail on every pass; nothing says it is the right
+  distance, and it caps nothing — a position now exits on the trail rather than
+  on the target in most paths, which is the intended change and also an
+  untested one.
+- **The exit reading has no settled history either.** It changes which SELLs are
+  published from this deploy. `exit_score` is retained from now on, so
+  `/performance/calibration` can speak to it in about twenty trading days; it
+  cannot today, and rows written before this release carry the key **absent**
+  and must be excluded rather than read as agreement.
+- **Two changes at once.** The trail changes which exits happen and the exit
+  reading changes which SELLs are published. `/performance/trades` will not be
+  able to attribute a change in realised return to one or the other.
+- **`_CONDITION_WEIGHTS` (0.45 trend / 0.55 momentum) is a judgement**, not a
+  fit. It was chosen because relative strength is the more durable of the two
+  and trend the faster, and nothing has tested the ratio.
+- The AAPL figures above are from the 1.30.0 investigation, not a fresh replay:
+  no stored row carried an exit reading until this release.
+
+---
+
 ## [1.30.0] — 2026-09-03
 
 **The score could not say "this is working".** Every trend input in the system

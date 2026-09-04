@@ -420,6 +420,12 @@ def _exit_breakdown(trades: list[dict]) -> dict:
     absent-versus-zero rule as `alpha`, and for the same reason: folding them in
     at zero would report every unmeasured trade as having given nothing back.
 
+    `avg_return_at_first_exit_alert_pct` is the same kind of number for the
+    setup scan's overbought flag, which sells nothing and never has. Against
+    `avg_return_pct` it says whether taking that alert would have beaten
+    holding. It carries `alerted_n` rather than reusing `measured_n`: a position
+    can close having never drawn an alert, and that is an absence, not a zero.
+
     `avg_gave_back_pct` is the number a trailing stop should be argued from.
     Against `avg_return_pct` in the same bucket it says what the current static
     exit costs: a stop-loss bucket returning −5% that averaged +6% at its peak
@@ -453,6 +459,19 @@ def _exit_breakdown(trades: list[dict]) -> dict:
             "avg_mfe_pct": _mean(rows, "mfe_pct"),
             "avg_mae_pct": _mean(rows, "mae_pct"),
             "avg_gave_back_pct": _mean(rows, "gave_back_pct"),
+            # The advisory overbought flag, finally measurable. Against
+            # `avg_return_pct` in the same bucket this is the counterfactual for
+            # wiring EXIT_ALERT to an order: what the position was worth when the
+            # flag first fired, versus what it actually exited at. Its own `n`,
+            # because a position can close having never drawn an alert and that
+            # is not a zero — the `commission_paid` rule.
+            "alerted_n": len([
+                t for t in rows
+                if t.get("return_at_first_exit_alert_pct") is not None
+            ]),
+            "avg_return_at_first_exit_alert_pct": _mean(
+                rows, "return_at_first_exit_alert_pct",
+            ),
         }
     return out
 
@@ -535,7 +554,7 @@ async def get_calibration(
          # — two explicit field lists over the same collection, and a field
          # added to one and not the other is a silent hole.
          "analyst_used": 1, "analyst_override": 1, "analyst_wanted": 1,
-         "rule_signal": 1,
+         "rule_signal": 1, "exit_score": 1,
          # The dip-buy setup behind the verdict, so the strategy this system
          # actually runs can be measured rather than assumed. Carried here for
          # the same reason as the override fields, and it is the same trap:

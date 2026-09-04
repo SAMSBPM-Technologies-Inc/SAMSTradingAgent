@@ -143,11 +143,21 @@ def _excursion_summary(trade: dict, exit_price: float | None) -> dict:
     `gave_back_pct` — how much of the peak was still there at the exit. This is
     the trailing-stop question stated as a number, and it is the only one of the
     three that needs the exit price.
+    `return_at_first_exit_alert_pct` — what this position was worth the first
+    time the setup scan called it overbought. That flag has always been
+    advisory: nothing sells on it, and whether anything *should* is the one
+    question no stored row could answer, because the alert is a fact about a
+    ticker and this is a question about a position. Against `return_pct` in the
+    same bucket it becomes the counterfactual — would taking the alert have
+    beaten holding — which is what wiring it to `execute_exit` has to be argued
+    from before anyone wires it.
 
-    Every one stays `None` when it cannot be computed. A position held across a
-    restart may have no observed peak at all, and reporting that as a give-back
-    of 0.0 would say the exit was perfectly timed — flatteringly, in the same
-    direction, every time.
+    Every one stays `None` when it cannot be computed — omitted from the dict
+    rather than zeroed. A position held across a restart may have no observed
+    peak at all, and reporting that as a give-back of 0.0 would say the exit was
+    perfectly timed — flatteringly, in the same direction, every time. A
+    position that never drew an alert is the same trap: 0.0 there would read as
+    "selling on the alert would have changed nothing", equally flatteringly.
     """
     entry = trade.get("entry_price") or trade.get("limit_price")
     if not entry or float(entry) <= 0:
@@ -167,6 +177,12 @@ def _excursion_summary(trade: dict, exit_price: float | None) -> dict:
         # with `return_pct` and with `mfe_pct` — "made 9%, kept 2%" reads off
         # the two numbers without a third denominator to keep track of.
         out["gave_back_pct"] = round((float(high) - float(exit_price)) / entry, 6)
+
+    alert_price = trade.get("first_exit_alert_price")
+    if alert_price:
+        out["return_at_first_exit_alert_pct"] = round(
+            (float(alert_price) - entry) / entry, 6
+        )
     return out
 
 
@@ -207,6 +223,7 @@ def _trailed_stop(
     high_water: float | None,
     working_stop: float | None,
     target: float | None,
+    enforce_min_step: bool = True,
 ) -> tuple[float | None, str | None]:
     """
     The stop this position should now carry, and which rule raised it.
@@ -234,6 +251,13 @@ def _trailed_stop(
     refused because reconciliation runs every two minutes and each move costs a
     cancel and two placements — the same reason an add has to clear
     `MIN_ADD_FRACTION`.
+
+    `enforce_min_step=False` suppresses only that last refusal, and only one
+    caller passes it. The stop and the target are re-placed as a single OCA
+    pair, so the trip is paid for once and the rate limit belongs to the pair
+    rather than to either leg — `_track_and_trail` applies it there. Charging
+    each leg separately would drop a stop move worth making because the target
+    beside it happened not to be, and vice versa.
     """
     s = get_settings()
     if not s.trailing_stop_enabled:
@@ -268,10 +292,64 @@ def _trailed_stop(
     if working_stop is not None and float(working_stop) > 0:
         if level <= float(working_stop):
             return None, None            # never loosen, never re-place for nothing
-        if (level - float(working_stop)) < mark * s.trailing_stop_min_step_pct:
+        if enforce_min_step and (level - float(working_stop)) < mark * s.trailing_stop_min_step_pct:
             return None, None            # too small a move to be worth an order
 
     return level, rule
+
+
+def _ratcheted_target(
+    *,
+    entry: float | None,
+    mark: float | None,
+    high_water: float | None,
+    working_target: float | None,
+) -> tuple[float | None, str | None]:
+    """
+    The target this position should now carry, and which rule raised it.
+
+    The other half of `_trailed_stop`, and inseparable from it. A trail with a
+    fixed target is not a trailing exit — the take-profit leg fills first and
+    the trail never bites. On the shipped defaults a position running from entry
+    to its target moved its stop twice, the second time by 1.1%, 0.11% of price
+    travel before the limit leg closed the trade. Both halves live behind
+    `trailing_stop_enabled`; do not give this one its own switch.
+
+    Returns `(None, None)` to leave the target exactly where it is, which is the
+    answer in every uncertain case — the same discipline as `_trailed_stop`,
+    for a sharper reason: the failure mode here is a target moved *down*, which
+    pulls the exit toward the market and can fill the moment it reaches the
+    venue.
+
+    **A target may only ever move up.** Identical to the stop invariant, and to
+    the one `_combined_bracket_levels` enforces across a scale-in.
+
+    It does not move at all until the trail is armed. A position that has not
+    run has no reason to move its target, and widening one on a position sitting
+    at cost is just a worse exit chosen for free.
+    """
+    s = get_settings()
+    if not s.trailing_stop_enabled:
+        return None, None
+    if not entry or entry <= 0 or not mark or mark <= 0:
+        return None, None
+
+    peak = float(high_water) if high_water else mark
+    if peak < entry * (1.0 + s.trailing_stop_activate_pct):
+        return None, None
+
+    level = round(peak * (1.0 + s.trailing_target_headroom_pct), 2)
+
+    # Never at or below the market. A target under the mark is a market order
+    # with extra steps — the mirror of the stop's "never through the market".
+    if level <= mark:
+        return None, None
+
+    if working_target is not None and float(working_target) > 0:
+        if level <= float(working_target):
+            return None, None            # never lower, never re-place for nothing
+
+    return level, "ratchet"
 
 
 def _combined_bracket_levels(
@@ -2306,9 +2384,14 @@ async def _track_and_trail(
     account_id: str,
 ) -> tuple[bool, bool]:
     """
-    Record this position's excursion and, if the trail is on, raise its stop.
+    Record this position's excursion and, if the trail is on, raise its bracket.
 
-    Returns `(recorded, stop_raised)` for the reconciliation counters.
+    Both legs move: the stop trails up under the peak (`_trailed_stop`) and the
+    target ratchets up above it (`_ratcheted_target`). They are one mechanism —
+    a trail under a fixed target is inert, because the take-profit leg fills
+    before the trail can bite.
+
+    Returns `(recorded, bracket_raised)` for the reconciliation counters.
 
     Extracted rather than left inline for the same reason `_heal_unprotected`
     is: it decides whether to cancel a working stop and place a new one, which
@@ -2343,39 +2426,90 @@ async def _track_and_trail(
         trade.update(excursion)
         recorded = True
 
-    new_stop, rule = _trailed_stop(
-        entry=trade.get("entry_price") or trade.get("limit_price"),
+    entry = trade.get("entry_price") or trade.get("limit_price")
+    working_stop = trade.get("stop_loss")
+    working_target = trade.get("take_profit")
+
+    # Both legs are resolved without their own rate limit: the pair is re-placed
+    # in one `_reprotect` trip, so the trip is what gets charged. See below.
+    new_stop, stop_rule = _trailed_stop(
+        entry=entry,
         mark=mark,
         high_water=trade.get("high_water_price"),
-        working_stop=trade.get("stop_loss"),
+        working_stop=working_stop,
         target=trade.get("take_profit"),
+        enforce_min_step=False,
     )
+    new_target, target_rule = _ratcheted_target(
+        entry=entry,
+        mark=mark,
+        high_water=trade.get("high_water_price"),
+        working_target=working_target,
+    )
+
     qty = int(float(trade.get("filled_qty") or trade.get("qty") or 0))
-    if new_stop is None or qty < 1:
+    if (new_stop is None and new_target is None) or qty < 1:
+        return recorded, False
+
+    # ── The rate limit, applied to the pair ──────────────────────────────────
+    # One cancel and two placements buys BOTH legs, so either one being worth
+    # the trip carries the other along free. Charging them separately would
+    # refuse a stop move worth making because the target beside it was not.
+    step = mark * get_settings().trailing_stop_min_step_pct
+    stop_worth = new_stop is not None and (
+        not working_stop or float(working_stop) <= 0
+        or new_stop - float(working_stop) >= step
+    )
+    target_worth = new_target is not None and (
+        not working_target or float(working_target) <= 0
+        or new_target - float(working_target) >= step
+    )
+    if not (stop_worth or target_worth):
+        return recorded, False
+
+    # Whichever leg did not move keeps the level the record already carries.
+    stop = new_stop if new_stop is not None else (
+        float(working_stop) if working_stop else 0.0
+    )
+    target = new_target if new_target is not None else (
+        float(working_target) if working_target else 0.0
+    )
+    if not (0 < stop < target):
+        # `_reprotect` would refuse this and leave the position bare. A record
+        # with no usable pair is the heal phase's problem, not the trail's.
         return recorded, False
 
     if not await ibkr.has_open_orders(ticker, account_id=account_id):
         return recorded, False
 
-    previous_stop = trade.get("stop_loss")
-    target = float(trade.get("take_profit") or 0.0)
-    pair = await _reprotect(ticker, qty, new_stop, target, account_id)
+    pair = await _reprotect(ticker, qty, stop, target, account_id)
     if not pair:
         # `_reprotect` logs the exposure and the heal phase re-places the OLD
-        # stop, which is still what the record says. Nothing is written here.
+        # pair, which is still what the record says. Nothing is written here.
         return recorded, False
 
-    await _update_trade(str(trade["_id"]), {
-        "stop_loss": new_stop,
-        "stop_raised_at": utcnow(),
-        "stop_raised_by": rule,
-        "stop_raise_count": int(trade.get("stop_raise_count") or 0) + 1,
-    })
+    update: dict = {}
+    if new_stop is not None:
+        update.update({
+            "stop_loss": new_stop,
+            "stop_raised_at": utcnow(),
+            "stop_raised_by": stop_rule,
+            "stop_raise_count": int(trade.get("stop_raise_count") or 0) + 1,
+        })
+    if new_target is not None:
+        update.update({
+            "take_profit": new_target,
+            "target_raised_at": utcnow(),
+            "target_raised_by": target_rule,
+            "target_raise_count": int(trade.get("target_raise_count") or 0) + 1,
+        })
+    await _update_trade(str(trade["_id"]), update)
     logger.info(
-        "stop_raised",
-        ticker=ticker, rule=rule, mark=mark,
+        "bracket_raised",
+        ticker=ticker, stop_rule=stop_rule, target_rule=target_rule, mark=mark,
         high_water=trade.get("high_water_price"),
-        previous_stop=previous_stop, new_stop=new_stop,
+        previous_stop=working_stop, new_stop=new_stop,
+        previous_target=working_target, new_target=new_target,
     )
     return recorded, True
 

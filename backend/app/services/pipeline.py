@@ -557,6 +557,13 @@ async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
         # `reason` is reconstructible from the other fields and would otherwise
         # be written ~24 times a day per ticker to say the same sentence.
         gate = signal.get("analyst_gate") or {}
+        trigger = classify_trigger(
+            feat_doc.get("rsi_14"), feat_doc.get("stoch_rsi"),
+            feat_doc.get("bb_pct"), feat_doc.get("macd_bullish"),
+            feat_doc.get("ma_cross_bullish"),
+        )
+        await _stamp_exit_alert(signal["ticker"], trigger, signal.get("current_price"))
+
         record = {
             "ticker":          signal["ticker"],
             "generated_at":    now,
@@ -583,6 +590,17 @@ async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
             "analyst_override": gate.get("override"),
             "analyst_wanted":   gate.get("model_signal"),
             "rule_signal":      gate.get("rule_signal"),
+            # The number the SELL test was measured against, retained for the
+            # same reason `score_percentile` is: the exit reading is recomputed
+            # from sub-scores, and a replay twenty days later would recompute it
+            # from whatever the weights and thresholds are by then, describing a
+            # rule that never ran. Storing it is the only way "was this exit
+            # right" can ever be asked of the rule that actually decided it.
+            #
+            # `None` means the reading could not be derived — an XGBoost score,
+            # where the weights did not produce the composite. Absent means the
+            # row predates 1.31.0. Same convention as `analyst_override`.
+            "exit_score":       signal.get("exit_score"),
             # ── The dip-buy setup this verdict was produced on ─────────────
             # The declared strategy is mean-reversion (config.technical_stance)
             # and nothing retained what the reversion actually looked like at
@@ -608,11 +626,7 @@ async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
             "bb_pct":            feat_doc.get("bb_pct"),
             "macd_bullish":      feat_doc.get("macd_bullish"),
             "ma_cross_bullish":  feat_doc.get("ma_cross_bullish"),
-            "setup_trigger":     classify_trigger(
-                feat_doc.get("rsi_14"), feat_doc.get("stoch_rsi"),
-                feat_doc.get("bb_pct"), feat_doc.get("macd_bullish"),
-                feat_doc.get("ma_cross_bullish"),
-            ),
+            "setup_trigger":     trigger,
             # Filled by performance tracker after ~20 trading days:
             "price_20d_later": None,
             "return_20d":      None,
@@ -625,6 +639,56 @@ async def _append_history(signal: dict, raw_doc: dict, feat_doc: dict) -> None:
         )
     except Exception as exc:
         logger.warning("history_append_failed", ticker=signal.get("ticker"), error=str(exc))
+
+
+async def _stamp_exit_alert(ticker: str, trigger: str, price: float | None) -> None:
+    """
+    Record, on any open position in this ticker, that the setup scan called it
+    overbought — and what it was worth at the time.
+
+    Nothing here sells. The overbought flag stays advisory, and
+    `trade_rationale._EXIT_REASON` still has no `EXIT_ALERT` entry, because a
+    reason string for an exit that cannot happen is a lie the same shape as a
+    gate panel contradicting the badge beside it.
+
+    What this adds is the evidence to argue about it. `setup_trigger` is already
+    retained on the *signal* row, which answers "did an ENTRY predict forward
+    alpha" — but the exit question is about a position's path, not a ticker's,
+    and nothing recorded where the alert fell relative to the trade. With
+    `first_exit_alert_price` on the record, `_excursion_summary` can report what
+    the position was worth at the alert, and `/performance/trades` can put that
+    beside what it actually exited at. That comparison is what wiring this to
+    `execute_exit` has to be argued from.
+
+    The first alert is written once and never revised — it is the moment the
+    flag first fired, not the most recent time it was still firing. The counter
+    is separate, because "flagged once and kept running" and "flagged twenty
+    times" are different stories about the same peak.
+
+    Fire-and-forget: never raises, and never blocks a verdict from publishing.
+    """
+    if trigger != "EXIT_ALERT" or not price or price <= 0:
+        return
+    try:
+        from app.models.trade import TradeStatus
+
+        db = await get_db()
+        held = {
+            "ticker": ticker,
+            "action": "BUY",
+            "status": {"$in": list(TradeStatus.OPEN)},
+            "closed_at": None,
+        }
+        await db[COLL_TRADES].update_many(
+            {**held, "first_exit_alert_at": {"$exists": False}},
+            {"$set": {
+                "first_exit_alert_at": utcnow(),
+                "first_exit_alert_price": round(float(price), 4),
+            }},
+        )
+        await db[COLL_TRADES].update_many(held, {"$inc": {"exit_alert_count": 1}})
+    except Exception as exc:
+        logger.warning("exit_alert_stamp_failed", ticker=ticker, error=str(exc))
 
 
 async def _execute_trades(ticker: str, signal: dict) -> None:

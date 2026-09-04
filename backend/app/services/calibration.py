@@ -412,7 +412,7 @@ async def calibration_report(
          # dropped silently, which would make a stored override look like a
          # missing one and read as agreement.
          "analyst_used": 1, "analyst_override": 1, "analyst_wanted": 1,
-         "rule_signal": 1,
+         "rule_signal": 1, "exit_score": 1,
          # The dip-buy setup behind the verdict, so the strategy this system
          # actually runs can be measured rather than assumed. Carried here for
          # the same reason as the override fields, and it is the same trap:

@@ -32,6 +32,7 @@ from app.services.trade_manager import (  # noqa: E402
     _excursion_summary,
     _excursion_update,
     _trailed_stop,
+    _ratcheted_target,
 )
 from app.services.trade_rationale import (  # noqa: E402
     _EXIT_REASON,
@@ -51,6 +52,7 @@ def trailing(monkeypatch):
             trailing_stop_activate_pct=0.06,
             breakeven_trigger_pct=0.04,
             trailing_stop_min_step_pct=0.01,
+            trailing_target_headroom_pct=0.10,
         )
         defaults.update(over)
         for k, v in defaults.items():
@@ -175,9 +177,81 @@ def test_execute_exit_has_no_default_trigger():
 
 # ── The trail: off by default, and it may only ever move a stop up ───────────
 
-def test_it_ships_switched_off():
-    assert get_settings().trailing_stop_enabled is False
+def test_one_switch_governs_both_legs(monkeypatch):
+    """
+    The trail and the target ratchet are one mechanism. A trail under a fixed
+    target is inert — the take-profit leg fills before it can bite — so neither
+    leg may be switchable on its own. Off, both refuse; on, both answer.
+    """
+    s = get_settings()
+    monkeypatch.setattr(s, "trailing_stop_enabled", False)
     assert trail(mark=130.0, high_water=130.0) == (None, None)
+    assert _ratcheted_target(
+        entry=100.0, mark=130.0, high_water=130.0, working_target=140.0,
+    ) == (None, None)
+
+    monkeypatch.setattr(s, "trailing_stop_enabled", True)
+    assert trail(mark=130.0, high_water=130.0)[1] == "trail"
+    assert _ratcheted_target(
+        entry=100.0, mark=130.0, high_water=130.0, working_target=140.0,
+    )[1] == "ratchet"
+
+
+def test_a_position_that_runs_25pct_trails_all_the_way_up(trailing):
+    """
+    The fence this feature never had, and the reason 1.31.0 exists.
+
+    Under the shipped defaults the trail could not fire. The take-profit leg was
+    set at entry (+10%) and nothing ever raised it, so a position walking up to
+    its target moved its stop exactly twice:
+
+        peak +4.00%   breakeven -> stop 100.00
+        peak +9.89%   trail     -> stop 101.10   <- limit leg fills at +10%
+
+    One trail move, locking in 1.1%, inside the last 0.11% of price travel
+    before the trade closed. `TRAILING_STOP_ENABLED=true` bought break-even and
+    nothing else, while `config.py` advertised "an 8% trail on a name up 20%
+    still locks in ~10%" — a position that could not exist.
+
+    Walk one 25% up-move and assert the pair keeps moving the whole way.
+    """
+    trailing()
+    entry = 100.0
+    stop, target = 95.0, 110.0
+    moves = []
+
+    for i in range(0, 2501):
+        peak = mark = entry * (1 + i / 10000.0)
+        if mark >= target:
+            break                                    # the limit leg would fill
+        new_stop, _ = _trailed_stop(
+            entry=entry, mark=mark, high_water=peak,
+            working_stop=stop, target=target, enforce_min_step=False,
+        )
+        new_target, _ = _ratcheted_target(
+            entry=entry, mark=mark, high_water=peak, working_target=target,
+        )
+        step = mark * 0.01
+        stop_worth = new_stop is not None and new_stop - stop >= step
+        target_worth = new_target is not None and new_target - target >= step
+        if not (stop_worth or target_worth):
+            continue
+        stop = new_stop if new_stop is not None else stop
+        target = new_target if new_target is not None else target
+        assert 0 < stop < target                     # `_reprotect`'s invariant
+        moves.append((round(peak, 2), stop, target))
+
+    # The position is still alive well past the +10% that used to close it. The
+    # last move lands short of 125 because the step limit is still doing its
+    # job — it is a rate limit, not a ceiling.
+    assert moves[-1][0] > 120.0
+    # Many moves, not two.
+    assert len(moves) > 5
+    # The stop finishes a trail-width under the peak it last acted on, so the
+    # position gives back ~8% of its high rather than running to a fixed target.
+    assert moves[-1][1] == pytest.approx(moves[-1][0] * 0.92, abs=0.5)
+    # The number that matters: locked-in gain, against the 1.1% of the old path.
+    assert moves[-1][1] > 113.0
 
 
 def test_break_even_engages_first(trailing):
@@ -225,6 +299,90 @@ def test_a_move_too_small_to_be_worth_an_order_is_refused(trailing):
     # Widen the step allowance and the same move is now worth making.
     trailing(trailing_stop_min_step_pct=0.001)
     assert trail(mark=118.0, high_water=120.0, working_stop=110.0)[0] == pytest.approx(110.4)
+
+
+# ── The target ratchet ────────────────────────────────────────────────────────
+
+def ratchet(**kw):
+    base = dict(entry=100.0, mark=100.0, high_water=None, working_target=110.0)
+    base.update(kw)
+    return _ratcheted_target(**base)
+
+
+def test_the_target_does_not_move_before_the_trail_arms(trailing):
+    """
+    A position that has not run has no reason to move its target, and widening
+    one on a position sitting at cost is a worse exit chosen for free.
+    """
+    trailing()
+    assert ratchet(mark=104.0, high_water=104.0) == (None, None)   # +4%, under +6%
+    level, rule = ratchet(mark=106.0, high_water=106.0)
+    assert (level, rule) == (pytest.approx(116.6), "ratchet")      # 106 × 1.10
+
+
+def test_a_target_is_never_lowered(trailing):
+    """
+    The mirror of the stop invariant, and it bites harder: a target moved down
+    pulls the exit toward the market and can fill the moment it reaches the
+    venue.
+    """
+    trailing()
+    # Peak 120 implies 132, but the record already carries a higher one.
+    assert ratchet(mark=120.0, high_water=120.0, working_target=150.0) == (None, None)
+
+
+def test_a_target_is_never_placed_at_or_below_the_market(trailing):
+    """A target under the mark is a market order with extra steps."""
+    trailing(trailing_target_headroom_pct=0.01)
+    # Peak 120 implies 121.2, but the mark has run to 130 since.
+    assert ratchet(mark=130.0, high_water=120.0, working_target=110.0) == (None, None)
+
+
+def test_the_ratchet_follows_the_peak_not_the_cost_basis(trailing):
+    """
+    Measured from the high-water mark, so the ceiling moves with the position
+    instead of staying where entry put it.
+    """
+    trailing()
+    assert ratchet(mark=118.0, high_water=125.0)[0] == pytest.approx(137.5)
+
+
+def test_both_legs_move_on_one_trip_to_the_venue(monkeypatch, trailing):
+    """
+    One cancel and two placements buys both legs, so the rate limit belongs to
+    the pair. Charging each leg separately would refuse a stop move worth making
+    because the target beside it was not.
+    """
+    trailing()
+    (_, raised), writes, broker = run_trail(monkeypatch, dict(OPEN), 130.0)
+
+    assert raised is True
+    assert len(broker.placed) == 1                     # one pair, not two trips
+    _t, _q, stop, target = broker.placed[-1]
+    assert (stop, target) == (pytest.approx(119.6), pytest.approx(143.0))
+
+    written = writes[-1]
+    assert written["stop_raise_count"] == 1
+    assert written["target_raise_count"] == 1
+    assert written["target_raised_by"] == "ratchet"
+
+
+def test_a_target_move_alone_is_enough_to_pay_for_the_trip(monkeypatch, trailing):
+    """
+    The stop is already where the trail wants it; only the target has room to
+    move. That still justifies the placement — the alternative is a target
+    frozen a cycle behind the peak for no reason.
+    """
+    trailing()
+    # Stop already at 119.6 (130 × 0.92), so `_trailed_stop` has nothing to add.
+    trade = dict(OPEN, stop_loss=119.6, take_profit=120.0)
+    (_, raised), writes, broker = run_trail(monkeypatch, trade, 130.0)
+
+    assert raised is True
+    assert broker.placed[-1][3] == pytest.approx(143.0)
+    written = writes[-1]
+    assert written["target_raise_count"] == 1
+    assert "stop_raise_count" not in written           # the stop did not move
 
 
 def test_a_stop_is_never_placed_through_the_market(trailing):
@@ -449,9 +607,9 @@ def run_trail(monkeypatch, trade, mark, broker=None):
 OPEN = {"entry_price": 100.0, "filled_qty": 50, "stop_loss": 95.0, "take_profit": 140.0}
 
 
-def test_the_excursion_is_recorded_even_with_the_trail_off(monkeypatch):
+def test_the_excursion_is_recorded_even_with_the_trail_off(monkeypatch, trailing):
     """The measurement ships regardless; only the behaviour is gated."""
-    assert get_settings().trailing_stop_enabled is False
+    trailing(trailing_stop_enabled=False)
     (marked, trailed), writes, broker = run_trail(monkeypatch, dict(OPEN), 118.0)
 
     assert (marked, trailed) == (True, False)
@@ -539,13 +697,109 @@ def test_a_closed_or_unheld_row_is_skipped(monkeypatch, trailing):
     assert writes == []
 
 
-def test_the_new_pair_covers_the_held_quantity_and_keeps_the_target(
+def test_the_new_pair_covers_the_held_quantity_and_ratchets_the_target(
     monkeypatch, trailing,
 ):
-    """Protective orders may never cover more shares than are held, and the
-    trail must not touch the target it was not asked about."""
+    """
+    Protective orders may never cover more shares than are held, and the target
+    moves up with the peak rather than staying where entry put it. Leaving it
+    alone is what made the trail inert: the limit leg filled first, every time.
+    """
     trailing()
     _, _, broker = run_trail(monkeypatch, dict(OPEN), 130.0)
 
     ticker, qty, _stop, target = broker.placed[-1]
-    assert (ticker, qty, target) == ("EXMP", 50, 140.0)
+    # 130 × 1.10, ahead of the peak — not the 140 the record carried in.
+    assert (ticker, qty, target) == ("EXMP", 50, 143.0)
+
+
+# ── The EXIT_ALERT counterfactual ─────────────────────────────────────────────
+#
+# Nothing sells on the overbought flag and nothing here changes that. What was
+# missing was the evidence to argue about it: `setup_trigger` is retained on the
+# signal row, which is a fact about a ticker, while the exit question is about a
+# position's path. These pin the record that makes the comparison possible.
+
+def test_the_alert_return_is_measured_against_entry():
+    """Directly comparable with `return_pct` and `mfe_pct`, no third
+    denominator to keep track of."""
+    trade = dict(entry_price=100.0, high_water_price=130.0,
+                 first_exit_alert_price=120.0)
+    out = tm._excursion_summary(trade, 110.0)
+
+    assert out["return_at_first_exit_alert_pct"] == pytest.approx(0.20)
+    assert out["mfe_pct"] == pytest.approx(0.30)
+    # Held past the alert and gave back 10 points of the 30 it had made.
+    assert out["gave_back_pct"] == pytest.approx(0.20)
+
+
+def test_a_position_that_never_drew_an_alert_reports_no_number():
+    """
+    Not 0.0 — that would read as "selling on the alert would have changed
+    nothing", flatteringly, in the same direction, every time. The
+    `commission_paid` rule.
+    """
+    out = tm._excursion_summary(dict(entry_price=100.0, high_water_price=130.0), 110.0)
+    assert "return_at_first_exit_alert_pct" not in out
+
+
+def test_the_first_alert_is_written_once_and_the_count_keeps_going(monkeypatch):
+    """
+    The first alert is the moment the flag fired, not the last time it was still
+    firing — those are different facts, and only the first is a decision point.
+    """
+    import app.services.pipeline as P
+
+    calls: list[tuple[dict, dict]] = []
+
+    class _Trades:
+        async def update_many(self, flt, update):
+            calls.append((flt, update))
+
+    async def fake_db():
+        return {"trades": _Trades()}
+
+    monkeypatch.setattr(P, "get_db", fake_db)
+    monkeypatch.setattr(P, "COLL_TRADES", "trades")
+    asyncio.run(P._stamp_exit_alert("EXMP", "EXIT_ALERT", 120.0))
+
+    first, counter = calls
+    # The stamp is guarded on the field being absent, so it cannot be revised.
+    assert first[0]["first_exit_alert_at"] == {"$exists": False}
+    assert first[1]["$set"]["first_exit_alert_price"] == 120.0
+    # The counter is unguarded and separate: "flagged once and kept running" and
+    # "flagged twenty times" are different stories about the same peak.
+    assert counter[1] == {"$inc": {"exit_alert_count": 1}}
+    assert "first_exit_alert_at" not in counter[0]
+
+
+def test_nothing_is_stamped_without_an_alert_or_a_price(monkeypatch):
+    import app.services.pipeline as P
+
+    calls: list = []
+
+    class _Trades:
+        async def update_many(self, flt, update):
+            calls.append((flt, update))
+
+    async def fake_db():
+        return {"trades": _Trades()}
+
+    monkeypatch.setattr(P, "get_db", fake_db)
+    monkeypatch.setattr(P, "COLL_TRADES", "trades")
+
+    asyncio.run(P._stamp_exit_alert("EXMP", "ENTRY", 120.0))
+    asyncio.run(P._stamp_exit_alert("EXMP", "NEUTRAL", 120.0))
+    asyncio.run(P._stamp_exit_alert("EXMP", "EXIT_ALERT", None))
+    assert calls == []
+
+
+def test_the_overbought_flag_still_sells_nothing():
+    """
+    The vocabulary 1.28.0 deleted stays deleted. A reason string for an exit
+    that cannot happen is the same class of lie as a gate panel contradicting
+    the badge beside it — it comes back with the code that writes it.
+    """
+    from app.services.trade_rationale import _EXIT_REASON
+
+    assert "EXIT_ALERT" not in _EXIT_REASON

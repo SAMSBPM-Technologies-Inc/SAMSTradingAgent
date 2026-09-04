@@ -341,6 +341,19 @@ def _wire(monkeypatch, **feat_over):
     return db
 
 
+#: A name that is genuinely deteriorating: trend broken both ways, relative
+#: strength in the gutter, weak everything else. `scoring.exit_score` reads
+#: these, so a document carrying only a low `composite_score` no longer sells —
+#: it has no condition evidence at all, and an unknown condition must never
+#: manufacture an exit. See `scoring.exit_condition`.
+FALLING = {
+    "macd_bullish": False, "ma_cross_bullish": False,
+    "momentum_score": 0.10, "momentum_coverage": 1.0,
+    "technical_score": 0.20, "fundamental_score": 0.25,
+    "sentiment_score": 0.20, "macro_score": 0.35, "catalyst_score": 0.30,
+}
+
+
 def _run(monkeypatch, *, previous_signal=None, feat=None, **out_over):
     """Run the analyst end to end against a stubbed db and return the doc."""
     _wire(monkeypatch, **(feat or {}))
@@ -591,7 +604,7 @@ from app.services.signal_generator import SELL_THRESHOLD  # noqa: E402
 
 
 def test_a_model_hold_cannot_suppress_a_rule_sell(monkeypatch):
-    doc = _run(monkeypatch, feat={"composite_score": 0.22}, signal="HOLD")
+    doc = _run(monkeypatch, feat={**FALLING, "composite_score": 0.22}, signal="HOLD")
 
     assert doc["signal"] == "SELL"
     assert doc["analyst_gate"]["override"] == "sell_restored"
@@ -604,7 +617,7 @@ def test_a_model_buy_under_the_sell_threshold_still_exits(monkeypatch):
     in. Publishing HOLD would be the wrong answer — the exit wins outright, and
     it must not fall through to the refused-BUY branch.
     """
-    doc = _run(monkeypatch, feat={"composite_score": 0.18}, signal="BUY")
+    doc = _run(monkeypatch, feat={**FALLING, "composite_score": 0.18}, signal="BUY")
 
     assert doc["signal"] == "SELL"
     assert doc["analyst_gate"]["override"] == "sell_restored"
@@ -623,7 +636,7 @@ def test_the_sell_band_is_the_rules_own(monkeypatch):
 
 
 def test_a_restored_sell_carries_an_exit_line_not_a_buy_plan(monkeypatch):
-    doc = _run(monkeypatch, feat={"composite_score": 0.18}, signal="BUY")
+    doc = _run(monkeypatch, feat={**FALLING, "composite_score": 0.18}, signal="BUY")
 
     assert doc["entry_suggestion"] is None
     assert "Exit at" in doc["exit_suggestion"]
@@ -637,7 +650,7 @@ def test_the_two_overrides_are_told_apart(monkeypatch):
     than prose to be parsed.
     """
     refused = _run(monkeypatch, feat={"composite_score": 0.62}, signal="BUY")
-    restored = _run(monkeypatch, feat={"composite_score": 0.18}, signal="HOLD")
+    restored = _run(monkeypatch, feat={**FALLING, "composite_score": 0.18}, signal="HOLD")
     agreed = _run(monkeypatch, feat={"composite_score": 0.72}, signal="BUY")
 
     assert refused["analyst_gate"]["override"] == "buy_refused"

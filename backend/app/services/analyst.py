@@ -179,6 +179,7 @@ def _gate_analyst_signal(
     risk_score: float,
     previous_signal: str | None,
     cohort=None,
+    exit_score: float | None = None,
 ) -> tuple[str, dict]:
     """
     Reconcile the model's verdict with the rule that owns the thresholds.
@@ -226,13 +227,23 @@ def _gate_analyst_signal(
     refusal the engine never made. That would corrupt the counterfactual as
     well as the verdict.
 
+    `exit_score` is the same requirement on the exit side, and it bites harder.
+    The rule's SELL test reads the exit reading (see `scoring.exit_score`); a
+    gate recomputing `rule_signal` from the composite alone would see a SELL on
+    every extended leader the engine had decided to hold, overrule the model
+    back to SELL, and stamp `sell_restored` on an exit the engine never wanted.
+    That is not just a wrong counterfactual — `sell_restored` is unappealable
+    by design, so it would sell the position.
+
     Returns `(published_signal, gate_record)`. The record is written to the
     signal document whether or not anything was overridden — "the gate ran and
     agreed" and "no gate ran" are different facts, and only one of them can be
     argued from later. It is what `/performance/calibration` needs to answer
     whether these overrides were ever worth having.
     """
-    rule_signal = classify_signal(score, risk_score, previous_signal, cohort)
+    rule_signal = classify_signal(
+        score, risk_score, previous_signal, cohort, exit_score=exit_score,
+    )
     ranked = cohort is not None and cohort.size >= RANK_MIN_COHORT
 
     published = model_signal
@@ -427,12 +438,20 @@ async def run_analysis(
     # ranking is off, which is the absolute rule unchanged.
     cohort = await cohort_for(ticker, score)
 
+    # And the same exit reading, for the same reason one layer down: the rule's
+    # SELL test reads it, so a gate recomputing the rule from the composite
+    # alone would restore a SELL the engine never made — and `sell_restored` is
+    # unappealable, so it would sell the position.
+    from app.services.scoring import exit_score as _exit_score
+    exit_reading = _exit_score(feat)
+
     published_signal, gate = _gate_analyst_signal(
         analyst_output.get("signal", "HOLD"),
         score,
         risk["risk_score"],
         previous_signal,
         cohort,
+        exit_score=exit_reading,
     )
 
     # Every derived field below describes *the verdict that was published*, not
@@ -448,6 +467,9 @@ async def run_analysis(
         "ticker": ticker,
         "generated_at": utcnow(),
         "score": score,
+        # Written on both paths or the retained series has holes on every cycle
+        # the analyst ran — see `signal_generator.generate_signal`.
+        "exit_score": round(exit_reading, 4),
         "risk": risk,
         "signal": published_signal,
         # A conviction-derived confidence describes the model's view. Once the

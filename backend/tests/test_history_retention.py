@@ -36,7 +36,14 @@ SETUP_FIELDS = {
     "rsi_14", "stoch_rsi", "bb_pct", "macd_bullish", "ma_cross_bullish",
 }
 
-RETAINED_FIELDS = OVERRIDE_FIELDS | SETUP_FIELDS
+#: The number the SELL test was actually measured against. The composite ranks
+#: entry opportunity; the exit reading swaps its oscillator component for trend
+#: and relative strength (`scoring.exit_score`). It is recomputed from
+#: sub-scores, so a replay would recompute it from whatever the weights are by
+#: then and describe a rule that never ran — the `score_percentile` trap.
+EXIT_FIELDS = {"exit_score"}
+
+RETAINED_FIELDS = OVERRIDE_FIELDS | SETUP_FIELDS | EXIT_FIELDS
 
 
 class _History:

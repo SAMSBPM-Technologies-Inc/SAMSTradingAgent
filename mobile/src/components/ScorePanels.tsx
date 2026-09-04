@@ -422,6 +422,14 @@ export function RiskPanel({ risk, gate, signal, score }: {
 
           <AnalystVerdict gate={gate} />
 
+          {gate.exit_score != null && (
+            <Text style={{ fontSize: 11, color: C.fgMuted, lineHeight: 16 }}>
+              Exit reading {gate.exit_score.toFixed(2)}. Selling is judged on trend and
+              relative strength, not on the entry timer — an extended winner floors the
+              oscillators by design, which is no reason to sell it.
+            </Text>
+          )}
+
           <Text style={{ fontSize: 10, color: C.fgMuted, lineHeight: 15 }}>
             Only BUY is risk-gated. Refusing to exit a position because conditions look
             dangerous would be backwards, so SELL below {gate.sell_threshold.toFixed(2)} is

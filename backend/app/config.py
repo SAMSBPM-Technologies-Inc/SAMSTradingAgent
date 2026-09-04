@@ -395,16 +395,37 @@ class Settings(BaseSettings):
     # had happened. `high_water_price` now records it; this decides what to do
     # about it.
     #
-    # OFF BY DEFAULT, deliberately. A trailing stop trades a worse average exit
-    # on winners for a smaller give-back, and which of those is the better deal
-    # is an empirical question this deployment cannot answer yet — no closed
-    # trade carries an excursion. Switch it on once `mfe_pct` and `gave_back_pct`
-    # over a real sample say it is worth it. That is the same discipline as
-    # `RESEARCH_VETO_ENABLED`: the measurement ships first and the behaviour is
-    # argued from it.
+    # **The trail and the target ratchet are ONE mechanism, behind this one
+    # flag.** Enabling either alone is a defect, and the trail alone was one for
+    # as long as it existed. Measured on the shipped defaults — target +10%,
+    # break-even +4%, activate +6%, trail 8%, min step 1% — a position running
+    # from entry to its target moved its stop exactly twice:
+    #
+    #     peak +4.00%   breakeven -> stop 100.00
+    #     peak +9.89%   trail     -> stop 101.10   <- take-profit fills at +10%
+    #
+    # The trail fired once, locked in 1.1%, inside the last 0.11% of price
+    # travel before the limit leg closed the trade. The worked example below —
+    # "an 8% trail on a name up 20%" — described a position that could not
+    # exist, because nothing ever raised the target. That is the `EXIT_ALERT`
+    # ghost again: a dead path reading as a live one, in the code that sells
+    # things. `trailing_target_headroom_pct` is the other half of the fix and
+    # must never be split from this flag.
+    #
+    # ON BY DEFAULT as of 1.31.0, which is a deliberate departure from the
+    # posture of `RESEARCH_VETO_ENABLED`, `enable_rank_signals` and
+    # `weight_momentum`. Those ship off because nothing has measured them; the
+    # honest statement here is the same — the excursion series began 30 Aug 2026
+    # when the paper account was switched, so the trade-off a trail makes (a
+    # worse average exit on winners for a smaller give-back) has not been
+    # settled on this deployment either. It ships on because the alternative was
+    # shipping a mechanism that provably could not fire, and because a static
+    # +10% ceiling is itself an unmeasured choice — just an invisible one.
+    # `mfe_pct` / `gave_back_pct` on `/performance/trades` are still what it has
+    # to be argued from.
     trailing_stop_enabled: bool = Field(
-        default=False,
-        description="Raise the stop as a position makes new highs. Never lowers one",
+        default=True,
+        description="Raise the stop and the target as a position makes new highs. Never lowers either",
     )
     # Distance below the high-water mark. Wider than `bracket_stop_loss_pct`
     # because it is measured from the peak rather than from entry: an 8% trail
@@ -442,6 +463,23 @@ class Settings(BaseSettings):
     trailing_stop_min_step_pct: float = Field(
         default=0.01, ge=0.0, le=0.20,
         description="Smallest upward stop move worth cancelling and replacing for",
+    )
+    # How far ahead of the high-water mark the target is re-placed once the
+    # trail is armed. This is the half of the mechanism that lets a winner run:
+    # without it the take-profit leg stays where entry put it and closes the
+    # position before the trail can ever bite (see `trailing_stop_enabled`).
+    #
+    # Measured from the PEAK, not from entry, for the same reason the trail is:
+    # a level derived from a cost basis the position has long since left behind
+    # is a ceiling on how right the entry is allowed to have been. A target
+    # ratchets up only; it is never lowered, because lowering one pulls the exit
+    # toward the market and can fill instantly.
+    #
+    # 0.10 keeps the target a full trail-width plus a margin above the peak, so
+    # `_reprotect`'s `0 < stop < target` holds by construction on every pass.
+    trailing_target_headroom_pct: float = Field(
+        default=0.10, ge=0.01, le=1.00,
+        description="Distance above the high-water mark the target is re-placed at",
     )
 
     # Fallbacks used when the AI analyst supplies no usable level, or supplies

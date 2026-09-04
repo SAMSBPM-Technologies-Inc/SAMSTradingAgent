@@ -88,6 +88,7 @@ def classify_signal(
     risk_score: float,
     previous_signal: str | None = None,
     cohort=None,
+    exit_score: float | None = None,
 ) -> str:
     """
     The BUY / SELL / HOLD rule, in one place.
@@ -112,22 +113,53 @@ def classify_signal(
     Only the *entry* conditions differ between the two rules. Risk still vetoes
     only BUY, SELL is still ungated, and the band is still one-sided. Nothing
     below makes an exit harder than it was.
+
+    `exit_score` (`scoring.exit_score`) is the number the **SELL** test reads.
+    The BUY test always reads `score`. The two answer different questions and
+    the composite only ever answered the first: `_technical_score` floors an
+    extended name near zero because an oversold oscillator is the *entry* timer,
+    so a leader running away from its cost basis walked the composite down into
+    SELL for a reason that said nothing about the company. Measured on the real
+    functions, the composite had the two cases backwards — an extended leader
+    scored 0.297 and a name with a broken trend, negative relative strength and
+    weak fundamentals scored 0.340.
+
+    Because they are two numbers, the exit clause is tested first — see the
+    comment at the branch. This is not a brake. It changes which number the exit
+    is measured against,
+    upstream of the verdict; it adds no veto, no delay and no gate. A
+    deteriorating name still sells immediately and unconditionally. Omit it and
+    the SELL test falls back to `score`, which is the rule exactly as it was —
+    the same convention `cohort` and `previous_signal` follow, and what
+    calibration replays want.
     """
+    sell_basis = score if exit_score is None else exit_score
+
     if cohort is not None and cohort.size >= RANK_MIN_COHORT:
-        return _classify_relative(score, risk_score, previous_signal, cohort)
+        return _classify_relative(
+            score, risk_score, previous_signal, cohort, sell_basis,
+        )
 
     buy_exit = BUY_THRESHOLD - SIGNAL_HYSTERESIS if previous_signal == "BUY" else BUY_THRESHOLD
     sell_exit = SELL_THRESHOLD + SIGNAL_HYSTERESIS if previous_signal == "SELL" else SELL_THRESHOLD
 
+    # The exit is tested FIRST, and it outranks the entry clause. While both
+    # sides read one number this was unobservable — nothing can be above 0.70
+    # and below 0.30 at once — but they are two numbers now, and the order is
+    # the same asymmetry as everywhere else here: `_classify_relative` tests
+    # the absolute exit before the rank, and `_gate_analyst_signal` tests the
+    # exit clause before the BUY clause. When the exit reading says leave and
+    # the composite says enter, leaving wins.
+    if sell_basis < sell_exit:
+        return "SELL"
     if score > buy_exit and risk_score < RISK_MAX_FOR_BUY:
         return "BUY"
-    if score < sell_exit:
-        return "SELL"
     return "HOLD"
 
 
 def _classify_relative(
-    score: float, risk_score: float, previous_signal: str | None, cohort
+    score: float, risk_score: float, previous_signal: str | None, cohort,
+    sell_basis: float | None = None,
 ) -> str:
     """
     The rank-based rule. Reached only from `classify_signal`, never directly.
@@ -161,10 +193,15 @@ def _classify_relative(
         SELL_THRESHOLD + SIGNAL_HYSTERESIS if previous_signal == "SELL"
         else SELL_THRESHOLD
     )
+    # The exit reading, where one was supplied; the composite otherwise. Both
+    # absolute exits below use it, and the rank still ranks on `score`, which is
+    # what the cohort's percentile was computed from — mixing the two would
+    # compare a name's exit reading against its peers' entry readings.
+    sell_basis = score if sell_basis is None else sell_basis
     # First, and unconditionally: whatever the field is doing, a score under
     # the absolute sell threshold is an exit. Ranking may add exits; it may
     # never take one away.
-    if score < sell_exit:
+    if sell_basis < sell_exit:
         return "SELL"
 
     buy_rank = (
@@ -182,7 +219,7 @@ def _classify_relative(
         and risk_score < RISK_MAX_FOR_BUY
     ):
         return "BUY"
-    if cohort.percentile <= sell_rank and score <= RANK_SELL_CEILING:
+    if cohort.percentile <= sell_rank and sell_basis <= RANK_SELL_CEILING:
         return "SELL"
     return "HOLD"
 
@@ -274,8 +311,20 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
     # `services/cross_section.py`.
     cohort = await cohort_for(ticker, score)
 
+    # Imported here rather than at module scope: `scoring` imports
+    # `classify_signal` back out of this module, and the cycle is broken the
+    # same way `compute_personalized_score` breaks it.
+    from app.services.scoring import exit_score
+
+    # The number the SELL test reads. The composite ranks entry opportunity, and
+    # its low end was being read as "this is bad to own" — see
+    # `scoring.exit_score`. The BUY test is untouched and still reads `score`.
+    exit_reading = exit_score(feat)
+
     # ── Signal decision ───────────────────────────────────────────────────────
-    signal = classify_signal(score, risk_score, previous_signal, cohort)
+    signal = classify_signal(
+        score, risk_score, previous_signal, cohort, exit_score=exit_reading,
+    )
 
     confidence = boundary_confidence(score, signal, cohort)
 
@@ -290,6 +339,13 @@ async def generate_signal(ticker: str, previous_signal: str | None = None) -> di
         "ticker": ticker,
         "generated_at": utcnow(),
         "score": round(score, 4),
+        # The exit reading behind the SELL test, stored rather than recomputed
+        # so a replay judges the verdict by the number that produced it — the
+        # `score_percentile` rule. Absent, never null, on a document written
+        # before 1.31.0: absent means "this row predates the exit reading and
+        # says nothing about it", which is not the same fact as a row where it
+        # was computed and agreed. Same distinction as `analyst_override`.
+        "exit_score": round(exit_reading, 4),
         "risk": risk_dict,
         "signal": signal,
         "confidence": round(confidence, 4),

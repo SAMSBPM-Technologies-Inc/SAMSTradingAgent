@@ -73,11 +73,23 @@ function whyText(data: AnalyzeResponse): string {
       ? `Scored ${score}/100. That is under the ${buy} needed to open a buy, but an established one holds until ${held}, and risk stayed under the veto.`
       : `Scored ${score}/100, clearing the ${buy} needed to buy, and risk stayed under the veto.`
   }
+  // The exit is measured on its own reading where there is one. Without this
+  // the line below claims a score of 29 is "over the 30 that would trigger a
+  // sell" underneath a published HOLD — the gate contradicting the badge again.
+  const exitPct = data.gate.exit_score == null ? null : Math.round(data.gate.exit_score * 100)
+
   if (data.signal === 'SELL') {
-    return `Scored ${score}/100, below the ${sell} that triggers a sell. Exits are not risk-gated.`
+    return exitPct == null
+      ? `Scored ${score}/100, below the ${sell} that triggers a sell. Exits are not risk-gated.`
+      : `Trend and relative strength read ${exitPct}/100, below the ${sell} that triggers a sell. Exits are not risk-gated.`
   }
   if (data.gate.score_passes_buy && !data.gate.risk_passes_buy) {
     return `Scored ${score}/100 — enough to buy — but the risk gate vetoed it, so the verdict is HOLD.`
+  }
+  if (exitPct != null && score <= sell) {
+    // The case this release exists for: the entry timer is floored because the
+    // name is extended, which is not a reason to sell it.
+    return `Scored ${score}/100 on entry timing — extended, not weak. Exits are judged on trend and relative strength, which read ${exitPct}/100, above the ${sell} that sells.`
   }
   return `Scored ${score}/100: under the ${buy} needed to buy and over the ${sell} that would trigger a sell.`
 }
