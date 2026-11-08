@@ -680,6 +680,19 @@ not leak a feature — it leaks balances, holdings and container control. Tests
 assert only the server side, and `test_tier_routes.py` enumerates the app's own
 route table rather than a hand-written list.
 
+**That enumeration goes through `tests/route_table.py`, never `app.routes`
+directly.** FastAPI changed the layout: up to the pinned 0.111 `include_router`
+copied endpoints into `app.routes`, and from ~0.120 it appends one opaque
+`_IncludedRouter` wrapper per call and resolves them at request time. A direct
+walk then finds the four docs routes and nothing else — and the tests built on
+it did not fail, they **passed while testing nothing**. `test_cors` saw one verb
+and could no longer catch the missing-`PATCH` bug it exists for; all 56
+parametrised plan-check cases collapsed to zero, silently, on the trading
+surface. The helper understands both layouts and `tests/test_route_table.py`
+asserts the result is not degenerate, so the next change to those internals
+fails loudly instead of draining the guards. Any new test that reasons about
+"every route" uses the helper.
+
 **BASIC cannot *initiate* a token spend, which is not the same as costing
 nothing.** The shared pipeline's analyst call is deployment cost, attributed to
 no user, and is bounded by the per-user ticker cap — which is why the cap
@@ -1149,6 +1162,30 @@ All backend config flows through `app/config.py` (Pydantic BaseSettings from `.e
 - `ENABLE_AI_ANALYST` — Claude analyst reports
 - `ENABLE_BACKTESTING` — backtesting engine (stub)
 - `AUTO_TRADE_ENABLED` / `AUTO_TRADE_LIVE_ALLOWED` — IBKR paper vs live
+
+### Tests
+
+`.github/workflows/test.yml` runs `pytest` (Python **3.12**, matching
+`backend/Dockerfile`, against the pins) and the frontend `tsc -b` + `lint:a11y`
+on every pull request. Until it existed **nothing in CI ran a test** — both
+other workflows only build and ship — so the suite's one run location was a
+laptop, and that laptop had drifted 19 of 26 pins far enough to disable a class
+of test silently. Hence two rules: **the CI job installs `requirements.txt`
+unchanged**, because running the suite against whatever resolves today measures
+a stack nobody deploys; and it declares **no `environment:`**, because naming
+Production would hand the `TWS_*` credentials to a job that runs on every pull
+request.
+
+It deliberately **does not gate the deploys**. Putting a check in front of a
+live trading system is its own decision with its own failure mode — a flaky run
+blocking an urgent fix — and should be made on purpose, not inherited from
+adding tests.
+
+The pinned stack has **no wheels for Python 3.14**, which is how the local venv
+came to drift; a local venv should be 3.12. Note that `xgboost`,
+`scikit-learn`, `yfinance` and `fredapi` are imported lazily inside functions,
+so the suite passes without them installed — their import paths are only
+actually exercised where the pins are honoured.
 
 ### Deployment
 
