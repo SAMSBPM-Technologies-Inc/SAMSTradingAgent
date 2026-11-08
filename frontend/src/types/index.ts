@@ -663,6 +663,12 @@ export interface BrokerStatus {
   host: string
   port: number
   trading_mode: string
+  /**
+   * The IBKR login the gateway authenticated with. `null` when the server
+   * cannot know it (a gateway logged in by hand sets nothing), which is a
+   * different fact from a blank username and must be labelled as such.
+   */
+  gateway_username?: string | null
   /** False on most deployments — restarting needs the Docker socket mounted. */
   restart_available: boolean
   restart_unavailable_reason?: string | null

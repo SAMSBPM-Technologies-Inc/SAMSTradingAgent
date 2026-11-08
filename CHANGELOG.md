@@ -14,6 +14,48 @@ a release note that only lists wins is the kind of document nobody trusts twice.
 
 ---
 
+## [1.33.0] — 2026-10-05
+
+**The broker panel now says which login it is.**
+
+### Added
+
+**Settings → Broker names the IBKR login behind the session.** The panel
+reported the provider, the host and port, and whether the session was paper or
+live — everything about the *connection* and nothing about the *account*. Which
+login the gateway had authenticated with was recoverable only by opening a shell
+on the server and reading `.env.production`, and "which account did that order
+reach" is the first question any surprising fill raises.
+
+The answer was already in the API process's environment and merely undeclared:
+the deploy workflow picks the credential pair matching `TRADING_MODE` and writes
+it into `.env.production`, which the api container loads alongside the gateway.
+`GET /trading/broker/status` now carries `gateway_username`, and the panel
+renders it beneath the connection line — monospace and select-all, so it can be
+read back and copied.
+
+Two things it deliberately does not do. **The password has no field anywhere in
+the API process** — the gateway reads `TWS_PASSWORD`, nothing here does, so
+there is nothing to leak through this route. And an unknown login is reported as
+**`None` rather than a blank**: a bare-metal gateway logged in by hand sets no
+environment variable, and "this server cannot tell you" is a different fact from
+an empty username, so the panel says so instead of rendering a gap.
+
+### Known gaps
+
+- The username comes from the environment the **API container** was started with,
+  not from the gateway's own session. If somebody logs the gateway in by hand as
+  a different user, or edits `.env.production` without restarting the api, this
+  line will confidently name the wrong login. It describes configuration, not an
+  observed session — unlike `connected`, which is process state.
+- There is no mobile surface for it. The phone has no broker panel at all, so
+  this is not a parity regression, but the answer is still desk-only.
+- Nothing cross-checks the login against `IBKR_ACCOUNT_ID` or against the account
+  the venue reports in `get_account_summary`. A paper credential pointing at a
+  live account id would still render as two agreeing-looking lines.
+
+---
+
 ## [1.32.0] — 2026-09-04
 
 **The readers the exit split left behind, and the series they were written into.**
