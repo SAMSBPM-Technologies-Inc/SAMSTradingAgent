@@ -9,6 +9,7 @@ how `PATCH /admin/users/{id}` shipped able to change a plan from a terminal and
 unable to from the Admin page.
 """
 from app.main import app
+from route_table import served_methods
 
 
 def _cors_kwargs() -> dict:
@@ -19,13 +20,16 @@ def _cors_kwargs() -> dict:
 
 
 def _served_methods() -> set[str]:
-    """Every verb the app's own route table answers, preflight aside."""
-    methods: set[str] = set()
-    for route in app.routes:
-        methods |= (getattr(route, "methods", set()) or set())
-    # HEAD is derived from GET and OPTIONS is what the middleware itself
-    # answers; neither is something a client asks permission for.
-    return methods - {"HEAD", "OPTIONS"}
+    """
+    Every verb the app's own route table answers, preflight aside.
+
+    Delegated to `route_table` because enumerating `app.routes` directly is
+    version-dependent: from FastAPI ~0.120 `include_router` leaves opaque
+    wrappers there instead of the endpoints, and this helper used to return
+    just `{"GET"}` on such a version — passing while testing nothing, which is
+    the exact failure mode these tests exist to prevent.
+    """
+    return served_methods(app)
 
 
 def test_every_verb_the_app_serves_is_allowed_by_cors():
@@ -38,7 +42,16 @@ def test_every_verb_the_app_serves_is_allowed_by_cors():
     if "*" in allowed:
         return  # a wildcard covers anything the table can grow
 
-    missing = _served_methods() - allowed
+    served = _served_methods()
+    # A degenerate enumeration would make the assertion below vacuously true.
+    # This has happened: see `route_table`. The app serves writes, so a table
+    # reporting only reads is a broken walk, not a safe app.
+    assert {"POST", "PATCH"} <= served, (
+        f"route enumeration looks broken — only found {sorted(served)}; "
+        "the missing-verb check below cannot fail while this is wrong"
+    )
+
+    missing = served - allowed
     assert not missing, (
         f"{sorted(missing)} served but not in allow_methods — the browser "
         "preflight for those routes will be refused with a 400 and the real "

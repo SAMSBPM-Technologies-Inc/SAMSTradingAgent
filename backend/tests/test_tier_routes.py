@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.dependencies import get_current_user
 from app.main import app
+from route_table import routes_under
 
 BASIC = {"_id": "u-basic", "email": "basic@example.com", "access_tier": "BASIC"}
 PRO = {"_id": "u-pro", "email": "pro@example.com", "access_tier": "PRO"}
@@ -46,15 +47,15 @@ def as_user():
 
 
 def _trading_routes() -> list[tuple[str, str]]:
-    """Every (method, path) the app actually serves under /trading."""
-    out: list[tuple[str, str]] = []
-    for route in app.routes:
-        path = getattr(route, "path", "")
-        if not path.startswith("/trading"):
-            continue
-        for method in sorted(getattr(route, "methods", set()) - {"HEAD", "OPTIONS"}):
-            out.append((method, path))
-    return sorted(out)
+    """
+    Every (method, path) the app actually serves under /trading.
+
+    Delegated to `route_table`, which understands both FastAPI route-table
+    layouts. Walking `app.routes` directly found nothing from ~0.120 onward,
+    which collapsed every parametrised test below to zero cases — the guard
+    immediately after this was the only thing that said so.
+    """
+    return routes_under(app, "/trading")
 
 
 def _call(client: TestClient, method: str, path: str):
