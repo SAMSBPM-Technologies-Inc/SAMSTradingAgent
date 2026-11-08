@@ -1,0 +1,98 @@
+name: Tests
+
+# Until this existed, nothing in CI ran a test. `deploy.yml` and
+# `deploy-frontend.yml` build and ship; neither invokes pytest, tsc or eslint.
+# The suite's only run location was a developer laptop — and that laptop had
+# drifted off `requirements.txt` far enough to disable a class of test silently
+# (see `backend/tests/route_table.py`). A suite nothing runs on the pinned
+# versions is a suite whose result nobody knows.
+#
+# This workflow deliberately does NOT gate the deploys. Wiring it in front of a
+# live trading system is a separate decision with its own failure mode — a
+# flaky check that blocks an urgent fix — and it should be made on purpose
+# rather than as a side effect of adding tests.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A force-push should not leave two runs racing to report on the same ref.
+# Unlike the deploy, cancelling here is free: nothing is left half-applied.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+# No `environment:` on either job. These tests need no secrets, and naming the
+# Production environment would expose the TWS_* credentials to a job that runs
+# on every pull request.
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Must match `backend/Dockerfile` (python:3.12-slim). The pinned
+          # stack has no wheels for 3.14, which is how the local venv came to
+          # drift onto incompatible versions in the first place.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install pinned dependencies
+        working-directory: backend
+        # The pins are the point: this job exists to run the suite against the
+        # versions production installs, not against whatever resolves today.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Report the versions under test
+        working-directory: backend
+        # Printed because the two defects this workflow was added to catch were
+        # both version drift, and both were invisible until someone looked.
+        run: pip list | grep -Ei '^(fastapi|starlette|pydantic|bcrypt|passlib) ' || true
+
+      - name: Run tests
+        working-directory: backend
+        # No MongoDB service: the suite never touches a live database. The
+        # route-level tests skip the lifespan, so nothing connects.
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend (tsc + a11y)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'   # matches deploy-frontend.yml
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck and build
+        working-directory: frontend
+        # `npm run build` is `tsc -b && vite build`, so this is the typecheck.
+        # VITE_API_BASE_URL is deliberately unset: this artifact is never
+        # deployed, and the deploy workflow supplies it. Do not copy this step
+        # into a deploy — a build without it silently points at localhost.
+        run: npm run build
+
+      - name: Accessibility lint
+        working-directory: frontend
+        # CLAUDE.md: this must stay clean. It caught four defects a manual
+        # sweep missed, and suppressions require a written reason.
+        run: npm run lint:a11y
