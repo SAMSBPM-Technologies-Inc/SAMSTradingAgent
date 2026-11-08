@@ -1181,6 +1181,14 @@ live trading system is its own decision with its own failure mode — a flaky ru
 blocking an urgent fix — and should be made on purpose, not inherited from
 adding tests.
 
+`tests/conftest.py` makes pytest skip iCloud's conflicted copies
+(`route_table 2.py`). The checkout lives in iCloud Drive, and one of those
+shadowed a test file while this suite was being worked on — the run reported six
+extra passes that were a duplicate of a file already running. They are never
+tracked, so the fix is not `.gitignore`: git should keep showing them so they get
+deleted, and pytest is what must not run them. A copy of an *older* revision
+would otherwise go on asserting the old behaviour, in green.
+
 The pinned stack has **no wheels for Python 3.14**, which is how the local venv
 came to drift; a local venv should be 3.12. Note that `xgboost`,
 `scikit-learn`, `yfinance` and `fredapi` are imported lazily inside functions,
