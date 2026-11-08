@@ -348,6 +348,11 @@ async def broker_status(current_user: dict = Depends(get_current_user)) -> dict:
     Whether the broker session is up, and which recovery actions this server
     offers. The UI reads `restart_available` rather than assuming — the restart
     path is opt-in and absent on most deployments.
+
+    `gateway_username` names the IBKR login behind the session. It is read from
+    the environment the gateway was started with, never from the user document,
+    because the question is which login *this deployment* authenticated with —
+    and it is `None` when that cannot be known rather than an empty string.
     """
     can_restart, restart_reason = gateway_control.restart_available()
     env = get_env_settings()
@@ -357,6 +362,11 @@ async def broker_status(current_user: dict = Depends(get_current_user)) -> dict:
         "host": env.ibkr_host,
         "port": env.ibkr_port,
         "trading_mode": "live" if env.is_live_trading else "paper",
+        # Which login is behind the session. Reported as None rather than "" when
+        # this process cannot know it, so the client can say "unknown" instead of
+        # rendering an empty gap — the same absent-is-not-blank distinction the
+        # status page draws between `not_configured` and `failed`.
+        "gateway_username": env.tws_userid.strip() or None,
         "restart_available": can_restart,
         "restart_unavailable_reason": restart_reason or None,
         "login_seconds": gateway_control.GATEWAY_LOGIN_SECONDS,

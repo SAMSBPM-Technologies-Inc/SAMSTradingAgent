@@ -174,6 +174,24 @@ class Settings(BaseSettings):
     ibkr_client_id: int = Field(default=1)
     ibkr_account_id: str = Field(default="")     # optional; leave empty for default account
 
+    # The IBKR login the gateway authenticated with.
+    #
+    # This process has no use for the credential itself, and there is
+    # deliberately no field for TWS_PASSWORD — but the *username* is the one
+    # fact about the session nothing could report. The deploy workflow picks the
+    # pair matching TRADING_MODE and writes it into .env.production, which the
+    # api container loads alongside the gateway, so the answer was already in
+    # this process's environment and simply undeclared. Finding out which login
+    # is behind an order meant opening a shell on the VPS; that is why this
+    # exists.
+    #
+    # Empty is a real answer — a bare-metal gateway logged in by hand leaves
+    # nothing here — and it is reported as unknown rather than as a blank.
+    tws_userid: str = Field(
+        default="",
+        description="IB Gateway login username (TWS_USERID); empty when this process cannot know it",
+    )
+
     # Which IB Gateway session the container actually launched. This is the
     # ground truth about which account orders reach, and it selects the
     # credential pair and relay port at deploy time.

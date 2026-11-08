@@ -145,6 +145,24 @@ export default function BrokerPanel({ compact = false }: { compact?: boolean } =
             <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-0.5 tabular-nums">
               {status.provider} · {status.host}:{status.port} · {status.trading_mode}
             </p>
+            {/* Which IBKR login is behind these orders. It is stated here
+                because there was previously no way to find out short of a shell
+                on the server, and "which account did that order reach" is the
+                first question any surprising fill raises. Monospace and
+                select-all so it can be read back and copied without squinting.
+                An absent value says so rather than rendering an empty gap — the
+                server returns null when it cannot know, which is not the same
+                as a blank username. */}
+            <p className="text-[0.65rem] text-[var(--color-fg-muted)] mt-0.5">
+              Login{' '}
+              {status.gateway_username ? (
+                <span className="font-mono select-all text-[var(--color-fg)]">
+                  {status.gateway_username}
+                </span>
+              ) : (
+                <span className="italic">not reported by this server</span>
+              )}
+            </p>
           </div>
         </div>
 
